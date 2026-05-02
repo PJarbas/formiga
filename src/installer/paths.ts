@@ -1,0 +1,62 @@
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Bundled workflows ship with tamandua (in the repo's workflows/ directory)
+export function resolveBundledWorkflowsDir(): string {
+  // From dist/installer/paths.js -> ../../workflows
+  return path.resolve(__dirname, "..", "..", "workflows");
+}
+
+export function resolveBundledWorkflowDir(workflowId: string): string {
+  return path.join(resolveBundledWorkflowsDir(), workflowId);
+}
+
+export function resolvePiStateDir(): string {
+  const env = process.env.TAMANDUA_STATE_DIR?.trim();
+  if (env) return env;
+  return path.join(os.homedir(), ".tamandua");
+}
+
+export function resolvePiConfigPath(): string {
+  const env = process.env.PI_SETTINGS_PATH?.trim();
+  if (env) return env;
+  return path.join(os.homedir(), ".pi", "agent", "settings.json");
+}
+
+export function resolvePiAuthPath(): string {
+  const env = process.env.PI_AUTH_PATH?.trim();
+  if (env) return env;
+  return path.join(os.homedir(), ".pi", "agent", "auth.json");
+}
+
+export function resolveTamanduaRoot(): string {
+  return resolvePiStateDir();
+}
+
+export function resolveWorkflowRoot(): string {
+  return path.join(resolveTamanduaRoot(), "workflows");
+}
+
+export function resolveWorkflowDir(workflowId: string): string {
+  return path.join(resolveWorkflowRoot(), workflowId);
+}
+
+export function resolveWorkflowWorkspaceRoot(): string {
+  return path.join(resolveTamanduaRoot(), "workspaces", "workflows");
+}
+
+export function resolveWorkflowWorkspaceDir(workflowId: string): string {
+  return path.join(resolveWorkflowWorkspaceRoot(), workflowId);
+}
+
+export function resolveRunRoot(): string {
+  return path.join(resolveTamanduaRoot(), "runs");
+}
+
+export function resolveTamanduaCli(): string {
+  // From dist/installer/paths.js -> ../cli/cli.js
+  return path.resolve(__dirname, "..", "cli", "cli.js");
+}

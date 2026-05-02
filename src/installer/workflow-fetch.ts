@@ -1,0 +1,84 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import {
+  resolveBundledWorkflowsDir,
+  resolveBundledWorkflowDir,
+  resolveWorkflowDir,
+} from "./paths.js";
+
+/**
+ * Copy a bundled workflow from the tamandua install to ~/.tamandua/workflows/.
+ * Returns the target workflow directory and the bundled source directory.
+ */
+export async function fetchWorkflow(
+  workflowId: string,
+): Promise<{ workflowDir: string; bundledSourceDir: string }> {
+  const bundledSourceDir = resolveBundledWorkflowDir(workflowId);
+  const workflowDir = resolveWorkflowDir(workflowId);
+
+  // Verify the bundled source exists
+  try {
+    const stat = await fs.stat(bundledSourceDir);
+    if (!stat.isDirectory()) {
+      throw new Error(`Bundled workflow "${workflowId}" is not a directory`);
+    }
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      throw new Error(
+        `Bundled workflow "${workflowId}" not found. Available workflows: ${(await listBundledWorkflows()).join(", ") || "(none)"}`,
+      );
+    }
+    throw err;
+  }
+
+  // Create the target directory
+  await fs.mkdir(workflowDir, { recursive: true });
+
+  // Recursively copy all files from bundled source to target
+  await copyDirContents(bundledSourceDir, workflowDir);
+
+  return { workflowDir, bundledSourceDir };
+}
+
+/**
+ * List all bundled workflow IDs (directory names under the bundled workflows dir).
+ */
+export async function listBundledWorkflows(): Promise<string[]> {
+  const dir = resolveBundledWorkflowsDir();
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+/**
+ * Recursively copy all files and directories from src to dest.
+ * Skips existing files (does not overwrite — install handles the "fetch once" semantic).
+ */
+async function copyDirContents(src: string, dest: string): Promise<void> {
+  const entries = await fs.readdir(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      await fs.mkdir(destPath, { recursive: true });
+      await copyDirContents(srcPath, destPath);
+    } else {
+      try {
+        await fs.cp(srcPath, destPath, { force: false });
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code === "EEXIST") continue; // already copied — skip
+        throw err;
+      }
+    }
+  }
+}

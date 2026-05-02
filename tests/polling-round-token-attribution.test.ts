@@ -1,0 +1,463 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { describe, it } from "node:test";
+
+const repoRoot = process.cwd();
+
+function createTempHome() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-token-attribution-"));
+  const homeDir = path.join(root, "home");
+  fs.mkdirSync(homeDir, { recursive: true });
+  return { root, homeDir };
+}
+
+function createFakePi(root: string, stdoutPayload: string): string {
+  const fakePi = path.join(root, "pi");
+  fs.writeFileSync(
+    fakePi,
+    `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(stdoutPayload)});\n`,
+    "utf-8",
+  );
+  fs.chmodSync(fakePi, 0o755);
+  return fakePi;
+}
+
+function runNodeScript(script: string, env: Record<string, string>) {
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script],
+    {
+      cwd: repoRoot,
+      env: { ...process.env, ...env },
+      encoding: "utf-8",
+    },
+  );
+
+  if (result.status !== 0) {
+    throw new Error([
+      `Script failed with exit ${result.status}`,
+      `STDOUT:\n${result.stdout}`,
+      `STDERR:\n${result.stderr}`,
+    ].join("\n\n"));
+  }
+
+  const lastLine = result.stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+  if (!lastLine) {
+    throw new Error(`Script produced no JSON output. STDERR:\n${result.stderr}`);
+  }
+
+  return JSON.parse(lastLine) as Record<string, unknown>;
+}
+
+describe("polling-round token attribution", () => {
+  it("adds polling-round usage to runs.tokens_spent when a run id is present", () => {
+    const temp = createTempHome();
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    try {
+      const piOutput = [
+        JSON.stringify({
+          type: "tool_execution_end",
+          toolName: "bash",
+          result: {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ stepId, runId, input: "Implement task" }),
+              },
+            ],
+          },
+          isError: false,
+        }),
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "STATUS: done\nCHANGES: implemented\nTESTS: passed" }],
+            usage: { input: 90, output: 10, cacheRead: 0, cacheWrite: 0 },
+            stopReason: "stop",
+          },
+        }),
+      ].join("\n");
+
+      const fakePi = createFakePi(temp.root, piOutput);
+
+      const result = runNodeScript(
+        `
+          import fs from "node:fs";
+          import path from "node:path";
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = ${JSON.stringify(runId)};
+          const stepId = ${JSON.stringify(stepId)};
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 7, ?, ?)"
+          ).run(runId, now, now);
+
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'running', ?, ?)"
+          ).run(stepId, runId, now, now);
+
+          const job = {
+            id: "job-token-attribution",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const eventsPath = path.join(process.env.HOME, ".tamandua", "events", runId + ".jsonl");
+          const events = fs.existsSync(eventsPath)
+            ? fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
+            : [];
+          const tokenEvent = events.find((evt) => evt.event === "run.tokens.updated");
+
+          console.log(JSON.stringify({
+            tokensSpent: row.tokens_spent,
+            tokenEventRunId: tokenEvent?.runId ?? null,
+            tokenEventDelta: tokenEvent?.tokenDelta ?? null,
+            tokenEventTotal: tokenEvent?.tokensSpent ?? null,
+          }));
+        `,
+        {
+          HOME: temp.homeDir,
+          TAMANDUA_PI_BINARY: fakePi,
+        },
+      );
+
+      assert.equal(result.tokensSpent, 107);
+      assert.equal(result.tokenEventRunId, runId);
+      assert.equal(result.tokenEventDelta, 100);
+      assert.equal(result.tokenEventTotal, 107);
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mutate run token totals when usage exists but no attributable run id is found", () => {
+    const temp = createTempHome();
+
+    try {
+      const piOutput = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "STATUS: done\nCHANGES: n/a\nTESTS: n/a" }],
+          usage: { totalTokens: 55 },
+          stopReason: "stop",
+        },
+      });
+
+      const fakePi = createFakePi(temp.root, piOutput);
+
+      const result = runNodeScript(
+        `
+          import fs from "node:fs";
+          import path from "node:path";
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 13, ?, ?)"
+          ).run(runId, now, now);
+
+          const job = {
+            id: "job-token-no-run",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+
+          console.log(JSON.stringify({
+            tokensSpent: row.tokens_spent,
+            unresolvedWarningSeen: logContent.includes("Polling round token usage not attributed — run id unresolved"),
+          }));
+        `,
+        {
+          HOME: temp.homeDir,
+          TAMANDUA_PI_BINARY: fakePi,
+        },
+      );
+
+      assert.equal(result.tokensSpent, 13);
+      assert.equal(result.unresolvedWarningSeen, true);
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps heartbeat rounds non-attributing even when usage metadata is present", () => {
+    const temp = createTempHome();
+
+    try {
+      const piOutput = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "HEARTBEAT_OK" }],
+          usage: { totalTokens: 21 },
+          stopReason: "stop",
+        },
+      });
+
+      const fakePi = createFakePi(temp.root, piOutput);
+
+      const result = runNodeScript(
+        `
+          import fs from "node:fs";
+          import path from "node:path";
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 3, ?, ?)"
+          ).run(runId, now, now);
+
+          const job = {
+            id: "job-token-heartbeat",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+
+          console.log(JSON.stringify({
+            tokensSpent: row.tokens_spent,
+            heartbeatSkipSeen: logContent.includes('"reason":"heartbeat_round"'),
+          }));
+        `,
+        {
+          HOME: temp.homeDir,
+          TAMANDUA_PI_BINARY: fakePi,
+        },
+      );
+
+      assert.equal(result.tokensSpent, 3);
+      assert.equal(result.heartbeatSkipSeen, true);
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a single warning when pi output contains zero JSON events (--mode json may be off)", () => {
+    const temp = createTempHome();
+
+    try {
+      // Plain text output — no JSON events at all, simulating --mode json not being used
+      const piOutput = "STATUS: done\nCHANGES: fixed something\nTESTS: passed";
+
+      const fakePi = createFakePi(temp.root, piOutput);
+
+      const result = runNodeScript(
+        `
+          import fs from "node:fs";
+          import path from "node:path";
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 0, ?, ?)"
+          ).run(runId, now, now);
+
+          const job = {
+            id: "job-zero-json-warn",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+          const logLines = logContent.split(/\\r?\\n/).filter(Boolean);
+
+          // WARN-level lines containing "--mode json may be off"
+          const warningLines = logLines.filter(
+            (line) => line.includes("WARN") && line.includes("--mode json may be off")
+          );
+
+          console.log(JSON.stringify({
+            tokensSpent: row.tokens_spent,
+            zeroJsonWarningCount: warningLines.length,
+            zeroJsonWarningSeen: warningLines.length > 0,
+          }));
+        `,
+        {
+          HOME: temp.homeDir,
+          TAMANDUA_PI_BINARY: fakePi,
+        },
+      );
+
+      // Warning must be emitted
+      assert.equal(result.zeroJsonWarningSeen, true, "expected zero-JSON warning in logs");
+      // Exactly one warning per polling round (no duplicates)
+      assert.equal(result.zeroJsonWarningCount, 1, "expected exactly one zero-JSON warning per round");
+      // tokens_spent must remain 0 (no token attribution from non-JSON output)
+      assert.equal(result.tokensSpent, 0);
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not emit zero-JSON warning when jsonMetadataDetected is true but usage is missing", () => {
+    const temp = createTempHome();
+
+    try {
+      // JSON output with a tool_execution_end event but NO message_end (so no usage).
+      // Must NOT contain HEARTBEAT_OK so the round is classified as work_done.
+      const piOutput = [
+        JSON.stringify({
+          type: "tool_execution_end",
+          toolName: "bash",
+          result: {
+            content: [{ type: "text", text: "STATUS: done\nCHANGES: implemented\nTESTS: passed" }],
+          },
+          isError: false,
+        }),
+      ].join("\n");
+
+      const fakePi = createFakePi(temp.root, piOutput);
+
+      const result = runNodeScript(
+        `
+          import fs from "node:fs";
+          import path from "node:path";
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 0, ?, ?)"
+          ).run(runId, now, now);
+
+          const job = {
+            id: "job-json-no-usage",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+          const logLines = logContent.split(/\\r?\\n/).filter(Boolean);
+
+          const zeroJsonWarnings = logLines.filter(
+            (line) => line.includes("WARN") && line.includes("--mode json may be off")
+          );
+          const usageMissingLogs = logLines.filter(
+            (line) => line.includes("usage metadata missing")
+          );
+
+          console.log(JSON.stringify({
+            tokensSpent: row.tokens_spent,
+            zeroJsonWarningCount: zeroJsonWarnings.length,
+            usageMissingLogCount: usageMissingLogs.length,
+          }));
+        `,
+        {
+          HOME: temp.homeDir,
+          TAMANDUA_PI_BINARY: fakePi,
+        },
+      );
+
+      // No zero-JSON warning when jsonMetadataDetected is true
+      assert.equal(result.zeroJsonWarningCount, 0, "should not warn about --mode json when JSON events are detected");
+      // The usage_metadata_missing log should still be present (debug writes at info level)
+      assert.ok(result.usageMissingLogCount >= 1, "expected log entry for usage_metadata_missing");
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
+});

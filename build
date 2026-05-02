@@ -1,0 +1,25 @@
+#!/bin/bash
+# Build the tamandua project from source.
+# Run from the repository root.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+echo "=== Build: tamandua ==="
+
+# Check Node.js
+NODE_VERSION=$(node -v 2>/dev/null | sed 's/v//' | cut -d. -f1)
+if [ -z "$NODE_VERSION" ] || [ "$NODE_VERSION" -lt 22 ]; then
+  echo "Error: Node.js >= 22 required. Current: $(node -v 2>/dev/null || echo 'not found')"
+  exit 1
+fi
+
+echo "[1/2] npm install"
+npm install
+
+echo "[2/2] npm run build"
+npm run build
+
+echo ""
+echo "Build complete. Dist: $SCRIPT_DIR/dist/"

@@ -1,0 +1,1 @@
+tamandua install ; tamandua workflow run feature-dev "Create a tamandua logs-tail command that shows recent activity and continues showing it as it goes."

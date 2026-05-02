@@ -1,0 +1,796 @@
+/**
+ * Integration tests for independent MCP lifecycle (US-005).
+ *
+ * Validates:
+ * 1. MCP starts on a random port and responds to initialize/tools/list requests
+ * 2. MCP stops cleanly and isMcpRunning() returns false
+ * 3. Custom port MCP starts on the specified port
+ * 4. MCP continues running when dashboard is started/stopped
+ * 5. MCP stays running when dashboard is not running
+ * 6. Port file is cleaned up on stop and recreated on restart
+ * 7. Tests clean up processes and temp files regardless of pass/fail
+ */
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import http from "node:http";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { describe, it, before, after } from "node:test";
+
+const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
+
+// Import daemonctl helpers for direct API-level testing
+import {
+  readMcpPort,
+  writeMcpPort,
+  isMcpRunning,
+  startMcp,
+  stopMcp,
+  getMcpStatus,
+  MCP_PID_FILE,
+  MCP_PORT_FILE,
+} from "../src/server/daemonctl.js";
+import { DEFAULT_MCP_PORT } from "../src/server/mcp-server.js";
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+type CliResult = {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+};
+
+function createTempEnv(): { root: string; stateDir: string; homeDir: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-mcp-lifecycle-"));
+  const stateDir = path.join(root, "state");
+  const homeDir = path.join(root, "home");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
+  return { root, stateDir, homeDir };
+}
+
+async function runCli(args: string[], env: Record<string, string>): Promise<CliResult> {
+  const child = spawn(
+    process.execPath,
+    ["--no-warnings", cliPath, ...args],
+    {
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdout += chunk.toString("utf-8");
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString("utf-8");
+  });
+
+  const [code] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
+  return { code, stdout, stderr };
+}
+
+async function canBind(port: number): Promise<boolean> {
+  const server = http.createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => {
+        server.off("listening", onListening);
+        reject(err);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(port, "127.0.0.1");
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (server.listening) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+}
+
+async function reserveRandomPort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+async function waitForHttpUp(
+  url: string,
+  timeoutMs = 7000,
+): Promise<Response> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      return await fetch(url);
+    } catch (err) {
+      lastError = err;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  throw new Error(`Timed out waiting for ${url} to become reachable: ${String(lastError)}`);
+}
+
+async function waitForHttpDown(url: string, timeoutMs = 7000): Promise<void> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      await fetch(url);
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    } catch {
+      return;
+    }
+  }
+
+  throw new Error(`Timed out waiting for ${url} to become unreachable`);
+}
+
+/**
+ * Parse an MCP JSON-RPC response body (plain JSON or SSE data: line).
+ */
+function parseMcpBody(text: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error("Empty MCP response body");
+  }
+
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    // Try SSE format: look for "data:" prefixed line
+    const sseDataLine = trimmed
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("data:"));
+
+    if (!sseDataLine) {
+      throw new Error(`Unexpected MCP response payload: ${trimmed.slice(0, 200)}`);
+    }
+
+    return JSON.parse(sseDataLine.slice("data:".length).trim()) as Record<string, unknown>;
+  }
+}
+
+/**
+ * Make a JSON-RPC request to an MCP endpoint.
+ */
+async function mcpRpc(
+  baseUrl: string,
+  method: string,
+  params: Record<string, unknown> = {},
+  sessionId?: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  if (sessionId) {
+    headers["mcp-session-id"] = sessionId;
+  }
+
+  const res = await fetch(baseUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method,
+      params,
+      id: 1,
+    }),
+  });
+
+  const text = await res.text();
+  const body = parseMcpBody(text);
+
+  return { status: res.status, body };
+}
+
+/**
+ * Send an MCP initialize request and return the session ID.
+ * Session IDs come from the `Mcp-Session-Id` response header after initialize.
+ */
+async function mcpInitialize(baseUrl: string): Promise<{ sessionId: string; result: unknown }> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+
+  const res = await fetch(baseUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "1.0.0" },
+      },
+      id: 1,
+    }),
+  });
+
+  const sessionId = res.headers.get("mcp-session-id");
+  assert.ok(sessionId, "initialize response must include Mcp-Session-Id header");
+
+  const text = await res.text();
+  const body = parseMcpBody(text);
+  assert.ok(body.result, `initialize should return a result, got error: ${JSON.stringify(body.error)}`);
+
+  return { sessionId, result: body.result };
+}
+
+/**
+ * Filter harmless node warnings from stderr.
+ */
+function cleanStderr(stderr: string): string {
+  return stderr
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (line.includes("ExperimentalWarning") && line.includes("SQLite")) return false;
+      if (line.includes("node --trace-warnings")) return false;
+      return true;
+    })
+    .join("\n")
+    .trim();
+}
+
+// ── Module-level cleanup helpers (use real HOME paths) ─────────────
+
+function cleanupRealMcpFiles(): void {
+  try { fs.unlinkSync(MCP_PID_FILE); } catch {}
+  try { fs.unlinkSync(MCP_PORT_FILE); } catch {}
+}
+
+// ── Tests ──────────────────────────────────────────────────────────
+
+describe("MCP lifecycle integration", { concurrency: 1 }, () => {
+  before(() => {
+    stopMcp();
+    cleanupRealMcpFiles();
+  });
+
+  after(() => {
+    stopMcp();
+    cleanupRealMcpFiles();
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // AC 1: MCP starts on random port and serves initialize/tools/list
+  // ────────────────────────────────────────────────────────────────
+  it("MCP starts on random port and serves initialize/tools/list", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const mcpPort = await reserveRandomPort();
+
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
+      return;
+    }
+
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    try {
+      // Start MCP on the reserved random port
+      const start = await runCli(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(start.code, 0, `MCP start failed: ${cleanStderr(start.stderr) || start.stdout}`);
+      assert.match(start.stdout, /MCP server started/);
+      assert.match(start.stdout, new RegExp(`localhost:${mcpPort}`));
+
+      // Verify endpoint is reachable
+      const baseUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+
+      // Send initialize and capture session ID
+      const { sessionId, result: initResult } = await mcpInitialize(baseUrl);
+
+      // Verify initialize result
+      const init = initResult as {
+        protocolVersion: string;
+        serverInfo: { name: string; version: string };
+        capabilities: { tools: { listChanged: boolean } };
+      };
+      assert.equal(init.protocolVersion, "2025-06-18");
+      assert.equal(init.serverInfo.name, "tamandua-remote-mcp");
+      assert.equal(init.capabilities.tools.listChanged, false);
+
+      // Send tools/list with session ID
+      const toolsResult = await mcpRpc(baseUrl, "tools/list", {}, sessionId);
+      assert.ok(toolsResult.body.result, `tools/list should return a result, got: ${JSON.stringify(toolsResult.body.error)}`);
+
+      const tools = (toolsResult.body.result as { tools: Array<{ name: string }> }).tools;
+      assert.ok(Array.isArray(tools), "tools/list should return a tools array");
+      assert.ok(tools.length >= 3, `Expected at least 3 MCP tools, got ${tools.length}`);
+
+      const toolNames = tools.map((t: { name: string }) => t.name);
+      assert.ok(toolNames.includes("tamandua.runs.list"), "Should include tamandua.runs.list tool");
+      assert.ok(toolNames.includes("tamandua.run.status"), "Should include tamandua.run.status tool");
+      assert.ok(toolNames.includes("tamandua.events.recent"), "Should include tamandua.events.recent tool");
+
+      // Verify MCP is independently running
+      const status = await runCli(["mcp", "status"], cliEnv);
+      assert.equal(status.code, 0);
+      assert.match(status.stdout, /MCP server running/);
+      assert.match(status.stdout, new RegExp(`Port: ${mcpPort}`));
+
+    } finally {
+      await runCli(["mcp", "stop"], cliEnv);
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // AC 2: MCP stops cleanly and isMcpRunning() returns false
+  // ────────────────────────────────────────────────────────────────
+  it("MCP stops cleanly and isMcpRunning() returns false", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const mcpPort = await reserveRandomPort();
+
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
+      return;
+    }
+
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    try {
+      // Start MCP
+      const start = await runCli(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(start.code, 0);
+
+      // Verify it's running
+      let status = await runCli(["mcp", "status"], cliEnv);
+      assert.match(status.stdout, /MCP server running/);
+
+      const baseUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+      await waitForHttpUp(baseUrl);
+
+      // Stop MCP
+      const stop = await runCli(["mcp", "stop"], cliEnv);
+      assert.equal(stop.code, 0, `MCP stop failed: ${cleanStderr(stop.stderr) || stop.stdout}`);
+      assert.match(stop.stdout, /MCP server stopped/);
+
+      // Wait for process to fully exit
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+      // Verify isMcpRunning() returns false (checking the isolated HOME PID file)
+      // Since we used an isolated HOME, the real MCP_PID_FILE won't reflect this test's instance.
+      // Instead, verify via CLI status and HTTP reachability.
+      status = await runCli(["mcp", "status"], cliEnv);
+      assert.match(status.stdout, /MCP server is not running/);
+
+      // Verify endpoint is down
+      await waitForHttpDown(baseUrl);
+
+      // Also verify the PID file in the isolated environment is cleaned up
+      const isolatedPidFile = path.join(tempEnv.stateDir, "..", "home", ".tamandua", "mcp.pid");
+      assert.equal(
+        fs.existsSync(isolatedPidFile),
+        false,
+        `PID file ${isolatedPidFile} should be cleaned up after stop`,
+      );
+
+    } finally {
+      await runCli(["mcp", "stop"], cliEnv);
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // AC 3: Custom port MCP starts on the specified port
+  // ────────────────────────────────────────────────────────────────
+  it("Custom port MCP starts on the specified port", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const customPort = 45678;
+
+    if (!(await canBind(customPort))) {
+      t.skip(`Port ${customPort} is already in use`);
+      return;
+    }
+
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    try {
+      // Start MCP on a custom port
+      const start = await runCli(["mcp", "start", "--port", String(customPort)], cliEnv);
+      assert.equal(start.code, 0, `MCP start on custom port failed: ${cleanStderr(start.stderr) || start.stdout}`);
+      assert.match(start.stdout, new RegExp(`localhost:${customPort}`));
+      assert.match(start.stdout, /MCP server started/);
+
+      // Verify endpoint on the custom port
+      const baseUrl = `http://127.0.0.1:${customPort}/mcp`;
+      const { sessionId } = await mcpInitialize(baseUrl);
+
+      // Send a tools/list to confirm full functionality
+      const toolsResult = await mcpRpc(baseUrl, "tools/list", {}, sessionId);
+      assert.ok(toolsResult.body.result, `tools/list should return a result, got: ${JSON.stringify(toolsResult.body.error)}`);
+
+      // Verify the default port is NOT reachable
+      try {
+        await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
+        assert.fail("MCP should not be reachable on the default port when a custom port is used");
+      } catch {
+        // Expected — MCP is not on the default port
+      }
+
+      // Verify CLI status reports the custom port
+      const status = await runCli(["mcp", "status"], cliEnv);
+      assert.match(status.stdout, /MCP server running/);
+      assert.match(status.stdout, new RegExp(`Port: ${customPort}`));
+
+    } finally {
+      await runCli(["mcp", "stop"], cliEnv);
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // AC 4: MCP is unaffected by dashboard start/stop
+  // ────────────────────────────────────────────────────────────────
+  it("MCP continues running when dashboard is started and stopped", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const mcpPort = await reserveRandomPort();
+    const dashboardPort = await reserveRandomPort();
+
+    if (!(await canBind(mcpPort))) {
+      t.skip(`MCP port ${mcpPort} is already in use`);
+      return;
+    }
+    if (!(await canBind(dashboardPort))) {
+      t.skip(`Dashboard port ${dashboardPort} is already in use`);
+      return;
+    }
+
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    try {
+      // 1. Start MCP first
+      const mcpStart = await runCli(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(mcpStart.code, 0, `MCP start failed: ${cleanStderr(mcpStart.stderr) || mcpStart.stdout}`);
+
+      const mcpBaseUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+
+      // Verify MCP is reachable
+      const { sessionId } = await mcpInitialize(mcpBaseUrl);
+
+      // 2. Start dashboard while MCP is already running
+      const dashStart = await runCli(["dashboard", "start", "--port", String(dashboardPort)], cliEnv);
+      assert.equal(dashStart.code, 0, `Dashboard start failed: ${cleanStderr(dashStart.stderr) || dashStart.stdout}`);
+
+      // 3. MCP should still be reachable
+      const toolsDuring = await mcpRpc(mcpBaseUrl, "tools/list", {}, sessionId);
+      assert.ok(toolsDuring.body.result, `MCP should still serve tools/list while dashboard is running: ${JSON.stringify(toolsDuring.body.error)}`);
+
+      // Verify MCP status shows running
+      const mcpStatusDuring = await runCli(["mcp", "status"], cliEnv);
+      assert.match(mcpStatusDuring.stdout, /MCP server running/);
+
+      // 4. Stop dashboard
+      const dashStop = await runCli(["dashboard", "stop"], cliEnv);
+      assert.equal(dashStop.code, 0, `Dashboard stop failed: ${cleanStderr(dashStop.stderr) || dashStop.stdout}`);
+
+      // Wait for dashboard to fully stop
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+      // 5. MCP should STILL be reachable after dashboard stops
+      const toolsAfter = await mcpRpc(mcpBaseUrl, "tools/list", {}, sessionId);
+      assert.ok(toolsAfter.body.result, `MCP should still serve tools/list after dashboard stops: ${JSON.stringify(toolsAfter.body.error)}`);
+
+      // 6. Dashboard should show not running, MCP should show running
+      const fullStatus = await runCli(["dashboard", "status"], cliEnv);
+      assert.match(fullStatus.stdout, /Dashboard is not running/);
+      assert.match(fullStatus.stdout, /MCP server running/);
+
+    } finally {
+      await runCli(["dashboard", "stop"], cliEnv);
+      await runCli(["mcp", "stop"], cliEnv);
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // AC 5: MCP stays running when dashboard is not running (AC 4 variant)
+  // ────────────────────────────────────────────────────────────────
+  it("MCP stays running when dashboard is not running", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const mcpPort = await reserveRandomPort();
+
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
+      return;
+    }
+
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    try {
+      // Start MCP WITHOUT starting the dashboard
+      const mcpStart = await runCli(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(mcpStart.code, 0, `MCP start failed: ${cleanStderr(mcpStart.stderr) || mcpStart.stdout}`);
+
+      // Verify dashboard is NOT running
+      const dashStatus = await runCli(["dashboard", "status"], cliEnv);
+      assert.match(dashStatus.stdout, /Dashboard is not running/);
+
+      // Verify MCP IS running
+      const mcpStatus = await runCli(["mcp", "status"], cliEnv);
+      assert.match(mcpStatus.stdout, /MCP server running/);
+      assert.match(mcpStatus.stdout, new RegExp(`Port: ${mcpPort}`));
+
+      // Verify MCP endpoint is reachable (no dashboard needed!)
+      const mcpBaseUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+      const { sessionId } = await mcpInitialize(mcpBaseUrl);
+
+      // Test a tools/list call
+      const toolsResult = await mcpRpc(mcpBaseUrl, "tools/list", {}, sessionId);
+      assert.ok(toolsResult.body.result, `tools/list should return a result, got: ${JSON.stringify(toolsResult.body.error)}`);
+
+    } finally {
+      await runCli(["mcp", "stop"], cliEnv);
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // AC 6: Port file is cleaned up on stop and recreated on restart
+  // ────────────────────────────────────────────────────────────────
+  it("Port file is cleaned up on stop and recreated on restart", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const mcpPort = await reserveRandomPort();
+
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
+      return;
+    }
+
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    // The MCP port file path in the isolated environment
+    const isolatedPortFile = path.join(tempEnv.homeDir, ".tamandua", "mcp-port");
+
+    try {
+      // ── First cycle: start → verify port file → stop → verify cleanup ──
+
+      // Start MCP
+      const start1 = await runCli(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(start1.code, 0, `MCP start failed: ${cleanStderr(start1.stderr) || start1.stdout}`);
+
+      // Verify port file exists and contains the correct port
+      assert.ok(fs.existsSync(isolatedPortFile), "Port file should exist after MCP start");
+      const portContent1 = fs.readFileSync(isolatedPortFile, "utf-8").trim();
+      assert.equal(parseInt(portContent1, 10), mcpPort, `Port file should contain ${mcpPort}, got ${portContent1}`);
+
+      // Also verify PID file exists
+      const isolatedPidFile = path.join(tempEnv.homeDir, ".tamandua", "mcp.pid");
+      assert.ok(fs.existsSync(isolatedPidFile), "PID file should exist after MCP start");
+
+      // Stop MCP
+      const stop1 = await runCli(["mcp", "stop"], cliEnv);
+      assert.equal(stop1.code, 0);
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+      // Verify port file is cleaned up after stop
+      assert.equal(
+        fs.existsSync(isolatedPortFile),
+        false,
+        "Port file should be cleaned up after MCP stop",
+      );
+
+      // Verify PID file is cleaned up
+      assert.equal(
+        fs.existsSync(isolatedPidFile),
+        false,
+        "PID file should be cleaned up after MCP stop",
+      );
+
+      // ── Second cycle: restart → verify port file is recreated ──
+
+      const secondPort = await reserveRandomPort();
+      if (!(await canBind(secondPort))) {
+        t.skip(`Second port ${secondPort} is already in use`);
+        return;
+      }
+
+      // Restart MCP on a different port
+      // Need to ensure port file is gone first (already verified above, but be explicit)
+      try { fs.unlinkSync(isolatedPortFile); } catch {}
+
+      const start2 = await runCli(["mcp", "start", "--port", String(secondPort)], cliEnv);
+      assert.equal(start2.code, 0, `MCP restart failed: ${cleanStderr(start2.stderr) || start2.stdout}`);
+
+      // Verify port file is recreated with the new port
+      assert.ok(fs.existsSync(isolatedPortFile), "Port file should be recreated after MCP restart");
+      const portContent2 = fs.readFileSync(isolatedPortFile, "utf-8").trim();
+      assert.equal(parseInt(portContent2, 10), secondPort, `Port file should contain ${secondPort} after restart, got ${portContent2}`);
+
+      // Verify PID file exists
+      assert.ok(fs.existsSync(isolatedPidFile), "PID file should exist after MCP restart");
+
+      // Verify new instance is reachable
+      const baseUrl = `http://127.0.0.1:${secondPort}/mcp`;
+      await mcpInitialize(baseUrl);
+
+      // Verify the original port is NOT reachable
+      try {
+        await fetch(`http://127.0.0.1:${mcpPort}/mcp`);
+        assert.fail(`Original port ${mcpPort} should be unreachable after restart on ${secondPort}`);
+      } catch {
+        // Expected
+      }
+
+    } finally {
+      await runCli(["mcp", "stop"], cliEnv);
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // AC 7: Full start → stop → start cycle with API-level helpers
+  // ────────────────────────────────────────────────────────────────
+  it("Full start/stop/start cycle with API-level helpers", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const mcpPort = await reserveRandomPort();
+
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
+      return;
+    }
+
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    try {
+      // Start MCP via CLI
+      const startCmd = await runCli(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(startCmd.code, 0);
+
+      // Verify via isMcpRunning() on the isolated PID file
+      const isolatedPidFile = path.join(tempEnv.homeDir, ".tamandua", "mcp.pid");
+
+      // We can't directly test isMcpRunning() with isolated environment since
+      // it reads from the real HOME. Instead we test the isolated PID file
+      // directly.
+      assert.ok(fs.existsSync(isolatedPidFile), "PID file should exist in isolated env");
+      const pid1 = parseInt(fs.readFileSync(isolatedPidFile, "utf-8").trim(), 10);
+      assert.ok(pid1 > 0, "PID should be positive");
+      assert.ok(Number.isInteger(pid1), "PID should be an integer");
+
+      // Verify MCP is reachable
+      const baseUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+      await mcpInitialize(baseUrl);
+
+      // Stop via CLI
+      const stopCmd = await runCli(["mcp", "stop"], cliEnv);
+      assert.equal(stopCmd.code, 0);
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+      // Verify PID file is cleaned up
+      assert.equal(fs.existsSync(isolatedPidFile), false, "PID file should be cleaned up after stop");
+
+      // Verify endpoint is down
+      await waitForHttpDown(baseUrl);
+
+      // Start again on the same port
+      const restartCmd = await runCli(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(restartCmd.code, 0);
+
+      // Verify new PID
+      assert.ok(fs.existsSync(isolatedPidFile), "PID file should exist after restart");
+      const pid2 = parseInt(fs.readFileSync(isolatedPidFile, "utf-8").trim(), 10);
+      assert.ok(pid2 > 0);
+      assert.ok(Number.isInteger(pid2));
+      // PID may or may not be different — OS reuses PIDs rapidly
+
+      // Verify new instance is reachable
+      await waitForHttpUp(baseUrl);
+      await mcpInitialize(baseUrl);
+
+      // Final stop and verify everything is cleaned up
+      const finalStop = await runCli(["mcp", "stop"], cliEnv);
+      assert.equal(finalStop.code, 0);
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+      assert.equal(fs.existsSync(isolatedPidFile), false, "PID file should be cleaned up after final stop");
+      await waitForHttpDown(baseUrl);
+
+    } finally {
+      await runCli(["mcp", "stop"], cliEnv);
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // Edge case: stopMcp when nothing is running
+  // ────────────────────────────────────────────────────────────────
+  it("MCP stop when nothing is running reports not running", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    try {
+      const stop = await runCli(["mcp", "stop"], cliEnv);
+      assert.equal(stop.code, 0);
+      assert.match(stop.stdout, /not running/);
+    } finally {
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+});
