@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { logger, readRecentLogs, getLogPath } from "./logger.js";
+import { logger, readRecentLogs, getLogPath } from "../../dist/lib/logger.js";
 
 describe("logger", () => {
   const logPath = getLogPath();

@@ -25,8 +25,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_SCRIPT = path.resolve(__dirname, "..", "dist", "cli", "cli.js");
 
 // Import daemonctl for direct cleanup (shared PID/port files)
-import { stopMcp, isMcpRunning, getMcpStatus, MCP_PID_FILE, MCP_PORT_FILE } from "../src/server/daemonctl.js";
-import { DEFAULT_MCP_PORT } from "../src/server/mcp-server.js";
+import { stopMcp, isMcpRunning, getMcpStatus, MCP_PID_FILE, MCP_PORT_FILE } from "../dist/server/daemonctl.js";
+import { DEFAULT_MCP_PORT } from "../dist/server/mcp-server.js";
 
 async function canBind(port: number): Promise<boolean> {
   const server = http.createServer();

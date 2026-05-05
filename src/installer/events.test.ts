@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { readEventsFromCursor, type TamanduaEvent } from "./events.js";
+import { readEventsFromCursor, type TamanduaEvent } from "../../dist/installer/events.js";
 
 function makeEvent(runId: string, event: string): TamanduaEvent {
   return {

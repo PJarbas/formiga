@@ -219,7 +219,20 @@ export async function runPi(
       if (code === 0 || code === null) {
         resolve();
       } else {
-        reject(new Error(`pi exited with code ${code}${signal ? ` (signal ${signal})` : ""}`));
+        const failureDurationMs = Date.now() - startedAt;
+        const failureStderr = stderrPieces.join("");
+        const failureStderrMeta = buildStreamLogMetadata(failureStderr);
+        logger.error("pi execution failed", {
+          pid: childPid ?? null,
+          exitCode: code,
+          signal,
+          durationMs: failureDurationMs,
+          stderrBytes: failureStderrMeta.bytes,
+          stderrPreview: failureStderrMeta.preview,
+          stderrTruncated: failureStderrMeta.truncated,
+        });
+        const stderrSuffix = failureStderr ? `\nstderr: ${failureStderr}` : "";
+        reject(new Error(`pi failed: exited with code ${code}${signal ? ` (signal ${signal})` : ""}${stderrSuffix}`));
       }
     });
   });
@@ -688,6 +701,79 @@ async function incrementRunTokenSpend(runId: string, tokenUsage: number): Promis
   };
 }
 
+/**
+ * Auto-complete fallback: when a polling round produces work_done-shaped output
+ * but the agent never invoked `node ${cli} step complete <stepId>` itself, the
+ * step would otherwise stay `running` forever — peekStep returns NO_WORK for a
+ * running step, so subsequent rounds heartbeat and the run wedges. If the round
+ * output classifies as work_done and we extracted a stepId, call completeStep
+ * here. Guarded by a status check so we don't double-complete when the agent
+ * did report results via the CLI.
+ */
+async function autoCompleteStepIfRunning(
+  context: Record<string, unknown>,
+  metadata: PollingRoundMetadata,
+): Promise<void> {
+  if (!metadata.stepId) {
+    logger.warn("Auto-complete fallback skipped — no stepId in output", { ...context });
+    return;
+  }
+
+  const { getDb } = await import("../db.js");
+  const { completeStep } = await import("./step-ops.js");
+  const db = getDb();
+
+  const row = db
+    .prepare("SELECT status, type, current_story_id FROM steps WHERE id = ?")
+    .get(metadata.stepId) as { status: string; type: string; current_story_id: string | null } | undefined;
+
+  if (!row) {
+    logger.warn("Auto-complete fallback skipped — step not found", {
+      ...context,
+      stepId: metadata.stepId,
+    });
+    return;
+  }
+
+  // A loop step with current_story_id=NULL means completeStep already ran
+  // (the iteration was advanced or the loop reached a verify_each pause).
+  // Calling completeStep again would fall through to the single-step branch
+  // and mark the entire loop done, skipping remaining stories.
+  if (row.type === "loop" && row.current_story_id === null) {
+    logger.debug("Auto-complete fallback skipped — loop step mid-iteration (agent already advanced via CLI)", {
+      ...context,
+      stepId: metadata.stepId,
+      stepStatus: row.status,
+    });
+    return;
+  }
+
+  if (row.status !== "running") {
+    logger.debug("Auto-complete fallback skipped — step not running (agent likely reported via CLI)", {
+      ...context,
+      stepId: metadata.stepId,
+      stepStatus: row.status,
+    });
+    return;
+  }
+
+  try {
+    const result = completeStep(metadata.stepId, metadata.assistantOutput);
+    logger.info("Auto-complete fallback invoked completeStep on work_done output", {
+      ...context,
+      stepId: metadata.stepId,
+      result: result.status,
+      outputBytes: Buffer.byteLength(metadata.assistantOutput, "utf-8"),
+    });
+  } catch (err) {
+    logger.error("Auto-complete fallback completeStep threw", {
+      ...context,
+      stepId: metadata.stepId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function attributePollingRoundTokenUsage(
   context: Record<string, unknown>,
   outputSummary: PollingRoundOutputSummary,
@@ -886,6 +972,10 @@ export async function executePollingRound(
     });
 
     await attributePollingRoundTokenUsage(context, outputSummary, metadata);
+
+    if (outputSummary.outcome === "work_done") {
+      await autoCompleteStepIfRunning(context, metadata);
+    }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const errorSummary = buildBoundedPreview(errorMessage, MAX_POLLING_ERROR_PREVIEW);

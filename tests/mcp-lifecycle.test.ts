@@ -32,8 +32,8 @@ import {
   getMcpStatus,
   MCP_PID_FILE,
   MCP_PORT_FILE,
-} from "../src/server/daemonctl.js";
-import { DEFAULT_MCP_PORT } from "../src/server/mcp-server.js";
+} from "../dist/server/daemonctl.js";
+import { DEFAULT_MCP_PORT } from "../dist/server/mcp-server.js";
 
 // ── Helpers ────────────────────────────────────────────────────────
 

@@ -7,10 +7,10 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_MCP_PORT } from "./mcp-server.js";
+import { DEFAULT_MCP_PORT } from "../../dist/server/mcp-server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DAEMON_SCRIPT = path.join(__dirname, "daemon.js");
+const DAEMON_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "daemon.js");
 const DASHBOARD_PORT = 3334;
 
 function spawnDaemon(

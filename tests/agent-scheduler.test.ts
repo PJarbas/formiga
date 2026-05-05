@@ -9,7 +9,7 @@ import {
   runPi,
   parsePollingRoundMetadata,
   extractTokenUsage,
-} from "../src/installer/agent-scheduler.js";
+} from "../dist/installer/agent-scheduler.js";
 
 // ── Probe for real pi availability (synchronous, module-load time) ─
 let piAvailable = false;

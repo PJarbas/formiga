@@ -23,8 +23,8 @@ import {
   MCP_PORT_FILE,
   getMcpPidFile,
   getMcpPortFile,
-} from "./daemonctl.js";
-import { DEFAULT_MCP_PORT } from "./mcp-server.js";
+} from "../../dist/server/daemonctl.js";
+import { DEFAULT_MCP_PORT } from "../../dist/server/mcp-server.js";
 
 // Module-level constants are resolved at import time against the original HOME.
 // We use these paths directly rather than hijacking HOME.

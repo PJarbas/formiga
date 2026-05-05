@@ -5,7 +5,7 @@ import {
   filterPiEvent,
   parsePiOutputStream,
   MAX_TEXT_FALLBACK_BYTES,
-} from "../src/installer/pi-stream-parser.js";
+} from "../dist/installer/pi-stream-parser.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────
 

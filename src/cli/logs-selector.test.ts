@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseLogsSelector, lookupRunIdByNumber } from "./logs-selector.js";
+import { parseLogsSelector, lookupRunIdByNumber } from "../../dist/cli/logs-selector.js";
 
 describe("parseLogsSelector", () => {
   it("returns default global recent selector when no arg is provided", () => {

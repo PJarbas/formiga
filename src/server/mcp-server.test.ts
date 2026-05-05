@@ -7,7 +7,7 @@ import {
   startTamanduaMcpServer,
   stopTamanduaMcpServer,
   type TamanduaMcpServer,
-} from "./mcp-server.js";
+} from "../../dist/server/mcp-server.js";
 
 type JsonRpcResponse = {
   jsonrpc: "2.0";

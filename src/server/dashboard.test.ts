@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import http from "node:http";
-import { createDashboardServer } from "./dashboard.js";
-import { type TamanduaEvent } from "../installer/events.js";
-import { DEFAULT_MCP_PORT } from "./mcp-server.js";
+import { createDashboardServer } from "../../dist/server/dashboard.js";
+import { type TamanduaEvent } from "../../dist/installer/events.js";
+import { DEFAULT_MCP_PORT } from "../../dist/server/mcp-server.js";
 
 interface LogsTailResponse {
   lines: string[];
