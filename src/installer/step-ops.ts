@@ -192,6 +192,122 @@ export function readProgressFile(runId: string): string {
   }
 }
 
+/**
+ * Build a '## Story Plan' markdown section from an array of stories.
+ * Exported for testability.
+ */
+export function buildStoryPlanSection(stories: Pick<Story, "storyId" | "title" | "description" | "acceptanceCriteria">[]): string {
+  let section = "## Story Plan\n\n";
+  for (const story of stories) {
+    section += `### ${story.storyId}: ${story.title}\n\n`;
+    section += `**Description:** ${story.description}\n\n`;
+    section += "**Acceptance Criteria:**\n";
+    for (const ac of story.acceptanceCriteria) {
+      section += `- ${ac}\n`;
+    }
+    section += "\n";
+  }
+  return section;
+}
+
+/**
+ * Merge a '## Story Plan' section into existing progress file content.
+ * If a Story Plan section already exists, it is replaced. Otherwise it is
+ * inserted after the first heading line (or at the top).
+ * Exported for testability.
+ */
+export function mergeStoryPlanIntoProgress(existingContent: string, storyPlanSection: string): string {
+  const storyPlanStart = "\n## Story Plan\n";
+  const idx = existingContent.indexOf(storyPlanStart);
+  if (idx !== -1) {
+    // Find the next ## heading after the Story Plan start (or end of string)
+    const afterStart = idx + storyPlanStart.length;
+    const nextHeadingIdx = existingContent.indexOf("\n## ", afterStart);
+    const endIdx = nextHeadingIdx !== -1 ? nextHeadingIdx : existingContent.length;
+    return (
+      existingContent.slice(0, idx) +
+      "\n" +
+      storyPlanSection.trimEnd() +
+      (nextHeadingIdx !== -1 ? "" : "\n") +
+      existingContent.slice(endIdx)
+    );
+  }
+
+  if (existingContent.trim()) {
+    // Insert after the first heading line, preserving existing content
+    const headerMatch = existingContent.match(/^(# .+?\n)/);
+    if (headerMatch) {
+      return headerMatch[1] + "\n" + storyPlanSection + existingContent.slice(headerMatch[1].length);
+    }
+    return storyPlanSection + "\n" + existingContent;
+  }
+
+  return `# Progress Log\n\n${storyPlanSection}`;
+}
+
+/**
+ * Write the full story plan to the progress log after STORIES_JSON is parsed.
+ * Finds the loop step's agent workspace and writes/updates the '## Story Plan'
+ * section in progress-{runId}.txt, preserving any existing Codebase Patterns or
+ * other sections. Emits a 'stories.planned' event on success.
+ */
+export function writeStoryPlanToProgress(runId: string): void {
+  if (!runHasStories(runId)) return;
+
+  try {
+    const db = getDb();
+    const loopStep = db.prepare(
+      "SELECT agent_id FROM steps WHERE run_id = ? AND type = 'loop' LIMIT 1"
+    ).get(runId) as { agent_id: string } | undefined;
+
+    if (!loopStep) {
+      logger.warn("writeStoryPlanToProgress: no loop step found for run", { runId });
+      return;
+    }
+
+    const workspace = getAgentWorkspacePath(loopStep.agent_id);
+    if (!workspace) {
+      logger.warn("writeStoryPlanToProgress: no workspace configured for loop agent", { runId, agentId: loopStep.agent_id });
+      return;
+    }
+
+    const stories = getStories(runId);
+    if (stories.length === 0) return;
+
+    const storyPlanSection = buildStoryPlanSection(stories);
+    const scopedPath = path.join(workspace, `progress-${runId}.txt`);
+
+    // Read existing content if any
+    let existingContent = "";
+    try {
+      existingContent = fs.readFileSync(scopedPath, "utf-8");
+    } catch {
+      // File doesn't exist yet — that's fine
+    }
+
+    const newContent = mergeStoryPlanIntoProgress(existingContent, storyPlanSection);
+
+    fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
+    fs.writeFileSync(scopedPath, newContent, "utf-8");
+
+    const wfId = getWorkflowId(runId);
+    emitEvent({
+      ts: new Date().toISOString(),
+      event: "stories.planned",
+      runId,
+      workflowId: wfId,
+      detail: `Wrote ${stories.length} stories to progress file`,
+    });
+
+    logger.info("Story plan written to progress file", { runId, storyCount: stories.length });
+  } catch (err) {
+    logger.warn("writeStoryPlanToProgress: failed to write progress file", {
+      runId,
+      error: (err as Error).message,
+    });
+  }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Stories
 // ══════════════════════════════════════════════════════════════════════
@@ -767,6 +883,9 @@ export function completeStep(stepId: string, output: string): { status: string }
 
   // Parse STORIES_JSON from output (any step, typically the planner)
   parseAndInsertStories(output, step.run_id);
+
+  // Write story plan to progress log after STORIES_JSON is parsed
+  writeStoryPlanToProgress(step.run_id);
 
   // Robustness: if a downstream step is a loop-over-stories and this run still
   // has no stories AND this step was the latest opportunity to produce them

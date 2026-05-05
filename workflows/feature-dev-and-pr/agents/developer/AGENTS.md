@@ -99,6 +99,24 @@ Started: <timestamp>
 ---
 ```
 
+**Story Plan Section:** After the planner step completes, a `## Story Plan` section is automatically pre-populated in the progress file. This section lists every planned story with its ID, title, description, and acceptance criteria. The format is:
+
+```markdown
+## Story Plan
+
+### US-001: Story title here
+
+**Description:** ...
+
+**Acceptance Criteria:**
+- ...
+
+### US-002: Another story
+...
+```
+
+You can reference this section at any time to understand upcoming work and how your current story fits into the broader plan. The Story Plan is updated if re-planning occurs, and it is preserved alongside any `## Codebase Patterns` you've added.
+
 After completing a story, **rewrite** `progress-{{run_id}}.txt` to include this block:
 
 ```markdown
