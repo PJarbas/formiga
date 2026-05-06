@@ -127,6 +127,32 @@ describe("tamandua logs-tail", () => {
     const runId = "run-abc";
     const runFile = path.join(env.stateDir, "events", `${runId}.jsonl`);
 
+    // prefix expansion now routes through getWorkflowStatus, which needs a DB entry
+    const dbDir = path.join(env.homeDir, ".tamandua");
+    const dbPath = path.join(dbDir, "tamandua.db");
+    fs.mkdirSync(dbDir, { recursive: true });
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS runs (
+        id TEXT PRIMARY KEY,
+        run_number INTEGER,
+        workflow_id TEXT NOT NULL,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        context TEXT NOT NULL DEFAULT '{}',
+        tokens_spent INTEGER NOT NULL DEFAULT 0,
+        notify_url TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
+      VALUES (?, 1, 'logs-tail-test', 'test run', 'running', '{}', ?, ?)
+    `).run(runId, now, now);
+    db.close();
+
     appendEvent(runFile, makeEvent(runId, "run-old"));
 
     const proc = spawnCli(["logs-tail", runId], {

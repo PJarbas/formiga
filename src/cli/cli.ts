@@ -272,7 +272,14 @@ async function main() {
       return;
     }
 
-    const events = getRunEvents(selector.runId);
+    let runId: string;
+    try {
+      runId = getWorkflowStatus(selector.runId).id;
+    } catch (err) {
+      console.log(err instanceof Error ? err.message : `No run found matching "${selector.runId}".`);
+      return;
+    }
+    const events = getRunEvents(runId);
     events.length === 0 ? console.log(`No events for run "${selector.runId}".`) : printEvents(events);
     return;
   }
@@ -295,7 +302,14 @@ async function main() {
       return;
     }
 
-    await streamEventSource({ kind: "run", runId: selector.runId }, 50);
+    let logsTailRunId: string;
+    try {
+      logsTailRunId = getWorkflowStatus(selector.runId).id;
+    } catch (err) {
+      console.log(err instanceof Error ? err.message : `No run found matching "${selector.runId}".`);
+      return;
+    }
+    await streamEventSource({ kind: "run", runId: logsTailRunId }, 50);
     return;
   }
 
