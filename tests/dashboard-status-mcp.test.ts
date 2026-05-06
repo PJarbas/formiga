@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { once } from "node:events";
-import { describe, it } from "node:test";
+import { describe, it, after } from "node:test";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
 const DEFAULT_MCP_PORT = 3338;
@@ -87,6 +87,35 @@ async function reserveRandomPort(): Promise<number> {
 }
 
 describe("tamandua dashboard status MCP visibility", () => {
+  // Belt-and-suspenders: kill any leaked mcp-standalone/daemon orphans
+  after(() => {
+    try {
+      const pids = execSync(
+        "pgrep -f 'mcp-standalone\\.js|daemon\\.js'",
+        { encoding: "utf8" },
+      )
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+
+      for (const pid of pids) {
+        try {
+          const env = execSync(
+            `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^HOME='`,
+            { encoding: "utf8" },
+          );
+          if (env.includes("tamandua-mcp-lifecycle") || env.includes("tamandua-dashboard-status")) {
+            process.kill(Number(pid), "SIGKILL");
+          }
+        } catch {
+          // Process may have exited between pgrep and /proc read
+        }
+      }
+    } catch {
+      // pgrep may fail if no processes match — that's fine
+    }
+  });
+
   // AC 1: Dashboard status shows MCP as independently managed
   it("shows MCP as not running when dashboard is started without MCP", async (t) => {
     const dashboardPort = await reserveRandomPort();
@@ -120,8 +149,7 @@ describe("tamandua dashboard status MCP visibility", () => {
   // AC 1: Dashboard status shows MCP running independently when started via mcp start
   it("shows MCP as independently running after tamandua mcp start", async (t) => {
     if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use in this environment`);
-      return;
+      assert.fail(`Port ${DEFAULT_MCP_PORT} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${DEFAULT_MCP_PORT}`);
     }
 
     const dashboardPort = await reserveRandomPort();
@@ -249,8 +277,7 @@ describe("tamandua dashboard status MCP visibility", () => {
   // AC 5: uninstall stops MCP if running
   it("tamandua uninstall stops MCP if it was running", async (t) => {
     if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use in this environment`);
-      return;
+      assert.fail(`Port ${DEFAULT_MCP_PORT} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${DEFAULT_MCP_PORT}`);
     }
 
     const tempEnv = createTempEnv();

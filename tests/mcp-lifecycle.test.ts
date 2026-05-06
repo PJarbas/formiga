@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { once } from "node:events";
 import { describe, it, before, after } from "node:test";
 
@@ -272,6 +272,36 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
   after(() => {
     stopMcp();
     cleanupRealMcpFiles();
+
+    // Belt-and-suspenders: kill any leaked mcp-standalone/daemon orphans
+    // that survived because a prior test run was SIGKILL'd before its
+    // finally block could execute.
+    try {
+      const pids = execSync(
+        "pgrep -f 'mcp-standalone\\.js|daemon\\.js'",
+        { encoding: "utf8" },
+      )
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+
+      for (const pid of pids) {
+        try {
+          // Only kill processes whose HOME points into a test temp dir
+          const env = execSync(
+            `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^HOME='`,
+            { encoding: "utf8" },
+          );
+          if (env.includes("tamandua-mcp-lifecycle") || env.includes("tamandua-dashboard-status")) {
+            process.kill(Number(pid), "SIGKILL");
+          }
+        } catch {
+          // Process may have exited between pgrep and /proc read
+        }
+      }
+    } catch {
+      // pgrep may fail if no processes match — that's fine
+    }
   });
 
   // ────────────────────────────────────────────────────────────────
@@ -286,8 +316,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const mcpPort = await reserveRandomPort();
 
     if (!(await canBind(mcpPort))) {
-      t.skip(`Port ${mcpPort} is already in use`);
-      return;
+      assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
     const tempEnv = createTempEnv();
@@ -356,8 +385,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const mcpPort = await reserveRandomPort();
 
     if (!(await canBind(mcpPort))) {
-      t.skip(`Port ${mcpPort} is already in use`);
-      return;
+      assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
     const tempEnv = createTempEnv();
@@ -421,8 +449,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const customPort = 45678;
 
     if (!(await canBind(customPort))) {
-      t.skip(`Port ${customPort} is already in use`);
-      return;
+      assert.fail(`Port ${customPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${customPort}`);
     }
 
     const tempEnv = createTempEnv();
@@ -478,12 +505,10 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const dashboardPort = await reserveRandomPort();
 
     if (!(await canBind(mcpPort))) {
-      t.skip(`MCP port ${mcpPort} is already in use`);
-      return;
+      assert.fail(`MCP port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
     if (!(await canBind(dashboardPort))) {
-      t.skip(`Dashboard port ${dashboardPort} is already in use`);
-      return;
+      assert.fail(`Dashboard port ${dashboardPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${dashboardPort}`);
     }
 
     const tempEnv = createTempEnv();
@@ -549,8 +574,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const mcpPort = await reserveRandomPort();
 
     if (!(await canBind(mcpPort))) {
-      t.skip(`Port ${mcpPort} is already in use`);
-      return;
+      assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
     const tempEnv = createTempEnv();
@@ -599,8 +623,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const mcpPort = await reserveRandomPort();
 
     if (!(await canBind(mcpPort))) {
-      t.skip(`Port ${mcpPort} is already in use`);
-      return;
+      assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
     const tempEnv = createTempEnv();
@@ -700,8 +723,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const mcpPort = await reserveRandomPort();
 
     if (!(await canBind(mcpPort))) {
-      t.skip(`Port ${mcpPort} is already in use`);
-      return;
+      assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
     const tempEnv = createTempEnv();
@@ -790,6 +812,79 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.equal(stop.code, 0);
       assert.match(stop.stdout, /not running/);
     } finally {
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────
+  // Regression: keepHandle returns ChildProcess that can be killed
+  // ────────────────────────────────────────────────────────────────
+  it("keepHandle: true returns a ChildProcess handle that can be SIGKILL'd", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const mcpPort = await reserveRandomPort();
+
+    if (!(await canBind(mcpPort))) {
+      assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
+    }
+
+    const tempEnv = createTempEnv();
+
+    let result: { pid: number; port: number; child: ReturnType<typeof spawn> } | undefined;
+
+    try {
+      // Call the direct API with keepHandle: true and homeDir so the
+      // spawned child writes its PID/port files into the isolated temp
+      // directory, and the parent's PID-file checks target the same path.
+      result = await startMcp(mcpPort, { keepHandle: true, homeDir: tempEnv.homeDir }) as { pid: number; port: number; child: ReturnType<typeof spawn> };
+
+      // Verify the child handle is present and is a ChildProcess
+      assert.ok(result.child, "keepHandle should return a child process handle");
+      assert.equal(typeof result.child.kill, "function", "child should have a kill method");
+      assert.equal(typeof result.pid, "number", "should return pid");
+      assert.equal(typeof result.port, "number", "should return port");
+      assert.ok(result.pid > 0, "pid should be positive");
+
+      // Verify the process is actually running
+      const baseUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+      await waitForHttpUp(baseUrl);
+
+      // Kill it directly via the ChildProcess handle
+      result.child.kill("SIGKILL");
+
+      // Wait for the process to exit
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+
+      // Verify the process is no longer running
+      try {
+        await fetch(baseUrl);
+        assert.fail("MCP should be unreachable after SIGKILL");
+      } catch {
+        // Expected — process is dead
+      }
+
+      // Verify the PID file was cleaned up (the child process hooks SIGTERM
+      // but SIGKILL doesn't give it a chance — the test shouldn't leave a
+      // stale PID file behind. The kill is direct, so we clean it ourselves.)
+      try { fs.unlinkSync(path.join(tempEnv.homeDir, ".tamandua", "mcp.pid")); } catch {}
+      try { fs.unlinkSync(path.join(tempEnv.homeDir, ".tamandua", "mcp-port")); } catch {}
+      try { fs.unlinkSync(path.join(tempEnv.homeDir, ".tamandua", "mcp.log")); } catch {}
+
+    } finally {
+      // Belt: if anything survived, kill it via the direct handle
+      if (result?.child) {
+        try { result.child.kill("SIGKILL"); } catch { /* already dead */ }
+      }
+      // Also try CLI stop with the temp HOME (belt-and-suspenders)
+      try {
+        await runCli(["mcp", "stop"], {
+          HOME: tempEnv.homeDir,
+          TAMANDUA_STATE_DIR: tempEnv.stateDir,
+        });
+      } catch { /* best effort */ }
       fs.rmSync(tempEnv.root, { recursive: true, force: true });
     }
   });

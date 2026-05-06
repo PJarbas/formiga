@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "./mcp-server.js";
 
@@ -84,15 +84,15 @@ export function writePort(port: number): void {
 // ── Process status ──────────────────────────────────────────────────
 
 /**
- * Check if the daemon process is running.
- * Uses PID file and kill(0) for existence check.
+ * Check if a process is running by reading its PID file and testing
+ * with kill(0). Cleans up stale PID files on mismatch.
  */
-export function isRunning(): { running: true; pid: number } | { running: false } {
-  if (!fs.existsSync(PID_FILE)) return { running: false };
+function checkPidFile(pidFile: string): { running: true; pid: number } | { running: false } {
+  if (!fs.existsSync(pidFile)) return { running: false };
 
   let pid: number;
   try {
-    pid = parseInt(fs.readFileSync(PID_FILE, "utf-8").trim(), 10);
+    pid = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
     if (isNaN(pid)) return { running: false };
   } catch {
     return { running: false };
@@ -105,12 +105,20 @@ export function isRunning(): { running: true; pid: number } | { running: false }
   } catch {
     // Process doesn't exist — clean up stale PID file
     try {
-      fs.unlinkSync(PID_FILE);
+      fs.unlinkSync(pidFile);
     } catch {
       // Best effort
     }
     return { running: false };
   }
+}
+
+/**
+ * Check if the daemon process is running.
+ * Uses PID file and kill(0) for existence check.
+ */
+export function isRunning(): { running: true; pid: number } | { running: false } {
+  return checkPidFile(PID_FILE);
 }
 
 /**
@@ -131,6 +139,23 @@ export function getDaemonStatus(): { running: false; pid: null; port: number } |
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
+/** Options for startDaemon / startMcp. */
+export interface StartOptions {
+  /**
+   * When true, skips child.unref() and includes the ChildProcess handle
+   * in the return value. Callers can use child.kill() for direct cleanup.
+   * Default: false (production detached/unref behavior).
+   */
+  keepHandle?: boolean;
+  /**
+   * When set, use this directory instead of ~/.tamandua for all
+   * filesystem operations (PID, port, and log files). Also passed as
+   * HOME to the spawned child process. Useful in tests that use
+   * isolated temp directories.
+   */
+  homeDir?: string;
+}
+
 /**
  * Start the dashboard daemon.
  *
@@ -138,37 +163,71 @@ export function getDaemonStatus(): { running: false; pid: null; port: number } |
  * Writes the port to ~/.tamandua/port before spawning.
  *
  * If the daemon is already running, returns its info without restarting.
+ *
+ * @param port  Dashboard port (default 3333).
+ * @param opts  When keepHandle is true, returns the ChildProcess handle.
  */
-export async function startDaemon(port = 3333): Promise<{ pid: number; port: number }> {
-  const status = isRunning();
+export async function startDaemon(port?: number): Promise<{ pid: number; port: number }>;
+export async function startDaemon(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
+export async function startDaemon(port = 3333, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
+  // When homeDir is set, compute isolated paths for all filesystem operations.
+  const tamanduaDir = opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : TAMANDUA_DIR;
+  const pidFile = opts?.homeDir ? path.join(tamanduaDir, "tamandua.pid") : PID_FILE;
+  const portFile = opts?.homeDir ? path.join(tamanduaDir, "port") : PORT_FILE;
+  const logFile = opts?.homeDir ? path.join(tamanduaDir, "dashboard.log") : LOG_FILE;
+
+  const status = checkPidFile(pidFile);
   if (status.running) {
-    return { pid: status.pid, port: readPort() };
+    let existingPort = port;
+    try {
+      const raw = fs.readFileSync(portFile, "utf-8").trim();
+      const p = parseInt(raw, 10);
+      if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
+    } catch {
+      // File missing or unreadable — use the requested port
+    }
+    return { pid: status.pid, port: existingPort };
   }
 
-  fs.mkdirSync(TAMANDUA_DIR, { recursive: true });
-  writePort(port);
+  fs.mkdirSync(tamanduaDir, { recursive: true });
+  fs.writeFileSync(portFile, String(port), "utf-8");
 
-  const out = fs.openSync(LOG_FILE, "a");
-  const err = fs.openSync(LOG_FILE, "a");
+  const out = fs.openSync(logFile, "a");
+  const errFd = fs.openSync(logFile, "a");
 
   const daemonScript = path.resolve(__dirname, "daemon.js");
-  const child = spawn("node", [daemonScript, String(port)], {
+  const spawnOpts: Parameters<typeof spawn>[2] = {
     detached: true,
-    stdio: ["ignore", out, err],
-  });
-  child.unref();
+    stdio: ["ignore", out, errFd],
+  };
+  if (opts?.homeDir) {
+    spawnOpts.env = { ...process.env, HOME: opts.homeDir };
+  }
+  const child = spawn("node", [daemonScript, String(port)], spawnOpts);
+
+  if (opts?.keepHandle) {
+    // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
+    // Don't unref — the handle keeps the event loop alive, which is fine
+    // because the caller is responsible for killing the child.
+  } else {
+    child.unref();
+  }
 
   // Wait briefly for the daemon to start and write its PID file
   await new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
-  const check = isRunning();
+  const check = checkPidFile(pidFile);
   if (!check.running) {
-    const logTail = readLogTail();
+    const logTail = readLogTail(logFile);
     if (logTail) {
       throw new Error(`Daemon failed to start. Recent daemon log:\n${logTail}`);
     }
 
-    throw new Error("Daemon failed to start. Check " + LOG_FILE);
+    throw new Error("Daemon failed to start. Check " + logFile);
+  }
+
+  if (opts?.keepHandle) {
+    return { pid: check.pid, port, child };
   }
 
   return { pid: check.pid, port };
@@ -253,28 +312,7 @@ export function writeMcpPort(port: number): void {
  * Uses the MCP PID file and kill(0) for existence check.
  */
 export function isMcpRunning(): { running: true; pid: number } | { running: false } {
-  if (!fs.existsSync(MCP_PID_FILE)) return { running: false };
-
-  let pid: number;
-  try {
-    pid = parseInt(fs.readFileSync(MCP_PID_FILE, "utf-8").trim(), 10);
-    if (isNaN(pid)) return { running: false };
-  } catch {
-    return { running: false };
-  }
-
-  try {
-    process.kill(pid, 0);
-    return { running: true, pid };
-  } catch {
-    // Process doesn't exist — clean up stale PID file
-    try {
-      fs.unlinkSync(MCP_PID_FILE);
-    } catch {
-      // Best effort
-    }
-    return { running: false };
-  }
+  return checkPidFile(MCP_PID_FILE);
 }
 
 /**
@@ -305,37 +343,68 @@ export function getMcpStatus(): {
  *
  * If the MCP server is already running, returns its info without restarting.
  */
-export async function startMcp(port?: number): Promise<{ pid: number; port: number }> {
-  const status = isMcpRunning();
+export async function startMcp(port?: number): Promise<{ pid: number; port: number }>;
+export async function startMcp(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
+export async function startMcp(port?: number, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
+  // When homeDir is set, compute isolated paths for all filesystem operations.
+  const tamanduaDir = opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : TAMANDUA_DIR;
+  const mcpPidFile = opts?.homeDir ? path.join(tamanduaDir, "mcp.pid") : MCP_PID_FILE;
+  const mcpPortFile = opts?.homeDir ? path.join(tamanduaDir, "mcp-port") : MCP_PORT_FILE;
+  const mcpLogFile = opts?.homeDir ? path.join(tamanduaDir, "mcp.log") : MCP_LOG_FILE;
+
+  const status = checkPidFile(mcpPidFile);
   if (status.running) {
-    return { pid: status.pid, port: readMcpPort() };
+    let existingPort: number = DEFAULT_MCP_PORT;
+    try {
+      const raw = fs.readFileSync(mcpPortFile, "utf-8").trim();
+      const p = parseInt(raw, 10);
+      if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
+    } catch {
+      // File missing or unreadable — use default
+    }
+    return { pid: status.pid, port: existingPort };
   }
 
   const mcpPort = port ?? DEFAULT_MCP_PORT;
 
-  fs.mkdirSync(TAMANDUA_DIR, { recursive: true });
-  writeMcpPort(mcpPort);
+  fs.mkdirSync(tamanduaDir, { recursive: true });
+  fs.writeFileSync(mcpPortFile, String(mcpPort), "utf-8");
 
-  const out = fs.openSync(MCP_LOG_FILE, "a");
-  const err = fs.openSync(MCP_LOG_FILE, "a");
+  const out = fs.openSync(mcpLogFile, "a");
+  const errFd = fs.openSync(mcpLogFile, "a");
 
   const standaloneScript = resolveStandaloneScript();
-  const child = spawn("node", [standaloneScript, String(mcpPort)], {
+  const spawnOpts: Parameters<typeof spawn>[2] = {
     detached: true,
-    stdio: ["ignore", out, err],
-  });
-  child.unref();
+    stdio: ["ignore", out, errFd],
+  };
+  if (opts?.homeDir) {
+    spawnOpts.env = { ...process.env, HOME: opts.homeDir };
+  }
+  const child = spawn("node", [standaloneScript, String(mcpPort)], spawnOpts);
+
+  if (opts?.keepHandle) {
+    // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
+    // Don't unref — the handle keeps the event loop alive, which is fine
+    // because the caller is responsible for killing the child.
+  } else {
+    child.unref();
+  }
 
   // Wait briefly for the MCP server to start and write its PID file
   await new Promise<void>((resolve) => setTimeout(resolve, 1500));
 
-  const check = isMcpRunning();
+  const check = checkPidFile(mcpPidFile);
   if (!check.running) {
-    const logTail = readLogTail(MCP_LOG_FILE);
+    const logTail = readLogTail(mcpLogFile);
     if (logTail) {
       throw new Error(`MCP server failed to start. Recent MCP log:\n${logTail}`);
     }
-    throw new Error("MCP server failed to start. Check " + MCP_LOG_FILE);
+    throw new Error("MCP server failed to start. Check " + mcpLogFile);
+  }
+
+  if (opts?.keepHandle) {
+    return { pid: check.pid, port: mcpPort, child };
   }
 
   return { pid: check.pid, port: mcpPort };
