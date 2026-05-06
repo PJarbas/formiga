@@ -195,6 +195,9 @@ steps:
       VERIFY FEEDBACK (if retrying):
       {{verify_feedback}}
 
+      TIMEOUT RETRY (if previous attempt timed out):
+      {{timeout_retry}}
+
       Instructions:
       1. cd into the repo, checkout the branch
       2. Implement the fix based on the root cause and fix approach

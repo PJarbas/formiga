@@ -1024,9 +1024,17 @@ export async function executePollingRound(
     // run. Reset any running step to 'pending' (bumping retry_count) so
     // the next polling tick can re-claim it. If retries are exhausted,
     // fail the step so escalation machinery (escalate_to: human) fires.
+    //
+    // When the failure is a timeout, pass the reason through to
+    // recoverOrphanedStepsForAgent so it records `timeout_retry` in the
+    // run's context. On re-claim, the retried agent sees a distinct
+    // signal that partial work may exist on disk and should be reused.
     try {
+      const isTimeout = errorMessage.includes("timed out");
+      const timeoutRetryReason = isTimeout ? errorMessage : undefined;
+
       const { recoverOrphanedStepsForAgent } = await import("./step-ops.js");
-      const recoveryResult = recoverOrphanedStepsForAgent(job.agentId);
+      const recoveryResult = recoverOrphanedStepsForAgent(job.agentId, undefined, timeoutRetryReason);
       if (recoveryResult.recovered > 0 || recoveryResult.failed > 0) {
         logger.info("Orphaned step recovery after pi failure", {
           ...context,
@@ -1034,6 +1042,7 @@ export async function executePollingRound(
           failed: recoveryResult.failed,
           skipped: recoveryResult.skipped,
           piExitError: errorMessage,
+          isTimeout,
         });
       }
     } catch (recoveryErr) {

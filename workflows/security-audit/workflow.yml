@@ -239,6 +239,9 @@ steps:
       VERIFY FEEDBACK (if retrying):
       {{verify_feedback}}
 
+      TIMEOUT RETRY (if previous attempt timed out):
+      {{timeout_retry}}
+
       PROGRESS LOG:
       {{progress}}
 

@@ -575,8 +575,13 @@ export function cleanupAbandonedSteps(): void {
  *   is older than this many milliseconds. When omitted, all running steps
  *   for the agent are recovered (use in post-exit handlers where we KNOW
  *   the agent just died).
+ * @param timeoutRetryReason - Optional: human-readable reason for the
+ *   timeout (e.g. "pi timed out after 1800000ms"). When provided, each
+ *   recovered step's run context is augmented with `timeout_retry` so the
+ *   retry prompt includes a signal that the prior attempt was interrupted
+ *   and uncommitted work may exist on disk.
  */
-export function recoverOrphanedStepsForAgent(agentId: string, staleThresholdMs?: number): { recovered: number; failed: number; skipped: number } {
+export function recoverOrphanedStepsForAgent(agentId: string, staleThresholdMs?: number, timeoutRetryReason?: string): { recovered: number; failed: number; skipped: number } {
   const db = getDb();
 
   let query: string;
@@ -654,6 +659,9 @@ export function recoverOrphanedStepsForAgent(agentId: string, staleThresholdMs?:
           db.prepare("UPDATE steps SET status = 'pending', current_story_id = NULL, updated_at = datetime('now') WHERE id = ?").run(step.id);
           emitEvent({ ts: new Date().toISOString(), event: "step.timeout", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: `Agent terminated; story ${story.story_id} reset to pending (story retry ${newRetry}/${story.max_retries})` });
           logger.info(`Orphaned step recovery: story ${story.story_id} reset to pending (retry ${newRetry}/${story.max_retries})`, { runId: step.run_id, stepId: step.step_id, agentId });
+          if (timeoutRetryReason) {
+            setRunContextKey(step.run_id, "timeout_retry", timeoutRetryReason);
+          }
           recovered++;
         }
         continue;
@@ -682,6 +690,9 @@ export function recoverOrphanedStepsForAgent(agentId: string, staleThresholdMs?:
       ).run(newRetry, step.id);
       emitEvent({ ts: new Date().toISOString(), event: "step.timeout", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: `Agent terminated without completing step; reset to pending (retry ${newRetry}/${step.max_retries})` });
       logger.info(`Orphaned step reset to pending (retry ${newRetry}/${step.max_retries})`, { runId: step.run_id, stepId: step.step_id, agentId });
+      if (timeoutRetryReason) {
+        setRunContextKey(step.run_id, "timeout_retry", timeoutRetryReason);
+      }
       recovered++;
     }
   }
@@ -714,6 +725,19 @@ export function computeHasFrontendChanges(repo: string, branch: string): string 
 // ══════════════════════════════════════════════════════════════════════
 // Internal Helpers
 // ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Set a key-value pair in a run's context JSON field.
+ * Reads existing context, sets the key, and writes back.
+ */
+function setRunContextKey(runId: string, key: string, value: string): void {
+  const db = getDb();
+  const run = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string } | undefined;
+  if (!run) return;
+  const context: Record<string, string> = JSON.parse(run.context);
+  context[key] = value;
+  db.prepare("UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(context), runId);
+}
 
 function runHasStories(runId: string): boolean {
   const db = getDb();
@@ -932,10 +956,20 @@ export function claimStep(agentId: string): ClaimResult {
         );
       }
 
+      // Clear one-shot timeout_retry so it doesn't leak into subsequent stories.
+      // The resolved template must capture it first; delete only after resolution.
+      const hasTimeoutRetryLoop = Boolean(context["timeout_retry"]);
+
       // Persist story context vars to DB so verify_each steps can access them
       db.prepare("UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(context), step.run_id);
 
       const resolvedInput = resolveTemplate(step.input_template, context);
+
+      if (hasTimeoutRetryLoop) {
+        delete context["timeout_retry"];
+        db.prepare("UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(context), step.run_id);
+      }
+
       return { found: true, stepId: step.id, runId: step.run_id, resolvedInput };
     }
   }
@@ -955,6 +989,12 @@ export function claimStep(agentId: string): ClaimResult {
     context["progress"] = readProgressFile(step.run_id);
   }
 
+  // Clear one-shot timeout_retry after the template has captured it.
+  // For single (non-loop) steps the context isn't persisted here, so
+  // remove the key from the DB explicitly to prevent it from leaking
+  // into downstream steps.
+  const hasTimeoutRetry = Boolean(context["timeout_retry"]);
+
   const missingKeys = findMissingTemplateKeys(step.input_template, context);
   if (missingKeys.length > 0) {
     logger.warn(
@@ -964,6 +1004,11 @@ export function claimStep(agentId: string): ClaimResult {
   }
 
   const resolvedInput = resolveTemplate(step.input_template, context);
+
+  if (hasTimeoutRetry) {
+    delete context["timeout_retry"];
+    setRunContextKey(step.run_id, "timeout_retry", "");
+  }
 
   return {
     found: true,

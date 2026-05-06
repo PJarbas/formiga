@@ -13,7 +13,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { recoverOrphanedStepsForAgent } from "../dist/installer/step-ops.js";
+import { recoverOrphanedStepsForAgent, claimStep, resolveStepContext } from "../dist/installer/step-ops.js";
 import { getDb } from "../dist/db.js";
 
 const TEST_AGENT_1 = "test_sigkill-recovery-agent-1";
@@ -190,6 +190,110 @@ describe("recoverOrphanedStepsForAgent", () => {
       assert.equal(result.failed, 0);
     } finally {
       db.prepare("DELETE FROM steps WHERE id = ?").run(tmpStepId);
+    }
+  });
+
+  // ── AC 6: SIGKILL timeout records timeout_retry in run context ─
+  // When recoverOrphanedStepsForAgent is called with a timeoutRetryReason,
+  // the run's context must carry `timeout_retry` so the retry prompt includes
+  // a signal that the agent's previous attempt was interrupted.
+  it("records timeout_retry in run context when timeoutRetryReason is provided", () => {
+    const db = getDb();
+    const agent = "test_timeout-context-recorder";
+
+    // Create a fresh run + running step
+    const runId = crypto.randomUUID();
+    const stepUuid = crypto.randomUUID();
+    const now = ts();
+    const contextBefore = JSON.stringify({ repo: "/tmp/test", branch: "fix/bug-123", build_cmd: "npm run build", test_cmd: "npm test" });
+
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, 'test-wf', 'fix bug 123', 'running', ?, ?, ?)"
+    ).run(runId, contextBefore, now, now);
+
+    db.prepare(
+      `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects,
+        status, retry_count, max_retries, type, created_at, updated_at)
+       VALUES (?, ?, 'fix', ?, 0,
+         'BROKEN: {{timeout_retry}}', '',
+         'running', 0, 2, 'single', ?, ?)`
+    ).run(stepUuid, runId, agent, now, now);
+
+    try {
+      // Execute recovery with a timeout reason
+      const timeoutReason = "pi timed out after 1800000ms";
+      const result = recoverOrphanedStepsForAgent(agent, undefined, timeoutReason);
+
+      assert.equal(result.recovered, 1, "should recover 1 step");
+      assert.equal(result.failed, 0);
+
+      // The run's context should now contain timeout_retry
+      const runAfter = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string };
+      const ctx = JSON.parse(runAfter.context);
+      assert.equal(ctx.timeout_retry, timeoutReason,
+        "run context must carry timeout_retry after timeout recovery");
+
+      // The step should be back to pending with retry_count bumped
+      const step = db.prepare(
+        "SELECT status, retry_count FROM steps WHERE id = ?"
+      ).get(stepUuid) as { status: string; retry_count: number };
+      assert.equal(step.status, "pending");
+      assert.equal(step.retry_count, 1);
+
+      // ── Sub-test: claimStep sees timeout_retry in the resolved input ──
+      const claim = claimStep(agent);
+      assert.ok(claim.found, "step should be claimable after recovery");
+      assert.ok(claim.resolvedInput?.includes(timeoutReason),
+        `resolved input should include timeout reason, got: ${claim.resolvedInput?.slice(0, 300)}`);
+
+      // After claim, timeout_retry should be cleared from run context
+      const runAfterClaim = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string };
+      const ctxAfterClaim = JSON.parse(runAfterClaim.context);
+      assert.equal(ctxAfterClaim.timeout_retry, "",
+        "timeout_retry should be cleared from run context after claim");
+
+      // Reset step back to running so after() can clean it up
+      db.prepare("UPDATE steps SET status = 'running' WHERE id = ?").run(stepUuid);
+    } finally {
+      db.prepare("DELETE FROM steps WHERE id = ?").run(stepUuid);
+      db.prepare("DELETE FROM runs WHERE id = ?").run(runId);
+    }
+  });
+
+  // ── AC 7: No stale timeout_retry leakage between different retries ──
+  it("does NOT set timeout_retry when timeoutRetryReason is omitted (non-timeout exit)", () => {
+    const db = getDb();
+    const agent = "test_no-context-pollution";
+    const runId = crypto.randomUUID();
+    const stepUuid = crypto.randomUUID();
+    const now = ts();
+    const contextBefore = JSON.stringify({ repo: "/tmp/test" });
+
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, 'test-wf', 'task', 'running', ?, ?, ?)"
+    ).run(runId, contextBefore, now, now);
+
+    db.prepare(
+      `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects,
+        status, retry_count, max_retries, type, created_at, updated_at)
+       VALUES (?, ?, 'fix', ?, 0, '', '', 'running', 0, 2, 'single', ?, ?)`
+    ).run(stepUuid, runId, agent, now, now);
+
+    try {
+      // Recovery WITHOUT a timeout reason (simulates non-timeout exit, e.g. SIGTERM)
+      const result = recoverOrphanedStepsForAgent(agent);
+      assert.equal(result.recovered, 1, "should recover the step");
+
+      // Context should NOT contain timeout_retry
+      const runAfter = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string };
+      const ctx = JSON.parse(runAfter.context);
+      assert.ok(!("timeout_retry" in ctx),
+        "run context must NOT contain timeout_retry when no reason was provided");
+
+      db.prepare("UPDATE steps SET status = 'running' WHERE id = ?").run(stepUuid);
+    } finally {
+      db.prepare("DELETE FROM steps WHERE id = ?").run(stepUuid);
+      db.prepare("DELETE FROM runs WHERE id = ?").run(runId);
     }
   });
 });
