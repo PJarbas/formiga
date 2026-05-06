@@ -21,6 +21,7 @@ describe("workflow parsing", () => {
     assert.ok(workflowIds.includes("feature-dev-merge"));
     assert.ok(workflowIds.includes("security-audit"));
     assert.ok(workflowIds.includes("bug-fix"));
+    assert.ok(workflowIds.includes("bug-fix-merge"));
   });
 
   for (const id of workflowIds) {

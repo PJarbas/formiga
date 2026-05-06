@@ -1,0 +1,141 @@
+# Progress Log
+Run: 79d760aa-a810-4293-8c21-e057a4098537
+Task: create a new bundled workflow `bug-fix-merge` by adapting the existing `bug-fix` workflow
+Started: 2026-05-06
+
+## Codebase Patterns
+- All workflows are in `workflows/<id>/` with `workflow.yml` + `agents/<agent-id>/{AGENTS,SOUL,IDENTITY}.md`
+- Shared agent personas live in `agents/shared/<persona>/{AGENTS,SOUL,IDENTITY}.md` and are referenced via `../../agents/shared/<persona>/*.md`
+- Workflow specs are parsed via `loadWorkflowSpec()` from `dist/installer/workflow-spec.js`
+- `resolveBundledWorkflowsDir()` from `dist/installer/paths.js` gives the workflows root
+- Tests use `node:test` with `node:assert/strict`
+- The `tamandua-agents` skill is required on all workflow agents and is validated by tests
+- Polling config uses `model: default` and `timeoutSeconds: 120` for these workflows
+- Shared setup persona captures `ORIGINAL_BRANCH=$(git branch --show-current)` before creating a feature branch
+- Merge workflows use `git merge --squash` + `git commit -F <tempfile>` (NOT `git commit -m` and NOT `gh pr create`)
+- Setup and verifier agent directories are empty — they wire shared personas purely through workflow.yml workspace.files paths
+- `workflow-validation.test.ts` dynamically iterates ALL workflow directories; adding a new workflow requires adding an explicit assertion for its inclusion in the "finds at least N bundled workflows" check
+
+## Story Plan
+
+### US-001: Copy triager, investigator, and fixer agent personas from bug-fix to bug-fix-merge
+
+**Description:** As a developer, I need to create the workflows/bug-fix-merge/agents/ directory with triager, investigator, and fixer personas copied from the existing bug-fix workflow, so the bug-fix-merge workflow has the same analysis and fix agents.
+
+**Acceptance Criteria:**
+- workflows/bug-fix-merge/agents/triager/AGENTS.md exists and matches bug-fix source
+- workflows/bug-fix-merge/agents/triager/SOUL.md exists and matches bug-fix source
+- workflows/bug-fix-merge/agents/triager/IDENTITY.md exists and matches bug-fix source
+- workflows/bug-fix-merge/agents/investigator/AGENTS.md exists and matches bug-fix source
+- workflows/bug-fix-merge/agents/investigator/SOUL.md exists and matches bug-fix source
+- workflows/bug-fix-merge/agents/investigator/IDENTITY.md exists and matches bug-fix source
+- workflows/bug-fix-merge/agents/fixer/AGENTS.md exists and matches bug-fix source
+- workflows/bug-fix-merge/agents/fixer/SOUL.md exists and matches bug-fix source
+- workflows/bug-fix-merge/agents/fixer/IDENTITY.md exists and matches bug-fix source
+- Tests for agent persona file existence pass
+- Typecheck passes
+
+### US-002: Create merger agent persona for bug-fix-merge adapted from feature-dev-merge
+
+**Description:** As a developer, I need to create a merger agent persona under workflows/bug-fix-merge/agents/merger/ adapted from the feature-dev-merge merger, so the bug-fix-merge workflow can squash-merge bugfix branches instead of creating PRs.
+
+**Acceptance Criteria:**
+- workflows/bug-fix-merge/agents/merger/AGENTS.md exists with bug-fix commit-message guidance (fix: prefix, mention bug + root cause + fix)
+- workflows/bug-fix-merge/agents/merger/SOUL.md exists and matches feature-dev-merge source
+- workflows/bug-fix-merge/agents/merger/IDENTITY.md exists with appropriate merger identity
+- merger AGENTS.md contains conventional commit format guidance and git commit -F instructions
+- merger AGENTS.md does NOT contain "gh pr create" or "git push"
+- merger AGENTS.md does NOT contain "feat:" as preferred commit prefix
+- Tests for merger persona files pass
+- Typecheck passes
+
+### US-003: Create workflow.yml for bug-fix-merge workflow
+
+**Description:** As a developer, I need to create workflows/bug-fix-merge/workflow.yml that defines the bug-fix-merge workflow with id "bug-fix-merge", so the workflow is registered and ready for execution.
+
+**Acceptance Criteria:**
+- workflows/bug-fix-merge/workflow.yml exists and is valid YAML
+- workflow id is "bug-fix-merge"
+- Steps are in order: triage, investigate, setup, fix, verify, finalize_merge
+- Setup step input contains ORIGINAL_BRANCH capture instruction
+- finalize_merge step input does NOT contain "gh pr create"
+- finalize_merge step input does NOT contain "git push"
+- finalize_merge step input contains "git merge --squash"
+- finalize_merge step input contains "git commit -F"
+- All agents declare tamandua-agents skill
+- All steps reference valid agents defined in the workflow
+- workflow.yml parses successfully via loadWorkflowSpec (when typecheck passes)
+- Tests for workflow.yml structure pass
+- Typecheck passes
+
+### US-004: Add workflow validation test and verify bug-fix-merge end-to-end
+
+**Description:** As a developer, I need to add a test to tests/ that validates the bug-fix-merge workflow and run the full verification suite, so the workflow is proven correct.
+
+**Acceptance Criteria:**
+- Test file imports and parses bug-fix-merge workflow.yml successfully
+- Test asserts step id "finalize_merge" exists
+- Test asserts finalize_merge.input does not contain "gh pr create"
+- Test asserts finalize_merge.input does not contain "git push"
+- Test asserts setup.input contains "ORIGINAL_BRANCH"
+- npm run build passes
+- tamandua install succeeds
+- tamandua workflow list includes bug-fix-merge
+- npm test passes (all tests including new one)
+- Typecheck passes
+
+---
+## 2026-05-06 - US-001: Copy triager, investigator, and fixer agent personas from bug-fix to bug-fix-merge
+- Verified all 9 persona files (AGENTS.md, SOUL.md, IDENTITY.md for triager, investigator, fixer) already existed and matched the bug-fix source exactly
+- Added `diff` verification confirming all 9 files are byte-identical to their bug-fix counterparts
+- Added 9 new tests to tests/bug-fix-merge-workflow.test.ts that assert each persona file exists and matches the bug-fix source content
+- `npm run build` (typecheck) passes
+- All 20 bug-fix-merge workflow tests pass (including 9 new persona-match tests)
+- **Learnings:** The bug-fix-merge workflow scaffold was pre-created with triager/investigator/fixer personas already in place. The empty setup/ and verifier/ agent directories reference shared personas (../../agents/shared/*/). Workflow tests are structured in tests/bug-fix-merge-workflow.test.ts and use loadWorkflowSpec() for parsing.
+
+---
+## 2026-05-06 - US-002: Create merger agent persona for bug-fix-merge adapted from feature-dev-merge
+- Removed "gh pr create" and "git push" mentions from merger AGENTS.md guardrails
+- Added 6 new tests for merger persona validation under "merger persona" describe block
+- Verified AGENTS.md contains fix: commit prefix guidance, bug/root cause/fix
+- Verified SOUL.md matches feature-dev-merge source exactly
+- Verified IDENTITY.md has appropriate Merger identity with squash role
+- Verified AGENTS.md prohibits feat: prefix and enforces fix:
+- All 26 tests pass; typecheck passes
+- **Learnings:** The merger AGENTS.md uses bug-fix-specific template variables ({{problem_statement}}, {{root_cause}}, {{changes}}, {{regression_test}}) instead of task/progress file references. Guardrails section exists in both merger and feature-dev-merge variants but must not mention gh pr create or git push for the merge-only workflow.
+
+---
+## 2026-05-06 - US-003: Create workflow.yml for bug-fix-merge workflow
+- workflow.yml was pre-created alongside US-001/US-002 and is fully complete
+- Verified all 13 acceptance criteria:
+  1. ✅ workflow.yml exists and is valid YAML (id: bug-fix-merge)
+  2. ✅ Steps in order: triage → investigate → setup → fix → verify → finalize_merge
+  3. ✅ Setup step captures ORIGINAL_BRANCH via `$(git branch --show-current)`
+  4. ✅ finalize_merge input contains `git checkout {{original_branch}}`, `git merge --squash {{branch}}`, `git commit -F <tempfile>`
+  5. ✅ finalize_merge input does NOT contain "gh pr create" or "git push"
+  6. ✅ Merger agent has role "pr" with local persona files (agents/merger/*.md)
+  7. ✅ Setup/verifier agents reference shared personas via ../../agents/shared/
+  8. ✅ All 6 agents declare tamandua-agents skill
+  9. ✅ All steps reference valid agent IDs
+  10. ✅ Polling config: model: default, timeoutSeconds: 120
+  11. ✅ npm run build (typecheck) passes
+  12. ✅ All 26 bug-fix-merge workflow tests pass
+  13. ✅ loadWorkflowSpec() parses workflow.yml without errors
+- No code changes needed — everything already correct and committed
+- **Learnings:** The workflow.yml was scaffolded together with the persona files in earlier stories. setup/ and verifier/ agent directories remain empty by design — the shared persona is resolved via the workspace.files paths in workflow.yml. The feature-dev-merge setup/verifier directories also don't exist, confirming this pattern.
+
+---
+## 2026-05-06 - US-004: Add workflow validation test and verify bug-fix-merge end-to-end
+- Added `assert.ok(workflowIds.includes("bug-fix-merge"));` to `tests/workflow-validation.test.ts` so the dynamic workflow scanner explicitly validates bug-fix-merge inclusion
+- Verified all 10 acceptance criteria:
+  1. ✅ Test file imports and parses bug-fix-merge workflow.yml successfully (existing bug-fix-merge-workflow.test.ts)
+  2. ✅ Test asserts step id "finalize_merge" exists
+  3. ✅ Test asserts finalize_merge.input does not contain "gh pr create"
+  4. ✅ Test asserts finalize_merge.input does not contain "git push"
+  5. ✅ Test asserts setup.input contains "ORIGINAL_BRANCH"
+  6. ✅ npm run build passes
+  7. ✅ tamandua install succeeds (6 workflows installed including bug-fix-merge)
+  8. ✅ tamandua workflow list includes bug-fix-merge
+  9. ✅ npm test passes (296 pass, 0 fail)
+  10. ✅ Typecheck passes
+- **Learnings:** The `workflow-validation.test.ts` dynamic iteration already covered bug-fix-merge for parsing/validation, but the explicit workflow ID inclusion assertion needed to be updated to list the new workflow. All 4 user stories (US-001 through US-004) are now complete.
