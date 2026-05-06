@@ -656,7 +656,7 @@ export function claimStep(agentId: string): ClaimResult {
      FROM steps s
      JOIN runs r ON r.id = s.run_id
      WHERE s.agent_id = ? AND s.status = 'pending'
-       AND r.status NOT IN ('failed', 'cancelled')
+       AND r.status NOT IN ('failed', 'canceled')
        AND NOT EXISTS (
          SELECT 1 FROM steps prev
          WHERE prev.run_id = s.run_id
@@ -864,7 +864,7 @@ export function completeStep(stepId: string, output: string): { status: string }
 
   // Guard: don't process completions for failed runs
   const runCheck = db.prepare("SELECT status FROM runs WHERE id = ?").get(step.run_id) as { status: string } | undefined;
-  if (runCheck?.status === "failed") {
+  if (runCheck?.status === "failed" || runCheck?.status === "canceled") {
     return { status: "blocked" };
   }
 
@@ -1145,7 +1145,7 @@ export function advancePipeline(runId: string): { advanced: boolean; runComplete
 
   // Guard: don't advance or complete a run that's already failed/cancelled
   const runStatus = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string } | undefined;
-  if (runStatus?.status === "failed" || runStatus?.status === "cancelled") {
+  if (runStatus?.status === "failed" || runStatus?.status === "canceled") {
     return { advanced: false, runCompleted: false };
   }
 

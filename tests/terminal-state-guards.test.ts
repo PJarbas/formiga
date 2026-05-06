@@ -128,6 +128,31 @@ test("advancePipeline refuses to advance a failed run even with waiting steps", 
   assert(step.status === "waiting", "Step remains 'waiting' (not promoted to 'pending')");
 });
 
+// ── Test 1b: advancePipeline guard for canceled runs ──────────────
+
+test("advancePipeline refuses to overwrite a canceled run (regression: spelling mismatch)", () => {
+  const db = createTestDb();
+  const runId = crypto.randomUUID();
+  const stepId = crypto.randomUUID();
+  const t = now();
+
+  db.prepare(
+    "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, 'wf', 'task', 'canceled', '{}', ?, ?)"
+  ).run(runId, t, t);
+
+  db.prepare(
+    "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'test', 'agent', 0, '', '', 'canceled', ?, ?)"
+  ).run(stepId, runId, t, t);
+
+  const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+  const guarded = run.status === "canceled";
+
+  assert(guarded, "Guard detects canceled run and bails early");
+
+  const after = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+  assert(after.status === "canceled", "Run status remains 'canceled' (not overwritten to 'completed')");
+});
+
 // ── Test 2: claimStep guard ─────────────────────────────────────────
 
 test("claimStep refuses to hand out work for a failed run", () => {
@@ -154,6 +179,34 @@ test("claimStep refuses to hand out work for a failed run", () => {
   const blocked = runStatus.status === "failed";
 
   assert(blocked, "Guard blocks claim — run is failed");
+});
+
+// ── Test 2b: claimStep guard for canceled runs ─────────────────────
+
+test("claimStep refuses to hand out work for a canceled run (regression: spelling mismatch)", () => {
+  const db = createTestDb();
+  const runId = crypto.randomUUID();
+  const stepId = crypto.randomUUID();
+  const t = now();
+
+  db.prepare(
+    "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, 'wf', 'task', 'canceled', '{}', ?, ?)"
+  ).run(runId, t, t);
+
+  db.prepare(
+    "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'dev', 0, '', '', 'pending', ?, ?)"
+  ).run(stepId, runId, t, t);
+
+  const step = db.prepare(
+    "SELECT id, run_id FROM steps WHERE agent_id = 'dev' AND status = 'pending' LIMIT 1"
+  ).get() as { id: string; run_id: string } | undefined;
+
+  assert(step !== undefined, "Pending step exists in DB");
+
+  const runStatus = db.prepare("SELECT status FROM runs WHERE id = ?").get(step!.run_id) as { status: string };
+  const blocked = runStatus.status === "canceled";
+
+  assert(blocked, "Guard blocks claim — run is canceled");
 });
 
 // ── Test 3: completeStep guard ──────────────────────────────────────
@@ -183,6 +236,35 @@ test("completeStep refuses to process completions for a failed run", () => {
 
   const runAfter = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
   assert(runAfter.status === "failed", "Run status unchanged (still 'failed')");
+});
+
+// ── Test 3b: completeStep guard for canceled runs ──────────────────
+
+test("completeStep refuses to process completions for a canceled run", () => {
+  const db = createTestDb();
+  const runId = crypto.randomUUID();
+  const stepId = crypto.randomUUID();
+  const t = now();
+
+  db.prepare(
+    "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, 'wf', 'task', 'canceled', '{}', ?, ?)"
+  ).run(runId, t, t);
+
+  db.prepare(
+    "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'verify', 'verifier', 1, '', '', 'running', ?, ?)"
+  ).run(stepId, runId, t, t);
+
+  const step = db.prepare("SELECT id, run_id FROM steps WHERE id = ?").get(stepId) as { id: string; run_id: string };
+  const runCheck = db.prepare("SELECT status FROM runs WHERE id = ?").get(step.run_id) as { status: string };
+  const blocked = runCheck.status === "canceled";
+
+  assert(blocked, "Guard blocks completion — run is canceled");
+
+  const stepAfter = db.prepare("SELECT status FROM steps WHERE id = ?").get(stepId) as { status: string };
+  assert(stepAfter.status === "running", "Step status unchanged (still 'running')");
+
+  const runAfter = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+  assert(runAfter.status === "canceled", "Run status unchanged (still 'canceled')");
 });
 
 // ── Test 4: Race condition — concurrent step completion on failed run ──
