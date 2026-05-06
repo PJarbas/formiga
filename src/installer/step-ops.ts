@@ -844,20 +844,63 @@ export function claimStep(agentId: string): ClaimResult {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Expects Validation
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Validate step output against the `expects` specification.
+ *
+ * Supports two kinds of lines:
+ *   - Literal lines: the exact text must appear as a substring in the output.
+ *   - Regex lines: prefixed with `regex:`, the rest is a pattern tested
+ *     against the output (flags: m for multiline).
+ *
+ * Returns null if output satisfies all expects lines, or an error message
+ * describing the first failing line.
+ */
+export function validateExpects(output: string, expects: string): string | null {
+  if (!expects || expects.trim() === "") return null;
+
+  const lines = expects.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (trimmed.startsWith("regex:")) {
+      const pattern = trimmed.slice("regex:".length);
+      try {
+        const re = new RegExp(pattern, "m");
+        if (!re.test(output)) {
+          return `Output does not match expects regex: ${pattern}`;
+        }
+      } catch {
+        return `Invalid expects regex pattern: ${pattern}`;
+      }
+    } else {
+      if (!output.includes(trimmed)) {
+        return `Output missing expects string: "${trimmed}"`;
+      }
+    }
+  }
+
+  return null;
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Complete Step
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Complete a step: save output, merge context, advance pipeline.
+ * Complete a step: validate expects, save output, merge context, advance pipeline.
  */
 export function completeStep(stepId: string, output: string): { status: string } {
   const db = getDb();
 
   const step = db.prepare(
-    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id FROM steps WHERE id = ?"
+    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id, expects FROM steps WHERE id = ?"
   ).get(stepId) as {
     id: string; run_id: string; step_id: string; step_index: number; type: string;
-    loop_config: string | null; current_story_id: string | null;
+    loop_config: string | null; current_story_id: string | null; expects: string;
   } | undefined;
 
   if (!step) throw new Error(`Step not found: ${stepId}`);
@@ -866,6 +909,37 @@ export function completeStep(stepId: string, output: string): { status: string }
   const runCheck = db.prepare("SELECT status FROM runs WHERE id = ?").get(step.run_id) as { status: string } | undefined;
   if (runCheck?.status === "failed" || runCheck?.status === "canceled") {
     return { status: "blocked" };
+  }
+
+  // Validate output against the expects column before accepting the step
+  const validationError = validateExpects(output, step.expects);
+  if (validationError) {
+    const meta = db.prepare(
+      "SELECT retry_count, max_retries FROM steps WHERE id = ?"
+    ).get(stepId) as { retry_count: number; max_retries: number } | undefined;
+    const newRetry = (meta?.retry_count ?? 0) + 1;
+    const maxRetries = meta?.max_retries ?? 0;
+    const wfId = getWorkflowId(step.run_id);
+
+    if (newRetry > maxRetries) {
+      db.prepare(
+        "UPDATE steps SET status = 'failed', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
+      ).run(validationError, newRetry, stepId);
+      db.prepare(
+        "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
+      ).run(step.run_id);
+      emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: validationError });
+      emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Expects validation failed and retries exhausted" });
+      scheduleRunCronTeardown(step.run_id);
+      return { status: "failed" };
+    }
+
+    db.prepare(
+      "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(validationError, newRetry, stepId);
+    emitEvent({ ts: new Date().toISOString(), event: "step.retry", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: validationError });
+    logger.warn(validationError, { runId: step.run_id, stepId: step.step_id });
+    return { status: "retrying" };
   }
 
   // Merge KEY: value lines into run context

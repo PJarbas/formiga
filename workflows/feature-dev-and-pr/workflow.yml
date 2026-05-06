@@ -344,7 +344,7 @@ steps:
       Reply with:
       STATUS: done
       PR: URL to the pull request
-    expects: "STATUS: done"
+    expects: "STATUS: done\nregex:PR:\\s*https?://github\\.com/[^/]+/[^/]+/pull/\\d+"
     on_fail:
       escalate_to: human
 
