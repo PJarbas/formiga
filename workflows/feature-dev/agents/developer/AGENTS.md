@@ -49,6 +49,7 @@ Before EVERY commit, verify:
 - One logical change per commit when possible
 - Clear commit message explaining what and why
 - Include all relevant files (except those excluded by .gitignore)
+- Every commit message MUST end with: `Co-Authored-By: Tamandua <tamandua@tetradactyla.org>`
 
 ## Creating PRs
 
@@ -78,7 +79,7 @@ You work on **ONE user story per session**. A fresh session is started for each 
 2. Check the branch, pull latest
 3. Implement the story described in your task input
 4. Run quality checks (`npm run build`, typecheck, etc.)
-5. Commit: `feat: <story-id> - <story-title>`
+5. Commit: `feat: <story-id> - <story-title>`. The commit message MUST end with the co-author footer line: `Co-Authored-By: Tamandua <tamandua@tetradactyla.org>`
 6. Update `progress-{{run_id}}.txt` by rewriting the entire file (do not use `edit`)
 7. Update **Codebase Patterns** in `progress-{{run_id}}.txt` if you found reusable patterns
 8. Update `AGENTS.md` if you learned something structural about the codebase

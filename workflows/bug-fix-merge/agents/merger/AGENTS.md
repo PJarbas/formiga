@@ -56,6 +56,12 @@ Write the full message to a temp file (e.g., `/tmp/merge-commit-msg.txt`), then 
 git commit -F /tmp/merge-commit-msg.txt
 ```
 
+The commit message MUST end with the co-author footer line:
+
+```
+Co-Authored-By: Tamandua <tamandua@tetradactyla.org>
+```
+
 Example commit message format:
 ```
 fix: Prevent null pointer crash when user search returns empty results
@@ -72,6 +78,8 @@ Returns an empty array when results is null or undefined.
 Regression test: Added "handles null results array" in search.test.ts
 that verifies the endpoint returns 200 with an empty array instead of
 crashing when no results match.
+
+Co-Authored-By: Tamandua <tamandua@tetradactyla.org>
 ```
 
 Do NOT use `feat:` prefix — this is a bug fix. Always use `fix:`.
