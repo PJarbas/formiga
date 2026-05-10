@@ -60,7 +60,7 @@ function migrate(db: DatabaseSync): void {
       status TEXT NOT NULL DEFAULT 'waiting',
       output TEXT,
       retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 2,
+      max_retries INTEGER DEFAULT 4,
       type TEXT NOT NULL DEFAULT 'single',
       loop_config TEXT,
       current_story_id TEXT,
@@ -80,7 +80,7 @@ function migrate(db: DatabaseSync): void {
       status TEXT NOT NULL DEFAULT 'pending',
       output TEXT,
       retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 2,
+      max_retries INTEGER DEFAULT 4,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

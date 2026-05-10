@@ -131,7 +131,7 @@ steps:
       VULNERABILITY_COUNT: <number>
       FINDINGS: <detailed list of each vulnerability>
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -170,7 +170,7 @@ steps:
       DEFERRED: <any issues skipped and why>
       STORIES_JSON: [ ... array of story objects ... ]
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -195,7 +195,7 @@ steps:
       TEST_CMD: <test command>
       BASELINE: <baseline status>
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -251,7 +251,7 @@ steps:
       CHANGES: what was fixed
       REGRESSION_TEST: what test was added
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -298,7 +298,7 @@ steps:
     expects: "STATUS: done"
     on_fail:
       retry_step: fix
-      max_retries: 3
+      max_retries: 6
       on_exhausted:
         escalate_to: human
 
@@ -340,6 +340,6 @@ steps:
     expects: "STATUS: done"
     on_fail:
       retry_step: fix
-      max_retries: 2
+      max_retries: 4
       on_exhausted:
         escalate_to: human

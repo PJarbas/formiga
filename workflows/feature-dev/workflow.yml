@@ -117,7 +117,7 @@ steps:
       STORIES_JSON: [{"id":"US-001","title":"Add foo column","description":"...","acceptanceCriteria":["foo exists","tests pass","Typecheck passes"]}]
       Without STORIES_JSON the run cannot proceed; do not summarize stories in prose under CHANGES — only the literal STORIES_JSON line is parsed.
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -148,7 +148,7 @@ steps:
       CI_NOTES: <brief CI notes>
       BASELINE: <baseline status>
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -205,7 +205,7 @@ steps:
       CHANGES: what you implemented
       TESTS: what tests you wrote
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -266,7 +266,7 @@ steps:
     expects: "STATUS: done"
     on_fail:
       retry_step: implement
-      max_retries: 2
+      max_retries: 4
       on_exhausted:
         escalate_to: human
 
@@ -305,6 +305,6 @@ steps:
     expects: "STATUS: done"
     on_fail:
       retry_step: implement
-      max_retries: 2
+      max_retries: 4
       on_exhausted:
         escalate_to: human

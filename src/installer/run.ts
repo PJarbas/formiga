@@ -69,7 +69,7 @@ export async function runWorkflow(
   for (let i = 0; i < workflow.steps.length; i++) {
     const step = workflow.steps[i];
     const stepDbId = crypto.randomUUID();
-    const maxRetries = step.max_retries ?? 2;
+    const maxRetries = step.max_retries ?? 4;
     const stepType = step.type ?? "single";
     const loopConfig = step.loop ? JSON.stringify(step.loop) : null;
     const scopedAgentId = step.agent.startsWith(`${workflow.id}_`)

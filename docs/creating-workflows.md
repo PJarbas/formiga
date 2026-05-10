@@ -71,7 +71,7 @@ steps:
       Output the stories as STORIES_JSON.
       Reply with STATUS: done.
     expects: "STATUS: done"    # Required. Substring expected in the agent's output.
-    max_retries: 2             # Optional. Step-level retry budget. Default: 2.
+    max_retries: 4             # Optional. Step-level retry budget. Default: 4.
     on_fail:
       escalate_to: human       # On exhausting max_retries, escalate to the lead agent.
 
@@ -93,7 +93,7 @@ steps:
 
       Reply with STATUS: done.
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       retry_step: implement    # Informational — current code only honors escalate_to
       on_exhausted:
@@ -222,7 +222,7 @@ If `role` is omitted, the role is inferred from the agent id (e.g., ids containi
 ```yaml
 - id: implement
   ...
-  max_retries: 2          # Step-level retry budget. Default: 2. THIS IS THE
+  max_retries: 4          # Step-level retry budget. Default: 4. THIS IS THE
                            # number actually enforced when a step fails.
   on_fail:
     retry_step: implement  # Informational only — not currently read by the runtime.
@@ -235,7 +235,7 @@ If `role` is omitted, the role is inferred from the agent id (e.g., ids containi
 
 Notes:
 - The step-level `max_retries` is the only retry budget enforced. An `on_fail.max_retries` field is accepted by the YAML schema but **not read** by the current runtime — leave it out to avoid confusion.
-- For `type: loop` steps, retries are tracked per-story (each story has its own retry budget, currently fixed at 2).
+- For `type: loop` steps, retries are tracked per-story (each story has its own retry budget, currently fixed at 4).
 
 ## Loops
 

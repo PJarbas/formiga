@@ -117,7 +117,7 @@ steps:
       REPRODUCTION: how to reproduce the bug
       PROBLEM_STATEMENT: clear description of what's wrong
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -146,7 +146,7 @@ steps:
       ROOT_CAUSE: detailed explanation of the root cause
       FIX_APPROACH: what needs to change and where
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -174,7 +174,7 @@ steps:
       TEST_CMD: <test command>
       BASELINE: <baseline status>
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -214,7 +214,7 @@ steps:
       CHANGES: what was changed
       REGRESSION_TEST: what test was added
     expects: "STATUS: done"
-    max_retries: 2
+    max_retries: 4
     on_fail:
       escalate_to: human
 
@@ -264,7 +264,7 @@ steps:
     expects: "STATUS: done"
     on_fail:
       retry_step: fix
-      max_retries: 3
+      max_retries: 6
       on_exhausted:
         escalate_to: human
 
