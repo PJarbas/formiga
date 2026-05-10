@@ -581,7 +581,7 @@ export function cleanupAbandonedSteps(): void {
  *   retry prompt includes a signal that the prior attempt was interrupted
  *   and uncommitted work may exist on disk.
  */
-export function recoverOrphanedStepsForAgent(agentId: string, staleThresholdMs?: number, timeoutRetryReason?: string): { recovered: number; failed: number; skipped: number } {
+export function recoverOrphanedStepsForAgent(agentId: string, staleThresholdMs?: number, timeoutRetryReason?: string, failureReason?: string): { recovered: number; failed: number; skipped: number } {
   const db = getDb();
 
   let query: string;
@@ -685,9 +685,18 @@ export function recoverOrphanedStepsForAgent(agentId: string, staleThresholdMs?:
       logger.warn(`Orphaned step retries exhausted`, { runId: step.run_id, stepId: step.step_id, agentId, retryCount: newRetry, maxRetries: step.max_retries });
       failed++;
     } else {
-      db.prepare(
-        "UPDATE steps SET status = 'pending', retry_count = ?, updated_at = datetime('now') WHERE id = ?"
-      ).run(newRetry, step.id);
+      // Persist failureReason into step.output so the next claimStep surfaces
+      // it as `retry_feedback` to the retried agent. claimStep at line ~847
+      // populates context.retry_feedback from step.output when retry_count>0.
+      if (failureReason) {
+        db.prepare(
+          "UPDATE steps SET status = 'pending', retry_count = ?, output = ?, updated_at = datetime('now') WHERE id = ?"
+        ).run(newRetry, failureReason, step.id);
+      } else {
+        db.prepare(
+          "UPDATE steps SET status = 'pending', retry_count = ?, updated_at = datetime('now') WHERE id = ?"
+        ).run(newRetry, step.id);
+      }
       emitEvent({ ts: new Date().toISOString(), event: "step.timeout", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: `Agent terminated without completing step; reset to pending (retry ${newRetry}/${step.max_retries})` });
       logger.info(`Orphaned step reset to pending (retry ${newRetry}/${step.max_retries})`, { runId: step.run_id, stepId: step.step_id, agentId });
       if (timeoutRetryReason) {

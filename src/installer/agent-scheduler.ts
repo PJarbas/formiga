@@ -462,7 +462,7 @@ const UUID_CAPTURE = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB]
 const RUN_ID_FIELD_REGEX = new RegExp(`["']?run(?:_|-)?id["']?\\s*[:=]\\s*["'](${UUID_CAPTURE})["']`, "i");
 const STEP_ID_FIELD_REGEX = new RegExp(`["']?step(?:_|-)?id["']?\\s*[:=]\\s*["'](${UUID_CAPTURE})["']`, "i");
 
-interface PollingRoundMetadata {
+export interface PollingRoundMetadata {
   assistantOutput: string;
   tokenUsage: number | null;
   runId: string | null;
@@ -711,7 +711,7 @@ async function incrementRunTokenSpend(runId: string, tokenUsage: number): Promis
  * here. Guarded by a status check so we don't double-complete when the agent
  * did report results via the CLI.
  */
-async function autoCompleteStepIfRunning(
+export async function autoCompleteStepIfRunning(
   context: Record<string, unknown>,
   metadata: PollingRoundMetadata,
 ): Promise<void> {
@@ -767,11 +767,45 @@ async function autoCompleteStepIfRunning(
       outputBytes: Buffer.byteLength(metadata.assistantOutput, "utf-8"),
     });
   } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
     logger.error("Auto-complete fallback completeStep threw", {
       ...context,
       stepId: metadata.stepId,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessage,
     });
+
+    // completeStep threw (e.g. STORIES_JSON parse failure on otherwise-valid
+    // work_done output). Without recovery the step stays 'running', peekStep
+    // returns NO_WORK on subsequent rounds, and the run wedges until the
+    // stale-claim sweeper fires (roleTimeoutSeconds*1.5). Reset the agent's
+    // running steps to 'pending' so the configured on_fail retry path fires
+    // on the next polling tick — same recovery the other_output branch does.
+    // Pass the throw message as failureReason so the retried agent sees it
+    // as RETRY FEEDBACK and can avoid repeating the same malformed output.
+    const failureReason =
+      `Previous attempt produced output that could not be auto-completed: ${errorMessage}. ` +
+      `If this involved STORIES_JSON, ensure the STORIES_JSON line ends with a literal "]" and ` +
+      `is followed by no trailing prose, comments, or markdown — only blank lines or another KEY: line.`;
+    try {
+      const { recoverOrphanedStepsForAgent } = await import("./step-ops.js");
+      const recoveryResult = recoverOrphanedStepsForAgent(context.agentId as string, undefined, undefined, failureReason);
+      if (recoveryResult.recovered > 0 || recoveryResult.failed > 0) {
+        logger.info("Orphaned step recovery after auto-complete throw", {
+          ...context,
+          stepId: metadata.stepId,
+          recovered: recoveryResult.recovered,
+          failed: recoveryResult.failed,
+          skipped: recoveryResult.skipped,
+          autoCompleteError: errorMessage,
+        });
+      }
+    } catch (recoveryErr) {
+      logger.error("Orphaned step recovery after auto-complete throw failed", {
+        ...context,
+        stepId: metadata.stepId,
+        error: recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr),
+      });
+    }
   }
 }
 

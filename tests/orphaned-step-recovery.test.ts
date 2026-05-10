@@ -409,3 +409,112 @@ describe("other_output recovery (clean pi exit without STATUS)", () => {
     assert.equal(result.skipped, 0, "should skip 0 steps");
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════
+// Regression: STORIES_JSON parse-wedge bug
+// (autoCompleteStepIfRunning swallowed completeStep throws and left the
+//  step in 'running' forever — wedging the run until the 45-min sweeper.)
+// ══════════════════════════════════════════════════════════════════════
+
+import { autoCompleteStepIfRunning, type PollingRoundMetadata } from "../dist/installer/agent-scheduler.js";
+
+describe("autoCompleteStepIfRunning recovers wedged step on completeStep throw", () => {
+  it("STORIES_JSON parse error recovers the running plan step instead of wedging", async () => {
+    const db = getDb();
+    const agent = "test_stories-json-wedge-recovery";
+    const runId = crypto.randomUUID();
+    const planStepUuid = crypto.randomUUID();
+    const loopStepUuid = crypto.randomUUID();
+    const now = ts();
+
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, 'test-wf', 'verify wedge fix', 'running', '{}', ?, ?)"
+    ).run(runId, now, now);
+
+    // Plan step in 'running' — this is the wedged step the auto-complete
+    // handler will try (and fail) to mark done because STORIES_JSON parse throws.
+    // The input_template embeds {{retry_feedback}} so the test can verify
+    // the recovery message reaches the retried planner via resolvedInput.
+    const inputTemplate = "Plan task.\nRETRY FEEDBACK:\n{{retry_feedback}}";
+    db.prepare(
+      `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects,
+        status, retry_count, max_retries, type, created_at, updated_at)
+       VALUES (?, ?, 'plan', ?, 0, ?, 'STATUS: done', 'running', 0, 2, 'single', ?, ?)`
+    ).run(planStepUuid, runId, agent, inputTemplate, now, now);
+
+    // Downstream loop step over stories — completeStep on the plan step
+    // calls parseAndInsertStories, which throws on the malformed JSON.
+    db.prepare(
+      `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects,
+        status, retry_count, max_retries, type, loop_config, created_at, updated_at)
+       VALUES (?, ?, 'implement', 'developer', 1, '', 'STATUS: done', 'pending', 0, 2, 'loop',
+               '{"over":"stories","completion":"all_done","fresh_session":true}', ?, ?)`
+    ).run(loopStepUuid, runId, now, now);
+
+    // Realistic planner output: valid STORIES_JSON array followed by
+    // trailing prose — the exact shape that wedged run 24cb9c10.
+    const assistantOutput = [
+      "STATUS: done",
+      "REPO: /home/igorhvr/idm/tamandua",
+      "BRANCH: feature/test-wedge",
+      'STORIES_JSON: [{"id":"US-001","title":"Test","description":"Test story","acceptanceCriteria":["Tests pass","Typecheck passes"]}]',
+      "",
+      "Plan summary: this is the trailing prose that breaks the parser.",
+    ].join("\n");
+
+    const metadata: PollingRoundMetadata = {
+      assistantOutput,
+      tokenUsage: 12345,
+      runId,
+      stepId: planStepUuid,
+      jsonMetadataDetected: true,
+    };
+
+    const context: Record<string, unknown> = {
+      jobId: "test-job",
+      agentId: agent,
+      role: "analysis",
+      timeoutSeconds: 1800,
+      workdir: "/tmp",
+      model: "default",
+    };
+
+    try {
+      // Must not throw — the swallowed-error path exists by design,
+      // but the recovery branch must run before returning.
+      await autoCompleteStepIfRunning(context, metadata);
+
+      const step = db.prepare(
+        "SELECT status, retry_count, output FROM steps WHERE id = ?"
+      ).get(planStepUuid) as { status: string; retry_count: number; output: string | null };
+
+      assert.equal(step.status, "pending", "wedged plan step must be reset to pending");
+      assert.equal(step.retry_count, 1, "retry_count must be bumped so on_fail policy fires");
+      assert.ok(step.output, "step.output must be populated so retry_feedback surfaces the failure");
+      assert.match(
+        step.output ?? "",
+        /STORIES_JSON|could not be auto-completed/i,
+        "step.output should describe the parse failure",
+      );
+
+      const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+      assert.equal(run.status, "running", "run should remain running so retry can proceed");
+
+      // The retried planner must see the failure detail as RETRY FEEDBACK.
+      // claimStep populates context.retry_feedback from step.output when
+      // retry_count > 0, then resolves it into the input template — verify
+      // the contract end-to-end by claiming and inspecting resolvedInput.
+      const claim = claimStep(agent);
+      assert.ok(claim.found, "step must be re-claimable after recovery");
+      assert.ok(claim.resolvedInput, "resolved input must be present");
+      assert.match(
+        claim.resolvedInput ?? "",
+        /RETRY FEEDBACK:[\s\S]*(STORIES_JSON|could not be auto-completed)/i,
+        "next planner attempt must see the parse failure under RETRY FEEDBACK",
+      );
+    } finally {
+      db.prepare("DELETE FROM steps WHERE id IN (?, ?)").run(planStepUuid, loopStepUuid);
+      db.prepare("DELETE FROM runs WHERE id = ?").run(runId);
+    }
+  });
+});
