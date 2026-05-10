@@ -449,3 +449,160 @@ describe("Reserved context key protection", () => {
     assert.equal(context.branch, "bugfix/x", "resolveStepContext: non-reserved keys like branch should come through");
   });
 });
+
+describe("completeStep STORIES_JSON guard — only blocks when loop-step is immediately next", () => {
+  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
+  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  let _testIsolationDir: string;
+
+  before(() => {
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-stories-guard-test-"));
+    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
+    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+  });
+
+  after(() => {
+    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  function ts(): string {
+    return new Date().toISOString();
+  }
+
+  it("allows scan step to complete without STORIES_JSON when a later intermediate step produces stories (security-audit shape)", async () => {
+    // Simulate: scan(idx 0, single) -> prioritize(idx 1, single) -> setup(idx 2, single) -> fix(idx 3, loop over stories)
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const scanStepId = crypto.randomUUID();
+    const prioritizeStepId = crypto.randomUUID();
+    const setupStepId = crypto.randomUUID();
+    const fixStepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "audit security" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'security-audit', 'audit security', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // scan step (index 0, single) — the step we are completing
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'scan', 'sec-audit_scanner', 0, 'Scan codebase', '', 'running', 0, 4, 'single', ?, ?)"
+    ).run(scanStepId, runId, now, now);
+
+    // prioritize step (index 1, single)
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'prioritize', 'sec-audit_prioritizer', 1, 'Prioritize', '', 'waiting', 0, 4, 'single', ?, ?)"
+    ).run(prioritizeStepId, runId, now, now);
+
+    // setup step (index 2, single)
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'setup', 'sec-audit_setup', 2, 'Setup', '', 'waiting', 0, 4, 'single', ?, ?)"
+    ).run(setupStepId, runId, now, now);
+
+    // fix step (index 3, loop over stories)
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'fix', 'sec-audit_fixer', 3, 'Fix', '', 'waiting', 0, 4, 'loop', ?, ?, ?)"
+    ).run(fixStepId, runId, JSON.stringify({ over: "stories" }), now, now);
+
+    // Complete scan with STATUS: done and no STORIES_JSON — should succeed (not retry)
+    const result = completeStep(scanStepId, "STATUS: done\nREPO: /tmp/repo\nBRANCH: sec-audit-2025-01-01\nVULNERABILITY_COUNT: 11\nFINDINGS: detailed findings here");
+
+    assert.notEqual(result.status, "retrying", "scan should not be retried when loop step is not immediately next");
+    assert.notEqual(result.status, "failed", "scan should not be failed when loop step is not immediately next");
+
+    // scan should be marked done
+    const scanStep = db.prepare("SELECT status FROM steps WHERE id = ?").get(scanStepId) as { status: string };
+    assert.equal(scanStep.status, "done", "scan should be marked done");
+
+    // prioritize should be advanced to pending
+    const prioritizeStep = db.prepare("SELECT status FROM steps WHERE id = ?").get(prioritizeStepId) as { status: string };
+    assert.equal(prioritizeStep.status, "pending", "prioritize should be advanced to pending");
+  });
+
+  it("retries planner step without STORIES_JSON when loop-step is immediately next", async () => {
+    // Simulate: plan(idx 0, single) -> fix(idx 1, loop over stories)
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const planStepId = crypto.randomUUID();
+    const fixStepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'bug-fix-merge', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // plan step (index 0, single) — the step we are completing
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'plan', 'bfm_planner', 0, 'Plan fix', '', 'running', 0, 3, 'single', ?, ?)"
+    ).run(planStepId, runId, now, now);
+
+    // fix step (index 1, loop over stories) — immediately next
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'fix', 'bfm_fixer', 1, 'Fix', '', 'waiting', 0, 4, 'loop', ?, ?, ?)"
+    ).run(fixStepId, runId, JSON.stringify({ over: "stories" }), now, now);
+
+    // Complete plan with STATUS: done but no STORIES_JSON — should be retried because fix(loop) is immediately next
+    const result = completeStep(planStepId, "STATUS: done\nREPO: /tmp/repo\nBRANCH: bugfix/x\nCHANGES: analyzed");
+
+    assert.equal(result.status, "retrying", "plan should be retried when immediately-following step is loop-over-stories and no stories exist");
+
+    // plan should be back to pending (not done, not failed)
+    const planStep = db.prepare("SELECT status, retry_count FROM steps WHERE id = ?").get(planStepId) as { status: string; retry_count: number };
+    assert.equal(planStep.status, "pending", "plan should be reset to pending for retry");
+    assert.equal(planStep.retry_count, 1, "retry_count should be incremented to 1");
+
+    // fix should still be waiting (not advanced)
+    const fixStep = db.prepare("SELECT status FROM steps WHERE id = ?").get(fixStepId) as { status: string };
+    assert.equal(fixStep.status, "waiting", "fix step should still be waiting");
+  });
+
+  it("fails planner step when max_retries exhausted for missing STORIES_JSON", async () => {
+    // Simulate: plan(idx 0, single) -> fix(idx 1, loop over stories)
+    // plan already at max_retries-1, one more failure should exhaust
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const planStepId = crypto.randomUUID();
+    const fixStepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'bug-fix-merge', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // plan step (index 0, single) — already at retry_count=2, max_retries=2
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'plan', 'bfm_planner', 0, 'Plan fix', '', 'running', 2, 2, 'single', ?, ?)"
+    ).run(planStepId, runId, now, now);
+
+    // fix step (index 1, loop over stories) — immediately next
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'fix', 'bfm_fixer', 1, 'Fix', '', 'waiting', 0, 4, 'loop', ?, ?, ?)"
+    ).run(fixStepId, runId, JSON.stringify({ over: "stories" }), now, now);
+
+    // Complete plan without STORIES_JSON — should fail because retries exhausted
+    const result = completeStep(planStepId, "STATUS: done\nREPO: /tmp/repo\nBRANCH: bugfix/x");
+
+    assert.equal(result.status, "failed", "plan should fail when retries exhausted for missing STORIES_JSON");
+
+    // plan should be marked failed
+    const planStep = db.prepare("SELECT status, retry_count FROM steps WHERE id = ?").get(planStepId) as { status: string; retry_count: number };
+    assert.equal(planStep.status, "failed", "plan should be failed");
+    assert.equal(planStep.retry_count, 3, "retry_count should be incremented to 3");
+
+    // run should also be failed
+    const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+    assert.equal(run.status, "failed", "run should be failed");
+  });
+});

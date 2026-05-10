@@ -1198,18 +1198,18 @@ export function completeStep(stepId: string, output: string): { status: string }
   // Write story plan to progress log after STORIES_JSON is parsed
   writeStoryPlanToProgress(step.run_id);
 
-  // Robustness: if a downstream step is a loop-over-stories and this run still
-  // has no stories AND this step was the latest opportunity to produce them
-  // (i.e. this step is single-type and the immediately-following step is the
-  // loop-over-stories), this step's output is incomplete. Don't mark it done
-  // and trigger a fatal "Loop cannot run because planning did not produce
-  // STORIES_JSON" later — instead, mark this step pending again so the agent
-  // gets another chance to emit STORIES_JSON. Honor max_retries so a
+  // Robustness: if the immediately-following step is a loop-over-stories
+  // and this run still has no stories AND this step was the latest opportunity
+  // to produce them (i.e. this step is single-type and the immediately-following
+  // step is the loop-over-stories), this step's output is incomplete. Don't
+  // mark it done and trigger a fatal "Loop cannot run because planning did not
+  // produce STORIES_JSON" later — instead, mark this step pending again so the
+  // agent gets another chance to emit STORIES_JSON. Honor max_retries so a
   // permanently-broken planner still escalates.
   if (step.type !== "loop") {
     const downstreamLoopExpectingStories = db.prepare(
-      "SELECT id, step_id, loop_config FROM steps WHERE run_id = ? AND step_index > ? AND type = 'loop' ORDER BY step_index ASC LIMIT 1"
-    ).get(step.run_id, step.step_index) as { id: string; step_id: string; loop_config: string | null } | undefined;
+      "SELECT id, step_id, loop_config FROM steps WHERE run_id = ? AND step_index = ? AND type = 'loop'"
+    ).get(step.run_id, step.step_index + 1) as { id: string; step_id: string; loop_config: string | null } | undefined;
     if (downstreamLoopExpectingStories?.loop_config) {
       try {
         const lc = JSON.parse(downstreamLoopExpectingStories.loop_config) as LoopConfig;
