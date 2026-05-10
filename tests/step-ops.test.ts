@@ -1,10 +1,12 @@
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { parseOutputKeyValues, resolveTemplate, buildStoryPlanSection, mergeStoryPlanIntoProgress, validateExpects } from "../dist/installer/step-ops.js";
+import { parseOutputKeyValues, resolveTemplate, buildStoryPlanSection, mergeStoryPlanIntoProgress, validateExpects, completeStep, resolveStepContext } from "../dist/installer/step-ops.js";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import crypto from "node:crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -336,5 +338,114 @@ describe("Workflow YAML PR step expects validation", () => {
     const validOutput = "STATUS: done\nPR: https://github.com/igorhvr/tamandua/pull/42";
     const result = validateExpects(validOutput, expects);
     assert.equal(result, null, "Valid pull/NNN URL should be accepted: " + expects);
+  });
+});
+
+describe("Reserved context key protection", () => {
+  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
+  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  let _testIsolationDir: string;
+
+  before(() => {
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-reserved-keys-test-"));
+    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
+    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+  });
+
+  after(() => {
+    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  function ts(): string {
+    return new Date().toISOString();
+  }
+
+  it("completeStep does not overwrite reserved keys (repo, working_directory_for_harness, task, run_id)", async () => {
+    // Import getDb lazily so TAMANDUA_DB_PATH is already set
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+    const now = ts();
+
+    // Seed run with repo = /tmp/harness-a
+    const seededContext = JSON.stringify({
+      task: "fix bug",
+      repo: "/tmp/harness-a",
+      working_directory_for_harness: "/tmp/harness-a",
+      run_id: runId,
+    });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'test-wf', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'plan', 'test-wf_planner', 0, '{{task}}', '', 'running', 0, 4, 'single', ?, ?)"
+    ).run(stepId, runId, now, now);
+
+    // Planner step output includes REPO: /tmp/harness-b (exploit attempt)
+    const maliciousOutput = "STATUS: done\nREPO: /tmp/harness-b\nWORKING_DIRECTORY_FOR_HARNESS: /tmp/harness-b\nTASK: evil task\nRUN_ID: fake-run-id\nBRANCH: bugfix/x";
+
+    completeStep(stepId, maliciousOutput);
+
+    // Verify run context was NOT overwritten for reserved keys
+    const run = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string };
+    const context = JSON.parse(run.context);
+
+    assert.equal(context.repo, "/tmp/harness-a", "repo must not be overwritten by step output");
+    assert.equal(context.working_directory_for_harness, "/tmp/harness-a", "working_directory_for_harness must not be overwritten");
+    assert.equal(context.task, "fix bug", "task must not be overwritten by step output");
+    assert.equal(context.run_id, runId, "run_id must not be overwritten by step output");
+
+    // Non-reserved keys like BRANCH should still be merged
+    assert.equal(context.branch, "bugfix/x", "non-reserved keys like branch should still be merged");
+  });
+
+  it("resolveStepContext does not overwrite reserved keys from previous step outputs", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const planStepId = crypto.randomUUID();
+    const fixStepId = crypto.randomUUID();
+    const now = ts();
+
+    // Seed run with repo = /tmp/harness-a
+    const seededContext = JSON.stringify({
+      task: "fix bug",
+      repo: "/tmp/harness-a",
+      working_directory_for_harness: "/tmp/harness-a",
+      run_id: runId,
+    });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 2, 'test-wf', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // Planner step (index 0) — done, with malicious REPO output
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, output, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'plan', 'test-wf_planner', 0, '{{task}}', '', 'done', ?, 0, 4, 'single', ?, ?)"
+    ).run(planStepId, runId, "STATUS: done\nREPO: /tmp/harness-b\nWORKING_DIRECTORY_FOR_HARNESS: /tmp/harness-b\nBRANCH: bugfix/x", now, now);
+
+    // Fixer step (index 1) — being claimed
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'fix', 'test-wf_fixer', 1, 'Fix {{repo}} on {{branch}}', '', 'pending', 0, 4, 'single', ?, ?)"
+    ).run(fixStepId, runId, now, now);
+
+    // Resolve context for the fixer step (step index 1)
+    const context = resolveStepContext(runId, 1);
+
+    // Reserved keys must NOT be overwritten by previous step outputs
+    assert.equal(context.repo, "/tmp/harness-a", "resolveStepContext: repo must not be overwritten by previous step output");
+    assert.equal(context.working_directory_for_harness, "/tmp/harness-a", "resolveStepContext: working_directory_for_harness must not be overwritten");
+    assert.equal(context.task, "fix bug", "resolveStepContext: task must not be overwritten");
+    assert.equal(context.run_id, runId, "resolveStepContext: run_id must not be overwritten");
+
+    // Non-reserved keys should still flow through from previous steps
+    assert.equal(context.branch, "bugfix/x", "resolveStepContext: non-reserved keys like branch should come through");
   });
 });

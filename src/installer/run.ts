@@ -95,6 +95,7 @@ export async function runWorkflow(
     task: taskTitle,
     ...context,
     [RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY]: workingDirectoryForHarness,
+    repo: workingDirectoryForHarness,
   };
   const contextJson = JSON.stringify(seededContext);
 

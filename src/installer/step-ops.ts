@@ -52,6 +52,18 @@ export function parseOutputKeyValues(output: string): Record<string, string> {
   return result;
 }
 
+/**
+ * Reserved context keys that must not be overwritten by step output parsing.
+ * These are structural keys that define the harness/repo/environment and should
+ * only be set during run creation, not by agent-generated KEY:value output.
+ */
+const RESERVED_CONTEXT_KEYS = new Set([
+  "repo",
+  "working_directory_for_harness",
+  "task",
+  "run_id",
+]);
+
 // ══════════════════════════════════════════════════════════════════════
 // Template Resolution
 // ══════════════════════════════════════════════════════════════════════
@@ -1171,7 +1183,9 @@ export function completeStep(stepId: string, output: string): { status: string }
 
   const parsed = parseOutputKeyValues(output);
   for (const [key, value] of Object.entries(parsed)) {
-    context[key] = value;
+    if (!RESERVED_CONTEXT_KEYS.has(key)) {
+      context[key] = value;
+    }
   }
 
   db.prepare(
@@ -1671,7 +1685,9 @@ export function resolveStepContext(
     if (prev.output) {
       const parsed = parseOutputKeyValues(prev.output);
       for (const [key, value] of Object.entries(parsed)) {
-        context[key] = value;
+        if (!RESERVED_CONTEXT_KEYS.has(key)) {
+          context[key] = value;
+        }
       }
     }
   }
