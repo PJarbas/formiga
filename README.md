@@ -63,6 +63,14 @@ Point it at a repo. Get back a security fix PR with regression tests. Scans for 
 scan → prioritize → setup → fix → verify → test → PR
 ```
 
+### bug-fix `5 agents`
+
+Drop in a bug report. Get back a verified fix. The triager reproduces the bug, investigator finds the root cause, fixer patches it, and verifier confirms the fix against acceptance criteria. Stops after verification — no merge or PR. Use [bug-fix-github-pr](#bug-fix-github-pr-6-agents) when you want the fix merged and a PR created.
+
+```
+triage → investigate → setup → fix → verify
+```
+
 ### bug-fix-github-pr `6 agents`
 
 Paste a bug report. Get back a fix with a regression test. Triager reproduces it, investigator finds root cause, fixer patches, verifier confirms. Zero babysitting.

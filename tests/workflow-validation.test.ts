@@ -24,6 +24,7 @@ describe("workflow parsing", () => {
     assert.ok(workflowIds.includes("bug-fix-github-pr"));
     assert.ok(workflowIds.includes("bug-fix-merge"));
     assert.ok(workflowIds.includes("security-audit-merge"));
+    assert.ok(workflowIds.includes("bug-fix"));
   });
 
   for (const id of workflowIds) {
@@ -250,6 +251,46 @@ describe("workflow structure", () => {
     assert.doesNotMatch(content, /git commit -m/);
     assert.match(content, /Write the full message to a temp file/);
     assert.match(content, /### Gathering Information/);
+  });
+
+  it("bug-fix has 5 agents, 5 steps, no merger, no finalize_merge, no ORIGINAL_BRANCH capture", async () => {
+    const spec = await loadWorkflowSpec(wfDir("bug-fix"));
+
+    // 5 agents
+    const agentIds = spec.agents.map((a) => a.id);
+    assert.equal(spec.agents.length, 5, `expected 5 agents, got ${spec.agents.length}: ${agentIds.join(", ")}`);
+    assert.ok(agentIds.includes("triager"));
+    assert.ok(agentIds.includes("investigator"));
+    assert.ok(agentIds.includes("setup"));
+    assert.ok(agentIds.includes("fixer"));
+    assert.ok(agentIds.includes("verifier"));
+
+    // No merger agent
+    assert.ok(!agentIds.includes("merger"), "bug-fix should not have merger agent");
+
+    // 5 steps
+    const stepIds = spec.steps.map((s) => s.id);
+    assert.equal(spec.steps.length, 5, `expected 5 steps, got ${spec.steps.length}: ${stepIds.join(", ")}`);
+    assert.deepEqual(stepIds, ["triage", "investigate", "setup", "fix", "verify"]);
+
+    // No finalize_merge step
+    assert.ok(!stepIds.includes("finalize_merge"), "bug-fix should not have finalize_merge step");
+
+    // Setup input does not mention ORIGINAL_BRANCH
+    const setupStep = spec.steps.find((s) => s.id === "setup");
+    assert.ok(setupStep, "bug-fix should define setup step");
+    assert.doesNotMatch(setupStep!.input, /ORIGINAL_BRANCH/, "bug-fix setup should not capture ORIGINAL_BRANCH");
+  });
+
+  it("README documents bug-fix usage and pipeline", () => {
+    const repoRoot = resolve(workflowsDir, "..");
+    const readmePath = resolve(repoRoot, "README.md");
+    const readme = readFileSync(readmePath, "utf-8");
+
+    assert.match(readme, /### bug-fix `5 agents`/);
+    assert.match(readme, /stops after verification/i);
+    assert.match(readme, /no merge/i);
+    assert.match(readme, /triage → investigate → setup → fix → verify/);
   });
 
   it("README documents feature-dev-merge usage and pipeline", () => {
