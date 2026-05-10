@@ -506,6 +506,44 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
     assert.equal(status.endpoint, "/control/health");
   });
 
+  // AC 5b: getControlPlaneStatus() returns correct state before and after startControlPlane
+  it("getControlPlaneStatus() returns correct state before and after startControlPlane", async (t) => {
+    if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
+      t.skip("control-standalone.js not found — run npm run build first");
+      return;
+    }
+
+    if (!(await canBind(DEFAULT_CONTROL_PORT))) {
+      t.skip(`Port ${DEFAULT_CONTROL_PORT} is already in use`);
+      return;
+    }
+
+    try {
+      cleanupControlPlaneFiles();
+
+      // Before start: not running
+      const beforeStatus = getControlPlaneStatus();
+      assert.equal(beforeStatus.running, false);
+      assert.equal(beforeStatus.pid, null);
+      assert.equal(beforeStatus.port, DEFAULT_CONTROL_PORT);
+      assert.equal(beforeStatus.endpoint, "/control/health");
+
+      // Start control plane
+      const { pid } = await startControlPlane();
+      assert.ok(pid > 0);
+
+      // After start: running
+      const afterStatus = getControlPlaneStatus();
+      assert.equal(afterStatus.running, true);
+      assert.equal(afterStatus.pid, pid);
+      assert.equal(afterStatus.port, DEFAULT_CONTROL_PORT);
+      assert.equal(afterStatus.endpoint, "/control/health");
+    } finally {
+      stopControlPlane();
+      cleanupControlPlaneFiles();
+    }
+  });
+
   // AC 6: startControlPlane() spawns server, writes PID/port files, health endpoint reachable
   it("startControlPlane() spawns server and writes PID/port files", async (t) => {
     if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
