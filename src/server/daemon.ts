@@ -25,6 +25,13 @@ import {
   stopTamanduaMcpServer,
   type TamanduaMcpServer,
 } from "./mcp-server.js";
+import {
+  ensureDaemonSecret,
+  getControlPort,
+  startControlServer,
+  startReconciler,
+} from "./control-server.js";
+import { shutdownAllCrons } from "../installer/agent-scheduler.js";
 
 const PID_FILE = path.join(os.homedir(), ".tamandua", "tamandua.pid");
 const PORT_FILE = path.join(os.homedir(), ".tamandua", "port");
@@ -125,10 +132,25 @@ const dashboardPort = readPort(args.dashboardPort);
 
 let dashboardServer: http.Server | undefined;
 let mcpServer: TamanduaMcpServer | undefined;
+let controlServer: http.Server | undefined;
+let reconciler: { stop: () => void } | undefined;
 let isShuttingDown = false;
 
 async function stopListeners(): Promise<void> {
   const stops: Promise<unknown>[] = [];
+
+  // Stop reconciler first so it doesn't fight teardown.
+  if (reconciler) {
+    reconciler.stop();
+    reconciler = undefined;
+  }
+
+  // Tear down all in-flight pi process groups + active timers.
+  try {
+    shutdownAllCrons();
+  } catch (err) {
+    console.error("Error during scheduler shutdown:", err);
+  }
 
   if (mcpServer) {
     const currentMcpServer = mcpServer;
@@ -140,6 +162,12 @@ async function stopListeners(): Promise<void> {
     const currentDashboardServer = dashboardServer;
     dashboardServer = undefined;
     stops.push(closeDashboardServer(currentDashboardServer));
+  }
+
+  if (controlServer) {
+    const currentControlServer = controlServer;
+    controlServer = undefined;
+    stops.push(closeDashboardServer(currentControlServer));
   }
 
   if (stops.length > 0) {
@@ -199,6 +227,26 @@ async function bootstrap(): Promise<void> {
       void shutdown("dashboard-error", 1);
     },
   });
+
+  // Always start the run-scoped scheduling control plane. If the control
+  // port can't bind, surface a clear error rather than silently degrading.
+  try {
+    const secret = ensureDaemonSecret();
+    const controlPort = getControlPort();
+    controlServer = await startControlServer({ port: controlPort, secret });
+    reconciler = startReconciler();
+    console.log(
+      `Tamandua control plane listening on http://127.0.0.1:${controlPort} (pid ${process.pid})`,
+    );
+  } catch (err) {
+    console.error(
+      `Failed to start control plane: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    await stopListeners();
+    cleanupPidFile();
+    process.exit(1);
+    return;
+  }
 
   if (args.withMcp) {
     try {

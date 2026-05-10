@@ -98,10 +98,32 @@ export function findMissingTemplateKeys(template: string, context: Record<string
 export function scheduleRunCronTeardown(runId: string): void {
   try {
     const db = getDb();
-    const run = db.prepare("SELECT workflow_id FROM runs WHERE id = ?").get(runId) as { workflow_id: string } | undefined;
-    if (run) {
-      teardownWorkflowCronsIfIdle(run.workflow_id).catch(() => {});
+    const run = db.prepare("SELECT workflow_id, status FROM runs WHERE id = ?").get(runId) as { workflow_id: string; status: string } | undefined;
+    if (!run) return;
+
+    // Terminal runs never carry a scheduling_status. Any path that lands a
+    // run in completed/failed/canceled should also wipe the scheduling
+    // fields so the daemon reconciler stops considering it.
+    if (run.status === "completed" || run.status === "failed" || run.status === "canceled") {
+      try {
+        db.prepare(
+          "UPDATE runs SET scheduling_status = NULL, updated_at = datetime('now') WHERE id = ?",
+        ).run(runId);
+      } catch {
+        // best-effort
+      }
     }
+
+    // Run-scoped teardown is preferred (daemon-owned timers are
+    // run-scoped). The workflow-wide idle check remains as a back-compat
+    // safety net for legacy callers / tests that still rely on it.
+    import("./agent-scheduler.js")
+      .then((m) => m.removeRunCrons(runId))
+      .catch(() => {});
+    import("../server/control-client.js")
+      .then((m) => m.terminateRunWithDaemon(runId))
+      .catch(() => {});
+    teardownWorkflowCronsIfIdle(run.workflow_id).catch(() => {});
   } catch {
     // best-effort
   }
@@ -581,28 +603,27 @@ export function cleanupAbandonedSteps(): void {
  *   retry prompt includes a signal that the prior attempt was interrupted
  *   and uncommitted work may exist on disk.
  */
-export function recoverOrphanedStepsForAgent(agentId: string, staleThresholdMs?: number, timeoutRetryReason?: string, failureReason?: string): { recovered: number; failed: number; skipped: number } {
+export function recoverOrphanedStepsForAgent(
+  agentId: string,
+  runId: string,
+  staleThresholdMs?: number,
+  timeoutRetryReason?: string,
+  failureReason?: string,
+): { recovered: number; failed: number; skipped: number } {
   const db = getDb();
 
-  let query: string;
-  let params: (string | number)[];
-
+  // Run-scoped query. Every caller (polling round, control plane,
+  // shutdown paths) supplies a runId so concurrent runs of the same
+  // workflow + agent are isolated.
+  const clauses: string[] = ["agent_id = ?", "status = 'running'", "run_id = ?"];
+  const params: (string | number)[] = [agentId, runId];
   if (staleThresholdMs !== undefined) {
-    query =
-      `SELECT id, step_id, run_id, retry_count, max_retries, type, current_story_id, loop_config
-       FROM steps
-       WHERE agent_id = ?
-         AND status = 'running'
-         AND (julianday('now') - julianday(updated_at)) * 86400000 > ?`;
-    params = [agentId, staleThresholdMs];
-  } else {
-    query =
-      `SELECT id, step_id, run_id, retry_count, max_retries, type, current_story_id, loop_config
-       FROM steps
-       WHERE agent_id = ?
-         AND status = 'running'`;
-    params = [agentId];
+    clauses.push("(julianday('now') - julianday(updated_at)) * 86400000 > ?");
+    params.push(staleThresholdMs);
   }
+  const query = `SELECT id, step_id, run_id, retry_count, max_retries, type, current_story_id, loop_config
+       FROM steps
+       WHERE ${clauses.join(" AND ")}`;
 
   const steps = db.prepare(query).all(...params) as {
     id: string; step_id: string; run_id: string; retry_count: number; max_retries: number;
@@ -767,14 +788,17 @@ export type PeekResult = "HAS_WORK" | "NO_WORK";
  * Unlike claimStep(), this runs a single cheap COUNT query — no cleanup, no context resolution.
  * Returns "HAS_WORK" if any pending/waiting steps exist, "NO_WORK" otherwise.
  */
-export function peekStep(agentId: string): PeekResult {
+export function peekStep(agentId: string, runId: string): PeekResult {
   const db = getDb();
+  // Match 'pending' only — 'waiting' steps are still upstream-blocked, so
+  // reporting them as work would cause spurious claim attempts.
   const row = db.prepare(
     `SELECT COUNT(*) as cnt FROM steps s
      JOIN runs r ON r.id = s.run_id
-     WHERE s.agent_id = ? AND s.status IN ('pending', 'waiting')
-       AND r.status = 'running'`
-  ).get(agentId) as { cnt: number };
+     WHERE s.agent_id = ? AND s.run_id = ?
+       AND s.status = 'pending'
+       AND r.status = 'running'`,
+  ).get(agentId, runId) as { cnt: number };
   return row.cnt > 0 ? "HAS_WORK" : "NO_WORK";
 }
 
@@ -798,7 +822,7 @@ const CLEANUP_THROTTLE_MS = 5 * 60 * 1000;
 /**
  * Find and claim a pending step for an agent, returning the resolved input.
  */
-export function claimStep(agentId: string): ClaimResult {
+export function claimStep(agentId: string, runId: string): ClaimResult {
   // Throttle cleanup: run at most once every 5 minutes across all agents
   const now = Date.now();
   if (now - lastCleanupTime >= CLEANUP_THROTTLE_MS) {
@@ -814,12 +838,14 @@ export function claimStep(agentId: string): ClaimResult {
   //    verify step needs to be claimable. Without this exception, completeStep's
   //    verify_each branch sets verify=pending while the loop stays running, but
   //    claimStep refuses to claim verify because the loop isn't done — deadlock.
+  // Run-scoped claim: concurrent runs of the same workflow + agent never
+  // cross-claim because the WHERE clause pins to a specific run_id.
   const step = db.prepare(
     `SELECT s.id, s.step_id, s.run_id, s.input_template, s.type, s.loop_config, s.step_index, s.retry_count, s.output
      FROM steps s
      JOIN runs r ON r.id = s.run_id
-     WHERE s.agent_id = ? AND s.status = 'pending'
-       AND r.status NOT IN ('failed', 'canceled')
+     WHERE s.agent_id = ? AND s.run_id = ? AND s.status = 'pending'
+       AND r.status = 'running'
        AND NOT EXISTS (
          SELECT 1 FROM steps prev
          WHERE prev.run_id = s.run_id
@@ -830,8 +856,8 @@ export function claimStep(agentId: string): ClaimResult {
                     AND prev.current_story_id IS NULL)
        )
     ORDER BY s.step_index ASC, s.step_id ASC
-     LIMIT 1`
-  ).get(agentId) as {
+     LIMIT 1`,
+  ).get(agentId, runId) as {
     id: string; step_id: string; run_id: string; input_template: string; type: string;
     loop_config: string | null;
     step_index: number;
@@ -841,9 +867,9 @@ export function claimStep(agentId: string): ClaimResult {
 
   if (!step) return { found: false };
 
-  // Guard: don't claim work for a failed run
+  // Guard: don't claim work for a terminal/paused run
   const runStatus = db.prepare("SELECT status FROM runs WHERE id = ?").get(step.run_id) as { status: string } | undefined;
-  if (runStatus?.status === "failed") return { found: false };
+  if (runStatus?.status !== "running") return { found: false };
 
   // Build context via resolveStepContext
   const context = resolveStepContext(step.run_id, step.step_index);
@@ -867,6 +893,11 @@ export function claimStep(agentId: string): ClaimResult {
   if (step.type === "loop") {
     const loopConfig: LoopConfig | null = step.loop_config ? JSON.parse(step.loop_config) : null;
     if (loopConfig?.over === "stories") {
+      const claim = db.prepare(
+        "UPDATE steps SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'pending'"
+      ).run(step.id);
+      if ((claim.changes ?? 0) <= 0) return { found: false };
+
       if (!runHasStories(step.run_id)) {
         const message = "Loop cannot run because planning did not produce STORIES_JSON.";
         db.prepare(
@@ -915,10 +946,17 @@ export function claimStep(agentId: string): ClaimResult {
         return { found: false };
       }
 
-      // Claim the story
-      db.prepare(
-        "UPDATE stories SET status = 'running', updated_at = datetime('now') WHERE id = ?"
+      // Claim the story. If another duplicate poller won it first, undo this
+      // loop claim and let the next polling round inspect current state.
+      const storyClaim = db.prepare(
+        "UPDATE stories SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'pending'"
       ).run(nextStory.id);
+      if ((storyClaim.changes ?? 0) <= 0) {
+        db.prepare(
+          "UPDATE steps SET status = 'pending', current_story_id = NULL, updated_at = datetime('now') WHERE id = ?"
+        ).run(step.id);
+        return { found: false };
+      }
       db.prepare(
         "UPDATE steps SET status = 'running', current_story_id = ?, updated_at = datetime('now') WHERE id = ?"
       ).run(nextStory.id, step.id);
@@ -984,9 +1022,10 @@ export function claimStep(agentId: string): ClaimResult {
   }
 
   // Single step: existing logic
-  db.prepare(
+  const claim = db.prepare(
     "UPDATE steps SET status = 'running', updated_at = datetime('now') WHERE id = ? AND status = 'pending'"
   ).run(step.id);
+  if ((claim.changes ?? 0) <= 0) return { found: false };
   emitEvent({ ts: new Date().toISOString(), event: "step.running", runId: step.run_id, workflowId: getWorkflowId(step.run_id), stepId: step.step_id, agentId });
   logger.info(`Step claimed by ${agentId}`, { runId: step.run_id, stepId: step.step_id });
 

@@ -2,8 +2,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { resolveTamanduaCli, resolveWorkflowWorkspaceDir } from "./paths.js";
+import { resolveTamanduaCli } from "./paths.js";
 import type { WorkflowSpec, WorkflowAgent } from "./types.js";
 import { logger } from "../lib/logger.js";
 import { getRoleTimeoutSeconds, inferRole } from "./install.js";
@@ -11,201 +10,75 @@ import { formatPiCommandPreview } from "./pi-command-preview.js";
 import { emitEvent } from "./events.js";
 import { parsePiOutputStream } from "./pi-stream-parser.js";
 
-// ── State ──────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────────
+// Run-Scoped Polling
+//
+// Job identity:  tamandua-${workflowId}-${runId}-${agentId}
+// Scope:         every job is tied to ONE (runId, agentId) tuple
+// Ownership:    timers + in-flight pi children are owned by whatever
+//               process invokes the scheduler (daemon in production;
+//               occasionally direct callers in tests).
+// State:        no on-disk persistence (cron-jobs.json removed). The DB
+//               is the source of truth; the daemon's reconciler restores
+//               in-memory job maps from runs.scheduling_status.
+// ──────────────────────────────────────────────────────────────────────
 
-const CRON_JOBS_FILE = path.join(os.homedir(), ".tamandua", "cron-jobs.json");
-
-/** Maps job id → active setInterval handle */
+/** Maps job id → active setInterval handle. */
 const activeTimers = new Map<string, ReturnType<typeof setInterval>>();
 
-/** Maps job id → persistent metadata for resume-after-restart support */
+/** Maps job id → delayed first-start timeout handle. */
+const pendingStartTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Maps job id → persistent metadata. */
 const jobMetadata = new Map<string, CronJobInfo>();
 
 /**
- * Set of job ids whose pi process is currently running. Used to skip a polling
- * tick when the previous one for the same agent has not finished — without this
- * guard, setInterval keeps spawning new pi every interval even though pi rounds
- * can take 10–30 minutes (per the role timeout), causing process accumulation
- * and memory exhaustion.
+ * Set of job ids whose pi process is currently running. Used to skip a
+ * polling tick when the previous one for the same (run, agent) hasn't
+ * finished — without this guard, setInterval would keep spawning new pi
+ * every interval even though pi rounds can take 10–30 minutes.
  */
 const inFlightJobs = new Set<string>();
-const RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY = "working_directory_for_harness";
+
+/**
+ * Maps job id → in-flight child handle, exposing pid + pgid. Used by
+ * `removeRunCrons` and daemon shutdown to terminate process groups.
+ */
+interface InFlightChild {
+  pid: number;
+  pgid: number;
+  killed: boolean;
+}
+const inFlightChildren = new Map<string, InFlightChild>();
 
 export interface CronJobInfo {
+  /** tamandua-${workflowId}-${runId}-${agentId} */
   id: string;
-  name: string;
   workflowId: string;
+  runId: string;
   agentId: string;
   intervalMinutes: number;
   model?: string;
   workModel?: string;
   sessionLabel?: string;
   timeoutSeconds?: number;
-  /** @deprecated Use workingDirectoryForHarness. Kept for persisted-job compatibility. */
-  workdir?: string;
+  /** Working directory used as cwd for `pi --print` invocations. */
   workingDirectoryForHarness?: string;
   createdAt: string;
 }
 
 export interface CreateCronJobParams {
   workflowId: string;
+  runId: string;
   agent: WorkflowAgent;
   workflow?: WorkflowSpec;
   intervalMinutes?: number;
   staggerOffsetMs?: number;
-  /** @deprecated Use workingDirectoryForHarness. */
-  workdir?: string;
   workingDirectoryForHarness?: string;
 }
 
 export interface SetupAgentCronsOptions {
   workingDirectoryForHarness?: string;
-}
-
-// ── Persistence helpers ────────────────────────────────────────────
-
-function persistJobs(): void {
-  try {
-    const dir = path.dirname(CRON_JOBS_FILE);
-    fs.mkdirSync(dir, { recursive: true });
-    const data = JSON.stringify([...jobMetadata.values()], null, 2);
-    fs.writeFileSync(CRON_JOBS_FILE, data, "utf-8");
-  } catch (err) {
-    logger.warn("Failed to persist cron jobs", { error: String(err) });
-  }
-}
-
-function loadPersistedJobs(): CronJobInfo[] {
-  try {
-    if (!fs.existsSync(CRON_JOBS_FILE)) return [];
-    const raw = fs.readFileSync(CRON_JOBS_FILE, "utf-8");
-    return JSON.parse(raw) as CronJobInfo[];
-  } catch {
-    return [];
-  }
-}
-
-function resolveJobWorkingDirectoryForHarness(job: CronJobInfo): string | undefined {
-  return job.workingDirectoryForHarness ?? job.workdir;
-}
-
-export interface WorkflowHarnessWorkingDirectoryResolution {
-  workingDirectoryForHarness?: string;
-  ambiguous: boolean;
-  reason:
-    | "active_runs_conflicting_workdirs"
-    | "active_runs_partially_missing_workdir"
-    | "active_runs_all_missing_workdir"
-    | "single_active_run"
-    | "single_active_run_missing_workdir"
-    | "no_active_runs"
-    | "lookup_failed";
-  activeRunCount: number;
-  runIds: string[];
-  workingDirectories: string[];
-  fallbackApplied: boolean;
-  lookupError?: string;
-}
-
-function readRunHarnessWorkingDirectory(contextRaw: string): string | null {
-  try {
-    const parsed = JSON.parse(contextRaw) as Record<string, unknown>;
-    const value = parsed[RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY];
-    if (typeof value !== "string" || value.trim().length === 0) return null;
-    return path.resolve(value.trim());
-  } catch {
-    return null;
-  }
-}
-
-export async function resolveWorkflowHarnessWorkingDirectory(
-  workflowId: string,
-  fallbackWorkingDirectoryForHarness?: string,
-): Promise<WorkflowHarnessWorkingDirectoryResolution> {
-  try {
-    const { getDb } = await import("../db.js");
-    const db = getDb();
-    const runs = db
-      .prepare(
-        "SELECT id, context FROM runs WHERE workflow_id = ? AND status IN ('running', 'paused') ORDER BY created_at ASC",
-      )
-      .all(workflowId) as Array<{ id: string; context: string }>;
-
-    if (runs.length === 0) {
-      return {
-        workingDirectoryForHarness: fallbackWorkingDirectoryForHarness,
-        ambiguous: false,
-        reason: "no_active_runs",
-        activeRunCount: 0,
-        runIds: [],
-        workingDirectories: [],
-        fallbackApplied: fallbackWorkingDirectoryForHarness !== undefined,
-      };
-    }
-
-    const runIds = runs.map((run) => run.id);
-    const runWorkingDirectories = runs
-      .map((run) => readRunHarnessWorkingDirectory(run.context))
-      .filter((value): value is string => Boolean(value));
-    const uniqueWorkingDirectories = [...new Set(runWorkingDirectories)];
-
-    if (uniqueWorkingDirectories.length === 0) {
-      return {
-        workingDirectoryForHarness: fallbackWorkingDirectoryForHarness,
-        ambiguous: false,
-        reason: runs.length === 1 ? "single_active_run_missing_workdir" : "active_runs_all_missing_workdir",
-        activeRunCount: runs.length,
-        runIds,
-        workingDirectories: [],
-        fallbackApplied: fallbackWorkingDirectoryForHarness !== undefined,
-      };
-    }
-
-    if (uniqueWorkingDirectories.length > 1) {
-      return {
-        workingDirectoryForHarness: undefined,
-        ambiguous: true,
-        reason: "active_runs_conflicting_workdirs",
-        activeRunCount: runs.length,
-        runIds,
-        workingDirectories: uniqueWorkingDirectories,
-        fallbackApplied: false,
-      };
-    }
-
-    if (runWorkingDirectories.length !== runs.length) {
-      return {
-        workingDirectoryForHarness: undefined,
-        ambiguous: true,
-        reason: "active_runs_partially_missing_workdir",
-        activeRunCount: runs.length,
-        runIds,
-        workingDirectories: uniqueWorkingDirectories,
-        fallbackApplied: false,
-      };
-    }
-
-    return {
-      workingDirectoryForHarness: uniqueWorkingDirectories[0],
-      ambiguous: false,
-      reason: "single_active_run",
-      activeRunCount: runs.length,
-      runIds,
-      workingDirectories: uniqueWorkingDirectories,
-      fallbackApplied: false,
-    };
-  } catch (err) {
-    return {
-      workingDirectoryForHarness: fallbackWorkingDirectoryForHarness,
-      ambiguous: false,
-      reason: "lookup_failed",
-      activeRunCount: 0,
-      runIds: [],
-      workingDirectories: [],
-      fallbackApplied: fallbackWorkingDirectoryForHarness !== undefined,
-      lookupError: err instanceof Error ? err.message : String(err),
-    };
-  }
 }
 
 // ── pi binary discovery ────────────────────────────────────────────
@@ -245,6 +118,12 @@ export interface RunPiOptions {
   timeout?: number; // seconds, default 60
   workdir?: string;
   env?: Record<string, string>;
+  /**
+   * Optional callback invoked once the child process is spawned. Used by
+   * `executePollingRound` to register the child + pgid in `inFlightChildren`
+   * so termination paths can kill the process group.
+   */
+  onSpawn?: (handle: { pid: number; pgid: number }) => void;
 }
 
 const MAX_LOG_STREAM_PREVIEW = 200;
@@ -265,6 +144,15 @@ function buildStreamLogMetadata(stream: string): StreamLogMetadata {
     preview,
     truncated,
   };
+}
+
+function safeKillPgid(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    // Negative PID => kill the entire process group.
+    process.kill(-pgid, signal);
+  } catch {
+    // Group may already be gone.
+  }
 }
 
 export async function runPi(
@@ -293,16 +181,31 @@ export async function runPi(
     workdir: options.workdir,
   });
 
+  // Spawn pi in its own process group so termination paths can kill the
+  // whole subtree (pi spawns its own child processes for tools/sessions).
   const child = spawn(piPath, args, {
     cwd: options.workdir ?? process.cwd(),
     env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
+    detached: true,
   });
 
   const childPid = child.pid;
+  // On Linux, the spawned child becomes its own group leader (pgid === pid)
+  // when detached:true. Fall back to childPid if getpgid is unavailable.
+  const pgid = childPid ?? 0;
+
+  if (childPid && options.onSpawn) {
+    try {
+      options.onSpawn({ pid: childPid, pgid });
+    } catch (err) {
+      logger.warn("pi onSpawn callback threw", { error: String(err) });
+    }
+  }
 
   logger.info("pi launched", {
     pid: childPid ?? null,
+    pgid,
     timeoutMs,
     workdir: options.workdir,
   });
@@ -323,8 +226,6 @@ export async function runPi(
   });
 
   // Stream stdout through readline → parsePiOutputStream.
-  // parsePiOutputStream consumes the readline iterable and resolves when the
-  // stream ends (child stdout closes).
   const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
   const parseResultPromise = parsePiOutputStream(rl);
 
@@ -334,7 +235,13 @@ export async function runPi(
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      child.kill("SIGKILL");
+      // Terminate the whole process group: SIGTERM, then SIGKILL after 5s.
+      if (pgid) {
+        safeKillPgid(pgid, "SIGTERM");
+        setTimeout(() => safeKillPgid(pgid, "SIGKILL"), 5000).unref();
+      } else {
+        try { child.kill("SIGKILL"); } catch { /* best effort */ }
+      }
       reject(new Error(`pi timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
@@ -356,6 +263,7 @@ export async function runPi(
         const failureStderrMeta = buildStreamLogMetadata(failureStderr);
         logger.error("pi execution failed", {
           pid: childPid ?? null,
+          pgid,
           exitCode: code,
           signal,
           durationMs: failureDurationMs,
@@ -386,9 +294,6 @@ export async function runPi(
   }
 
   // Reconstruct filtered stdout from parsed events for backwards compatibility.
-  // Downstream callers (parsePollingRoundMetadata, classifyPollingRoundOutcome,
-  // etc.) consume a string, not an event array. We serialize only the kept
-  // JSON events + the assistant text (so the classifier can still read it).
   const filteredLines: string[] = [];
   if (parseResult.textFallback !== null) {
     filteredLines.push(parseResult.textFallback);
@@ -396,7 +301,6 @@ export async function runPi(
   for (const event of parseResult.events) {
     filteredLines.push(JSON.stringify(event));
   }
-  // Always include the assistant text so downstream classifiers can read it
   if (parseResult.assistantText.length > 0) {
     filteredLines.push(parseResult.assistantText);
   }
@@ -405,6 +309,7 @@ export async function runPi(
 
   logger.info("pi completed", {
     pid: childPid ?? null,
+    pgid,
     durationMs,
     exitCode: child.exitCode,
     signal: child.signalCode,
@@ -422,25 +327,29 @@ export async function runPi(
 
 /**
  * Build the prompt an agent gets to check for and execute work.
- * Uses step claim/complete/fail commands via the tamandua CLI.
+ *
+ * @param workflowId – the workflow this agent serves
+ * @param agentId    – the agent's ID
+ * @param runId      – run-scoped polling: passed to `step peek` / `step claim`
+ *                     via `--run-id` so the CLI only matches steps in this run
  */
-export function buildAgentPrompt(workflowId: string, agentId: string): string {
+export function buildAgentPrompt(workflowId: string, agentId: string, runId: string): string {
   const cli = resolveTamanduaCli();
 
   return [
-    `You are agent "${agentId}" in workflow "${workflowId}".`,
+    `You are agent "${agentId}" in workflow "${workflowId}" (run ${runId}).`,
     ``,
     `Your job is to poll for work and execute it.`,
     ``,
     `STEP 1 — Check for pending work:`,
-    `Run: node "${cli}" step peek "${agentId}"`,
+    `Run: node "${cli}" step peek "${agentId}" --run-id "${runId}"`,
     ``,
     `STEP 2 — If NO_WORK:`,
     `Reply HEARTBEAT_OK and stop. Do NOT do anything else.`,
     ``,
     `STEP 3 — If HAS_WORK:`,
     `Claim the step and capture the JSON response:`,
-    `Run: node "${cli}" step claim "${agentId}"`,
+    `Run: node "${cli}" step claim "${agentId}" --run-id "${runId}"`,
     `The output will be JSON: {"stepId":"<UUID>", "runId":"<UUID>", "input":"<task description>"}`,
     `SAVE the stepId — you MUST use it in step 4.`,
     ``,
@@ -463,11 +372,11 @@ TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
  * Build the work prompt for when work was already claimed.
  * Does NOT include step claim — just work execution instructions.
  */
-export function buildWorkPrompt(workflowId: string, agentId: string): string {
+export function buildWorkPrompt(workflowId: string, agentId: string, runId: string): string {
   const cli = resolveTamanduaCli();
 
   return [
-    `You are agent "${agentId}" in workflow "${workflowId}".`,
+    `You are agent "${agentId}" in workflow "${workflowId}" (run ${runId}).`,
     `You have already claimed this step. Now execute the work.`,
     ``,
     `The claimed step JSON contains a "stepId" field. You MUST save this and use it`,
@@ -490,20 +399,24 @@ TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
  *
  * Phase 1 (cheap): peek for work. If none → HEARTBEAT_OK.
  * Phase 2 (work):   if work exists, claim it and execute.
+ *
+ * Both peek + claim are scoped to a specific runId so concurrent runs of
+ * the same workflow can't cross-claim each other's steps.
  */
 export function buildPollingPrompt(
   workflowId: string,
   agentId: string,
+  runId: string,
 ): string {
   const cli = resolveTamanduaCli();
 
   return [
-    `You are a polling agent for workflow "${workflowId}", agent "${agentId}".`,
+    `You are a polling agent for workflow "${workflowId}", agent "${agentId}", run "${runId}".`,
     `You run in --print mode. Your goal: check for work and execute it if present.`,
     ``,
     `─── PHASE 1: PEEK ───`,
     `Run this exact command and capture its output:`,
-    `node "${cli}" step peek "${agentId}"`,
+    `node "${cli}" step peek "${agentId}" --run-id "${runId}"`,
     ``,
     `If the output contains NO_WORK:`,
     `  Reply exactly: HEARTBEAT_OK`,
@@ -514,7 +427,7 @@ export function buildPollingPrompt(
     ``,
     `─── PHASE 2: CLAIM AND EXECUTE ───`,
     `1. Claim the step and capture the JSON response:`,
-    `   node "${cli}" step claim "${agentId}"`,
+    `   node "${cli}" step claim "${agentId}" --run-id "${runId}"`,
     `   The output is JSON: {"stepId":"<UUID>", "runId":"<UUID>", "input":"<task description>"}`,
     `   SAVE the stepId — you MUST use it when reporting results.`,
     ``,
@@ -835,13 +748,10 @@ async function incrementRunTokenSpend(runId: string, tokenUsage: number): Promis
 }
 
 /**
- * Auto-complete fallback: when a polling round produces work_done-shaped output
- * but the agent never invoked `node ${cli} step complete <stepId>` itself, the
- * step would otherwise stay `running` forever — peekStep returns NO_WORK for a
- * running step, so subsequent rounds heartbeat and the run wedges. If the round
- * output classifies as work_done and we extracted a stepId, call completeStep
- * here. Guarded by a status check so we don't double-complete when the agent
- * did report results via the CLI.
+ * Auto-complete fallback. See original implementation comments.
+ *
+ * In the run-scoped world we still pass the run id through so orphan
+ * recovery is run-scoped on failures.
  */
 export async function autoCompleteStepIfRunning(
   context: Record<string, unknown>,
@@ -857,8 +767,8 @@ export async function autoCompleteStepIfRunning(
   const db = getDb();
 
   const row = db
-    .prepare("SELECT status, type, current_story_id FROM steps WHERE id = ?")
-    .get(metadata.stepId) as { status: string; type: string; current_story_id: string | null } | undefined;
+    .prepare("SELECT status, type, current_story_id, run_id FROM steps WHERE id = ?")
+    .get(metadata.stepId) as { status: string; type: string; current_story_id: string | null; run_id: string } | undefined;
 
   if (!row) {
     logger.warn("Auto-complete fallback skipped — step not found", {
@@ -868,10 +778,6 @@ export async function autoCompleteStepIfRunning(
     return;
   }
 
-  // A loop step with current_story_id=NULL means completeStep already ran
-  // (the iteration was advanced or the loop reached a verify_each pause).
-  // Calling completeStep again would fall through to the single-step branch
-  // and mark the entire loop done, skipping remaining stories.
   if (row.type === "loop" && row.current_story_id === null) {
     logger.debug("Auto-complete fallback skipped — loop step mid-iteration (agent already advanced via CLI)", {
       ...context,
@@ -890,6 +796,11 @@ export async function autoCompleteStepIfRunning(
     return;
   }
 
+  const recoveryRunId =
+    typeof context.runId === "string" && context.runId
+      ? (context.runId as string)
+      : row.run_id;
+
   try {
     const result = completeStep(metadata.stepId, metadata.assistantOutput);
     logger.info("Auto-complete fallback invoked completeStep on work_done output", {
@@ -906,21 +817,19 @@ export async function autoCompleteStepIfRunning(
       error: errorMessage,
     });
 
-    // completeStep threw (e.g. STORIES_JSON parse failure on otherwise-valid
-    // work_done output). Without recovery the step stays 'running', peekStep
-    // returns NO_WORK on subsequent rounds, and the run wedges until the
-    // stale-claim sweeper fires (roleTimeoutSeconds*1.5). Reset the agent's
-    // running steps to 'pending' so the configured on_fail retry path fires
-    // on the next polling tick — same recovery the other_output branch does.
-    // Pass the throw message as failureReason so the retried agent sees it
-    // as RETRY FEEDBACK and can avoid repeating the same malformed output.
     const failureReason =
       `Previous attempt produced output that could not be auto-completed: ${errorMessage}. ` +
       `If this involved STORIES_JSON, ensure the STORIES_JSON line ends with a literal "]" and ` +
       `is followed by no trailing prose, comments, or markdown — only blank lines or another KEY: line.`;
     try {
       const { recoverOrphanedStepsForAgent } = await import("./step-ops.js");
-      const recoveryResult = recoverOrphanedStepsForAgent(context.agentId as string, undefined, undefined, failureReason);
+      const recoveryResult = recoverOrphanedStepsForAgent(
+        context.agentId as string,
+        recoveryRunId,
+        undefined,
+        undefined,
+        failureReason,
+      );
       if (recoveryResult.recovered > 0 || recoveryResult.failed > 0) {
         logger.info("Orphaned step recovery after auto-complete throw", {
           ...context,
@@ -1047,6 +956,8 @@ function buildPollingRoundContext(
 
   return {
     jobId: job.id,
+    runId: job.runId,
+    workflowId: job.workflowId,
     agentId: job.agentId,
     role: agent.role ?? inferRole(agent.id),
     timeoutSeconds,
@@ -1063,43 +974,48 @@ export async function executePollingRound(
 ): Promise<void> {
   const role = agent.role ?? inferRole(agent.id);
   const timeout = agent.timeoutSeconds ?? job.timeoutSeconds ?? getRoleTimeoutSeconds(role);
-  const fallbackWorkingDirectoryForHarness = resolveJobWorkingDirectoryForHarness(job);
-  const harnessResolution = await resolveWorkflowHarnessWorkingDirectory(
-    job.workflowId,
-    fallbackWorkingDirectoryForHarness,
-  );
-
-  if (harnessResolution.ambiguous) {
-    logger.warn("Polling round skipped — active runs require different harness working directories", {
-      jobId: job.id,
-      agentId: job.agentId,
-      role,
-      timeoutSeconds: timeout,
-      reason: harnessResolution.reason,
-      activeRunCount: harnessResolution.activeRunCount,
-      runIds: harnessResolution.runIds,
-      workingDirectories: harnessResolution.workingDirectories,
-    });
-    return;
-  }
-
-  const workingDirectoryForHarness = harnessResolution.workingDirectoryForHarness;
+  const workingDirectoryForHarness = job.workingDirectoryForHarness;
   const context = buildPollingRoundContext(job, agent, timeout, workingDirectoryForHarness, workflow);
 
-  // ── Stale-claim sweeper ───────────────────────────────────────────
-  // Belt-and-suspenders: if pi was SIGKILL'd (or the polling node died)
-  // mid-round, the step stays 'running' and peekStep returns NO_WORK,
-  // wedging the run. Reset any running step for this agent whose
-  // updated_at is older than roleTimeoutSeconds * 1.5 back to pending
-  // so retry/exhaustion machinery fires on the next tick.
-  //
-  // MUST run BEFORE the inFlightJobs guard below, otherwise the await
-  // inside this block introduces a yield point between inFlightJobs.has()
-  // and inFlightJobs.add() — both concurrent rounds sneak past the guard.
+  // ── Run-scoped status check ──────────────────────────────────────
+  // If this run is no longer 'running' (terminal/paused) tear down the
+  // job and skip. Without this check, timers leaked from previous CLI
+  // processes would keep polling pi for completed runs.
+  try {
+    const { getDb } = await import("../db.js");
+    const db = getDb();
+    const row = db
+      .prepare("SELECT status FROM runs WHERE id = ?")
+      .get(job.runId) as { status: string } | undefined;
+    if (!row || (row.status !== "running" && row.status !== "paused")) {
+      logger.info("Polling round skipped — run no longer running; tearing down job", {
+        ...context,
+        runStatus: row?.status ?? "missing",
+        reason: "run_not_running",
+      });
+      await removeRunCrons(job.runId);
+      return;
+    }
+    if (row.status === "paused") {
+      logger.debug("Polling round skipped — run paused", { ...context });
+      return;
+    }
+  } catch (err) {
+    logger.warn("Run status check failed; continuing polling round", {
+      ...context,
+      error: String(err),
+    });
+  }
+
+  // ── Stale-claim sweeper (run-scoped) ─────────────────────────────
   try {
     const staleThresholdMs = timeout * 1.5 * 1000;
     const { recoverOrphanedStepsForAgent } = await import("./step-ops.js");
-    const staleResult = recoverOrphanedStepsForAgent(job.agentId, staleThresholdMs);
+    const staleResult = recoverOrphanedStepsForAgent(
+      job.agentId,
+      job.runId,
+      staleThresholdMs,
+    );
     if (staleResult.recovered > 0 || staleResult.failed > 0) {
       logger.info("Stale-claim sweeper ran", {
         ...context,
@@ -1110,16 +1026,13 @@ export async function executePollingRound(
       });
     }
   } catch (sweepErr) {
-    // Best-effort; don't crash the polling round
     logger.warn("Stale-claim sweeper failed", {
       ...context,
       error: sweepErr instanceof Error ? sweepErr.message : String(sweepErr),
     });
   }
 
-  // Skip this tick if a pi for the same agent is still running. setInterval keeps
-  // firing every intervalMs regardless of how long pi takes; without this guard
-  // we'd accumulate 10+ pi processes per agent (each ~100MB) over the role timeout.
+  // Skip this tick if a pi for the same job is still running.
   if (inFlightJobs.has(job.id)) {
     logger.info("Polling round skipped — previous pi still in flight", {
       ...context,
@@ -1128,43 +1041,7 @@ export async function executePollingRound(
     return;
   }
 
-  // If the workflow has no active runs left, tear down our local timers and
-  // skip the round. Without this the workflow-run CLI process leaks: its
-  // setInterval timers keep the Node event loop alive long after every run is
-  // completed/failed/canceled, polling pi forever for nothing. The teardown
-  // path called from short-lived `step complete` processes is a no-op there
-  // because those processes don't own the timers — only this process does.
-  //
-  // Gate on `activeTimers.has(job.id)` so direct callers (tests) that invoke
-  // executePollingRound without going through setupAgentCrons don't hit the
-  // idle check — they have no timers to tear down anyway.
-  if (activeTimers.has(job.id)) {
-    try {
-      const { getDb } = await import("../db.js");
-      const db = getDb();
-      const activeRuns = db
-        .prepare(
-          "SELECT COUNT(*) AS cnt FROM runs WHERE workflow_id = ? AND status IN ('running', 'paused')",
-        )
-        .get(job.workflowId) as { cnt: number } | undefined;
-      if ((activeRuns?.cnt ?? 0) === 0) {
-        logger.info(
-          "Polling round skipped — workflow has no active runs; tearing down local crons",
-          { ...context, reason: "workflow_idle" },
-        );
-        await removeAgentCrons(job.workflowId);
-        return;
-      }
-    } catch (err) {
-      // best-effort: don't crash the polling round if the idle check fails
-      logger.warn("Idle check failed; continuing polling round", {
-        ...context,
-        error: String(err),
-      });
-    }
-  }
-
-  const pollingPrompt = buildPollingPrompt(job.workflowId, job.agentId);
+  const pollingPrompt = buildPollingPrompt(job.workflowId, job.agentId, job.runId);
 
   logger.info("Polling round start", context);
 
@@ -1175,6 +1052,9 @@ export async function executePollingRound(
       {
         timeout,
         workdir: workingDirectoryForHarness,
+        onSpawn: ({ pid, pgid }) => {
+          inFlightChildren.set(job.id, { pid, pgid, killed: false });
+        },
       },
     );
 
@@ -1197,14 +1077,12 @@ export async function executePollingRound(
     if (outputSummary.outcome === "work_done") {
       await autoCompleteStepIfRunning(context, metadata);
     } else if (outputSummary.outcome === "other_output") {
-      // pi exited cleanly (exitCode 0) but produced no STATUS line.
-      // The step it claimed stays 'running' and peekStep returns NO_WORK,
-      // wedging the run. Recover any running steps for this agent so
-      // the configured on_fail retry path fires immediately, rather than
-      // waiting for the stale-claim sweeper (up to roleTimeoutSeconds*1.5).
       try {
         const { recoverOrphanedStepsForAgent } = await import("./step-ops.js");
-        const recoveryResult = recoverOrphanedStepsForAgent(job.agentId);
+        const recoveryResult = recoverOrphanedStepsForAgent(
+          job.agentId,
+          job.runId,
+        );
         if (recoveryResult.recovered > 0 || recoveryResult.failed > 0) {
           logger.info("Orphaned step recovery after clean pi exit (other_output)", {
             ...context,
@@ -1231,23 +1109,17 @@ export async function executePollingRound(
       errorTruncated: errorSummary.truncated,
     });
 
-    // ── Recover orphaned running steps for this agent ─────────────
-    // When pi exits abnormally (SIGKILL, non-zero exit), the step it
-    // claimed stays 'running' and peekStep returns NO_WORK, wedging the
-    // run. Reset any running step to 'pending' (bumping retry_count) so
-    // the next polling tick can re-claim it. If retries are exhausted,
-    // fail the step so escalation machinery (escalate_to: human) fires.
-    //
-    // When the failure is a timeout, pass the reason through to
-    // recoverOrphanedStepsForAgent so it records `timeout_retry` in the
-    // run's context. On re-claim, the retried agent sees a distinct
-    // signal that partial work may exist on disk and should be reused.
     try {
       const isTimeout = errorMessage.includes("timed out");
       const timeoutRetryReason = isTimeout ? errorMessage : undefined;
 
       const { recoverOrphanedStepsForAgent } = await import("./step-ops.js");
-      const recoveryResult = recoverOrphanedStepsForAgent(job.agentId, undefined, timeoutRetryReason);
+      const recoveryResult = recoverOrphanedStepsForAgent(
+        job.agentId,
+        job.runId,
+        undefined,
+        timeoutRetryReason,
+      );
       if (recoveryResult.recovered > 0 || recoveryResult.failed > 0) {
         logger.info("Orphaned step recovery after pi failure", {
           ...context,
@@ -1264,87 +1136,93 @@ export async function executePollingRound(
         error: recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr),
       });
     }
-    // Don't crash the interval — let the next round retry naturally
   } finally {
     inFlightJobs.delete(job.id);
+    inFlightChildren.delete(job.id);
   }
 }
 
-// ── Public API ──────────────────────────────────────────────────────
+// ── Public API: run-scoped scheduling ──────────────────────────────
+
+function buildJobId(workflowId: string, runId: string, agentId: string): string {
+  // The agent id may already be `${workflowId}_${rawAgentId}` if it was
+  // resolved through claimStep paths. Strip the workflow prefix for a clean
+  // job id; the full prefixed id is still what we use for DB queries.
+  const shortAgent = agentId.startsWith(`${workflowId}_`)
+    ? agentId.slice(workflowId.length + 1)
+    : agentId;
+  return `tamandua-${workflowId}-${runId}-${shortAgent}`;
+}
 
 /**
- * Create a scheduled job for an agent.
- * Uses a polling daemon approach with setInterval (not OS cron).
+ * Create a single run-scoped polling job (one per (runId, agentId)).
  */
 export async function createAgentCronJob(
   params: CreateCronJobParams,
 ): Promise<{ ok: boolean; error?: string; id?: string }> {
   const {
     workflowId,
+    runId,
     agent,
     workflow,
-    workdir,
     workingDirectoryForHarness,
   } = params;
   const intervalMinutes = params.intervalMinutes ?? 5;
   const staggerMs = params.staggerOffsetMs ?? 0;
-  const effectiveWorkingDirectoryForHarness = workingDirectoryForHarness ?? workdir;
 
-  const id = `tamandua-${workflowId}-${agent.id}`;
-  const name = `${workflowId}/${agent.id}`;
+  const id = buildJobId(workflowId, runId, agent.id);
 
-  // Check for existing job
-  if (activeTimers.has(id)) {
-    return { ok: false, error: `Job already exists: ${id}`, id };
+  if (jobMetadata.has(id) || activeTimers.has(id) || pendingStartTimers.has(id)) {
+    return { ok: true, id };
   }
 
-  // Per-pi-call execution budget. Prefer an explicit per-agent override, then the
-  // role policy (analysis=30m, coding=30m, etc.). polling.timeoutSeconds is NOT
-  // used here — it determines the polling INTERVAL, not how long pi has to work.
   const role = agent.role ?? inferRole(agent.id);
   const timeoutSeconds = agent.timeoutSeconds ?? getRoleTimeoutSeconds(role);
 
-  // Use fully qualified agent ID (workflowId_agentId) for DB matching
   const fullAgentId = agent.id.startsWith(`${workflowId}_`) ? agent.id : `${workflowId}_${agent.id}`;
 
   const jobInfo: CronJobInfo = {
     id,
-    name,
     workflowId,
+    runId,
     agentId: fullAgentId,
     intervalMinutes,
     sessionLabel: `${agent.id}-cron`,
     timeoutSeconds,
-    workdir: effectiveWorkingDirectoryForHarness,
-    workingDirectoryForHarness: effectiveWorkingDirectoryForHarness,
+    workingDirectoryForHarness,
     createdAt: new Date().toISOString(),
   };
 
-  // Stagger the first execution
+  jobMetadata.set(id, jobInfo);
+
   const startPolling = () => {
+    pendingStartTimers.delete(id);
+    if (!jobMetadata.has(id)) return;
+    if (activeTimers.has(id)) return;
+
     const intervalMs = intervalMinutes * 60 * 1000;
     const timer = setInterval(() => {
       executePollingRound(jobInfo, agent, workflow).catch((err) => {
-        logger.error("Unhandled polling error", { jobId: id, error: String(err) });
+        logger.error("Unhandled polling error", { jobId: id, runId, error: String(err) });
       });
     }, intervalMs);
 
     activeTimers.set(id, timer);
-    jobMetadata.set(id, jobInfo);
-    persistJobs();
 
     logger.info("Cron job created", {
       id,
+      runId,
       agentId: agent.id,
       intervalMinutes,
       staggerMs,
-      workingDirectoryForHarness: effectiveWorkingDirectoryForHarness,
+      workingDirectoryForHarness,
     });
   };
 
   if (staggerMs > 0) {
-    setTimeout(startPolling, staggerMs);
-    logger.info("Cron job scheduled with stagger", { id, staggerMs });
+    const pending = setTimeout(startPolling, staggerMs);
+    pendingStartTimers.set(id, pending);
+    logger.info("Cron job scheduled with stagger", { id, runId, staggerMs });
   } else {
     startPolling();
   }
@@ -1353,11 +1231,15 @@ export async function createAgentCronJob(
 }
 
 /**
- * Set up polling for all agents in a workflow.
- * Staggers agent starts by 1 minute each.
+ * Set up polling jobs for every agent in a workflow, scoped to a single run.
+ *
+ * @param workflow – the workflow spec
+ * @param runId    – the run owning these jobs
+ * @param options  – workingDirectoryForHarness for the run
  */
 export async function setupAgentCrons(
   workflow: WorkflowSpec,
+  runId: string,
   options: SetupAgentCronsOptions = {},
 ): Promise<void> {
   const staggerBaseMs = 60_000; // 1 minute per agent
@@ -1366,35 +1248,32 @@ export async function setupAgentCrons(
     const agent = workflow.agents[i];
     const staggerMs = i * staggerBaseMs;
 
-    const fullAgentId = agent.id.startsWith(`${workflow.id}_`) ? agent.id : `${workflow.id}_${agent.id}`;
-    const defaultWorkdir = resolveWorkflowWorkspaceDir(fullAgentId);
-    const workingDirectoryForHarness = options.workingDirectoryForHarness ?? defaultWorkdir;
-
-    const existingJobId = `tamandua-${workflow.id}-${agent.id}`;
-    const existing = jobMetadata.get(existingJobId);
-    if (existing) {
-      logger.info("Cron job already exists; retaining existing scheduler instance", {
-        jobId: existing.id,
-        agentId: existing.agentId,
-        requestedWorkingDirectoryForHarness: workingDirectoryForHarness,
+    const jobId = buildJobId(workflow.id, runId, agent.id);
+    if (jobMetadata.has(jobId)) {
+      logger.info("Run-scoped cron job already exists; skipping", {
+        jobId,
+        runId,
+        agentId: agent.id,
       });
       continue;
     }
 
     const result = await createAgentCronJob({
       workflowId: workflow.id,
+      runId,
       agent,
       workflow,
       intervalMinutes: workflow.polling?.timeoutSeconds
         ? Math.max(1, Math.ceil(workflow.polling.timeoutSeconds / 60))
         : 5,
       staggerOffsetMs: staggerMs,
-      workingDirectoryForHarness,
+      workingDirectoryForHarness: options.workingDirectoryForHarness,
     });
 
     if (!result.ok) {
       logger.warn("Failed to set up cron for agent", {
         agentId: agent.id,
+        runId,
         error: result.error,
       });
     }
@@ -1402,80 +1281,77 @@ export async function setupAgentCrons(
 }
 
 /**
- * Remove all cron jobs for a given workflow.
+ * Remove all polling jobs for a given runId. Terminates any in-flight
+ * pi process group for the run as well.
  */
-export async function removeAgentCrons(workflowId: string): Promise<void> {
-  const prefix = `tamandua-${workflowId}-`;
-  const toRemove: string[] = [];
+export async function removeRunCrons(runId: string): Promise<void> {
+  const removed: string[] = [];
 
-  for (const [id, timer] of activeTimers) {
-    if (id.startsWith(prefix)) {
+  for (const [id, info] of jobMetadata) {
+    if (info.runId !== runId) continue;
+
+    const pending = pendingStartTimers.get(id);
+    if (pending) {
+      clearTimeout(pending);
+      pendingStartTimers.delete(id);
+    }
+
+    const timer = activeTimers.get(id);
+    if (timer) {
       clearInterval(timer);
       activeTimers.delete(id);
-      jobMetadata.delete(id);
-      toRemove.push(id);
     }
+
+    const child = inFlightChildren.get(id);
+    if (child && !child.killed) {
+      child.killed = true;
+      // Terminate the entire process group: SIGTERM, then SIGKILL after 5s.
+      if (child.pgid) {
+        safeKillPgid(child.pgid, "SIGTERM");
+        setTimeout(() => safeKillPgid(child.pgid, "SIGKILL"), 5000).unref();
+      }
+    }
+    inFlightChildren.delete(id);
+    inFlightJobs.delete(id);
+    jobMetadata.delete(id);
+    removed.push(id);
   }
 
-  if (toRemove.length > 0) {
-    persistJobs();
-    logger.info("Removed agent crons", { workflowId, count: toRemove.length, jobIds: toRemove });
+  if (removed.length > 0) {
+    logger.info("Removed run-scoped crons", { runId, count: removed.length, jobIds: removed });
   }
 }
 
 /**
- * Ensure crons are set up for a workflow.
- * Idempotent — will not duplicate existing jobs.
+ * Workflow-wide teardown: remove all jobs for any run of this workflow.
+ * Used by tests / shutdown paths. Run-scoped removal is preferred.
  */
-export async function ensureWorkflowCrons(
-  workflow: WorkflowSpec,
-  options: SetupAgentCronsOptions = {},
-): Promise<void> {
-  for (const agent of workflow.agents) {
-    const id = `tamandua-${workflow.id}-${agent.id}`;
-
-    const fullAgentId = agent.id.startsWith(`${workflow.id}_`) ? agent.id : `${workflow.id}_${agent.id}`;
-    const defaultWorkdir = resolveWorkflowWorkspaceDir(fullAgentId);
-    const workingDirectoryForHarness = options.workingDirectoryForHarness ?? defaultWorkdir;
-
-    const existing = jobMetadata.get(id);
-    if (existing) {
-      continue;
-    }
-
-    await createAgentCronJob({
-      workflowId: workflow.id,
-      agent,
-      workflow,
-      intervalMinutes: 5,
-      workingDirectoryForHarness,
-    });
+export async function removeAgentCrons(workflowId: string): Promise<void> {
+  const seenRunIds = new Set<string>();
+  for (const info of jobMetadata.values()) {
+    if (info.workflowId === workflowId) seenRunIds.add(info.runId);
   }
-
-  persistJobs();
+  for (const runId of seenRunIds) {
+    await removeRunCrons(runId);
+  }
 }
 
 /**
- * Tear down workflow crons if the workflow has no active runs.
- * Inspects via DB: if no runs with status 'running' or 'paused', remove crons.
+ * @deprecated The new run-scoped scheduler tears down via removeRunCrons.
+ * This thin wrapper exists for back-compat with step-ops fire-and-forget calls.
  */
 export async function teardownWorkflowCronsIfIdle(workflowId: string): Promise<void> {
   try {
-    // Dynamic import to keep the scheduler decoupled from db at module level
     const { getDb } = await import("../db.js");
     const db = getDb();
-
     const activeRuns = db
       .prepare("SELECT COUNT(*) AS cnt FROM runs WHERE workflow_id = ? AND status IN ('running', 'paused')")
       .get(workflowId) as { cnt: number } | undefined;
 
     const count = activeRuns?.cnt ?? 0;
-
     if (count === 0) {
       logger.info("Workflow idle — tearing down crons", { workflowId });
       await removeAgentCrons(workflowId);
-    } else {
-      logger.info("Workflow has active runs — keeping crons", { workflowId, activeRuns: count });
     }
   } catch (err) {
     logger.warn("Failed to check idle status for teardown", {
@@ -1490,98 +1366,18 @@ export async function teardownWorkflowCronsIfIdle(workflowId: string): Promise<v
  */
 export async function listCronJobs(): Promise<{
   ok: boolean;
-  jobs?: Array<{ id: string; name: string }>;
+  jobs?: Array<{ id: string; runId: string; agentId: string }>;
 }> {
-  const jobs: Array<{ id: string; name: string }> = [];
-
+  const jobs: Array<{ id: string; runId: string; agentId: string }> = [];
   for (const [id, info] of jobMetadata) {
-    jobs.push({ id, name: info.name });
+    jobs.push({ id, runId: info.runId, agentId: info.agentId });
   }
-
   return { ok: true, jobs };
 }
 
 /**
- * Delete agent cron jobs matching a name prefix.
- */
-export async function deleteAgentCronJobs(namePrefix: string): Promise<void> {
-  const toRemove: string[] = [];
-
-  for (const [id, timer] of activeTimers) {
-    const info = jobMetadata.get(id);
-    if (info && info.name.startsWith(namePrefix)) {
-      clearInterval(timer);
-      activeTimers.delete(id);
-      jobMetadata.delete(id);
-      toRemove.push(id);
-    }
-  }
-
-  if (toRemove.length > 0) {
-    persistJobs();
-    logger.info("Deleted agent cron jobs", { prefix: namePrefix, count: toRemove.length });
-  }
-}
-
-/**
- * Resume persisted jobs after a process restart.
- * Call this once during tamandua startup.
- */
-export async function resumePersistedCrons(workflows: WorkflowSpec[]): Promise<void> {
-  const persisted = loadPersistedJobs();
-  if (persisted.length === 0) return;
-
-  logger.info("Resuming persisted cron jobs", { count: persisted.length });
-
-  const workflowMap = new Map(workflows.map((w) => [w.id, w]));
-
-  for (const job of persisted) {
-    // Skip if already running
-    if (activeTimers.has(job.id)) continue;
-
-    // Backward compatibility with older persisted cron metadata.
-    if (!job.workingDirectoryForHarness && job.workdir) {
-      job.workingDirectoryForHarness = job.workdir;
-    }
-
-    const workflow = workflowMap.get(job.workflowId);
-    if (!workflow) {
-      logger.warn("Workflow not found for persisted cron job — skipping", {
-        jobId: job.id,
-        workflowId: job.workflowId,
-      });
-      continue;
-    }
-
-    const agent = workflow.agents.find(
-      (a) => a.id === job.agentId || `${job.workflowId}_${a.id}` === job.agentId,
-    );
-    if (!agent) {
-      logger.warn("Agent not found in workflow for persisted cron job — skipping", {
-        jobId: job.id,
-        agentId: job.agentId,
-      });
-      continue;
-    }
-
-    const intervalMs = job.intervalMinutes * 60 * 1000;
-    const timer = setInterval(() => {
-      executePollingRound(job, agent, workflow).catch((err) => {
-        logger.error("Unhandled polling error", { jobId: job.id, error: String(err) });
-      });
-    }, intervalMs);
-
-    activeTimers.set(job.id, timer);
-    jobMetadata.set(job.id, job);
-
-    logger.info("Resumed cron job", { id: job.id, agentId: job.agentId });
-  }
-
-  persistJobs();
-}
-
-/**
- * Gracefully shut down all cron jobs.
+ * Gracefully shut down all cron jobs (and terminate any in-flight pi
+ * process groups). Used by tests and daemon SIGTERM.
  */
 export function shutdownAllCrons(): void {
   let count = 0;
@@ -1590,8 +1386,51 @@ export function shutdownAllCrons(): void {
     activeTimers.delete(id);
     count++;
   }
+  for (const [id, timer] of pendingStartTimers) {
+    clearTimeout(timer);
+    pendingStartTimers.delete(id);
+    count++;
+  }
+  for (const [id, child] of inFlightChildren) {
+    if (!child.killed && child.pgid) {
+      child.killed = true;
+      safeKillPgid(child.pgid, "SIGTERM");
+      setTimeout(() => safeKillPgid(child.pgid, "SIGKILL"), 5000).unref();
+    }
+  }
+  inFlightChildren.clear();
+  inFlightJobs.clear();
   jobMetadata.clear();
   if (count > 0) {
     logger.info("Shut down all cron jobs", { count });
   }
+}
+
+/** @internal — exposed for daemon reconciler. */
+export function _scheduledRunIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const info of jobMetadata.values()) ids.add(info.runId);
+  return ids;
+}
+
+/** @internal — exposed for daemon reconciler. */
+export function _hasRunScheduled(runId: string): boolean {
+  for (const info of jobMetadata.values()) {
+    if (info.runId === runId) return true;
+  }
+  return false;
+}
+
+/** @internal — exposed for daemon admission/capacity checks. */
+export function _scheduledJobCount(): number {
+  return jobMetadata.size;
+}
+
+/** @internal — exposed for daemon admission/capacity checks. */
+export function _scheduledJobCountForRun(runId: string): number {
+  let count = 0;
+  for (const info of jobMetadata.values()) {
+    if (info.runId === runId) count++;
+  }
+  return count;
 }

@@ -136,31 +136,15 @@ export async function installMedicCron(): Promise<{ ok: boolean; error?: string 
     // best-effort — medic can still run even without agent provisioning
   }
 
-  // Schedule the medic agent via agent-scheduler
-  try {
-    const medicAgent = {
-      id: MEDIC_AGENT_ID,
-      name: "Tamandua Medic",
-      description: "Health watchdog for tamandua workflow runs",
-      role: "analysis" as const,
-      model: "default",
-      pollingModel: "default",
-      timeoutSeconds: 120,
-      workspace: {
-        baseDir: path.join(os.homedir(), ".tamandua", "workspaces", MEDIC_AGENT_ID),
-        files: {},
-      },
-    };
-
-    await createAgentCronJob({
-      workflowId: "tamandua-medic",
-      agent: medicAgent,
-      intervalMinutes: MEDIC_INTERVAL_MINUTES,
-    });
-  } catch (err) {
-    // Non-fatal: medic cron config is written, scheduling can be retried
-    console.warn("Failed to schedule medic via agent-scheduler:", (err as Error).message);
-  }
+  // Polling jobs are now coupled to a runId. The medic isn't tied to any
+  // run — it's a global health watchdog —
+  // and the previous polling-round wiring was effectively a no-op anyway
+  // (the standard polling prompt would peek for steps that medic never
+  // claims). The medic config + agent provisioning above is preserved
+  // so `tamandua medic run` and dashboard checks keep working; a future
+  // commit can attach the medic to its own non-run-scoped scheduler.
+  void createAgentCronJob;
+  void MEDIC_INTERVAL_MINUTES;
 
   return { ok: true };
 }

@@ -45,13 +45,15 @@ Harness working directory guidance:
 
 Always execute step commands in this order:
 
-1. `tamandua step peek <agent-id>`
-2. If result is `HAS_WORK`, run `tamandua step claim <agent-id>`
+1. `tamandua step peek <agent-id> --run-id <run-id>`
+2. If result is `HAS_WORK`, run `tamandua step claim <agent-id> --run-id <run-id>`
 3. Parse claim JSON: `{"stepId":"...","runId":"...","input":"..."}`
 4. **SAVE `stepId` immediately** and execute the `input` task
 5. Report with the saved step id:
    - Success: `tamandua step complete <stepId>` (send status output through stdin)
    - Failure: `tamandua step fail <stepId> "<reason>"`
+
+Use the run ID supplied by your scheduler prompt or workflow context. `step peek` and `step claim` require `--run-id` so agents serving concurrent runs cannot claim each other's work.
 
 Never call `step complete` or `step fail` with an agent ID. They require the claimed step UUID.
 
@@ -89,11 +91,11 @@ Recovery pattern for tool-calling models:
 
 ```bash
 # Phase 1: Peek
-tamandua step peek feature-dev_developer
+tamandua step peek feature-dev_developer --run-id 7aeb4da9-1111-4222-8333-abcdefabcdef
 # -> NO_WORK (stop) OR HAS_WORK (continue)
 
 # Phase 2: Claim
-tamandua step claim feature-dev_developer
+tamandua step claim feature-dev_developer --run-id 7aeb4da9-1111-4222-8333-abcdefabcdef
 # -> {"stepId":"87409f73-...","runId":"7aeb4da9-...","input":"Implement ..."}
 # Save stepId=87409f73-...
 

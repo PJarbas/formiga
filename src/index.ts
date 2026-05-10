@@ -14,9 +14,10 @@ export { ensureCliSymlink, isCliSymlinked, removeCliSymlink } from "./installer/
 export {
   setupAgentCrons,
   removeAgentCrons,
-  ensureWorkflowCrons,
+  removeRunCrons,
   teardownWorkflowCronsIfIdle,
   createAgentCronJob,
+  shutdownAllCrons,
 } from "./installer/agent-scheduler.js";
 
 // Step ops

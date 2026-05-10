@@ -2,19 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-const DB_DIR = path.join(os.homedir(), ".tamandua");
-const DB_PATH = path.join(DB_DIR, "tamandua.db");
-
 let _db: DatabaseSync | null = null;
 let _dbOpenedAt = 0;
+let _dbPath: string | null = null;
 const DB_MAX_AGE_MS = 5000;
 
 // Dynamic import to avoid top-level await issues in non-Node22 environments
 import { DatabaseSync } from "node:sqlite";
 
+function resolveDbPath(): string {
+  const explicit = process.env.TAMANDUA_DB_PATH?.trim();
+  if (explicit) return path.resolve(explicit);
+
+  return path.join(os.homedir(), ".tamandua", "tamandua.db");
+}
+
 export function getDb(): DatabaseSync {
   const now = Date.now();
-  if (_db && (now - _dbOpenedAt) < DB_MAX_AGE_MS) return _db;
+  const dbPath = resolveDbPath();
+  if (_db && _dbPath === dbPath && (now - _dbOpenedAt) < DB_MAX_AGE_MS) return _db;
   // Only close if the ref is non-null (avoid double-close warnings)
   if (_db) {
     try {
@@ -25,8 +31,9 @@ export function getDb(): DatabaseSync {
     _db = null;
   }
 
-  fs.mkdirSync(DB_DIR, { recursive: true });
-  _db = new DatabaseSync(DB_PATH);
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  _db = new DatabaseSync(dbPath);
+  _dbPath = dbPath;
   _dbOpenedAt = now;
   _db.exec("PRAGMA journal_mode=WAL");
   _db.exec("PRAGMA foreign_keys=ON");
@@ -104,6 +111,32 @@ function migrate(db: DatabaseSync): void {
   }
 
   db.exec("UPDATE runs SET tokens_spent = 0 WHERE tokens_spent IS NULL");
+
+  // ── Run-scoped scheduling metadata ──
+  // - scheduling_status: lifecycle of daemon-side scheduling for the run
+  //   (pending_register | active | queued | paused | error | NULL)
+  // - scheduling_requested_at: ISO ts used for FIFO admission ordering
+  // - scheduling_error: human-readable reason when scheduling_status='error'
+  if (!runColNames.has("scheduling_status")) {
+    db.exec("ALTER TABLE runs ADD COLUMN scheduling_status TEXT");
+  }
+  if (!runColNames.has("scheduling_requested_at")) {
+    db.exec("ALTER TABLE runs ADD COLUMN scheduling_requested_at TEXT");
+  }
+  if (!runColNames.has("scheduling_error")) {
+    db.exec("ALTER TABLE runs ADD COLUMN scheduling_error TEXT");
+  }
+
+  // Indexes for run-scoped scheduling and step claim queries.
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_steps_agent_run_status ON steps(agent_id, run_id, status)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_runs_status_sched ON runs(status, scheduling_status, scheduling_requested_at)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_runs_sched_queue ON runs(scheduling_status, scheduling_requested_at, created_at)",
+  );
 }
 
 export function nextRunNumber(): number {
@@ -113,5 +146,5 @@ export function nextRunNumber(): number {
 }
 
 export function getDbPath(): string {
-  return DB_PATH;
+  return resolveDbPath();
 }

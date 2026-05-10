@@ -130,7 +130,7 @@ describe("peekStep - lightweight work check", () => {
   it("returns NO_WORK when agent has no steps at all", async () => {
     // Fresh import to pick up new DB path
     const { peekStep } = await import("../dist/installer/step-ops.js");
-    const result = peekStep("nonexistent-agent");
+    const result = peekStep("nonexistent-agent", crypto.randomUUID());
     assert.equal(result, "NO_WORK");
   });
 });
@@ -152,13 +152,14 @@ describe("peekStep logic (direct DB validation)", () => {
       "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'triage', 'bug-fix-github-pr_triager', 0, '', '', 'done', ?, ?)"
     ).run(crypto.randomUUID(), runId, t, t);
 
-    // peekStep query: count pending/waiting steps for this agent in running runs
+    // peekStep query (run-scoped): count 'pending' steps for this agent in this run
     const row = db.prepare(
       `SELECT COUNT(*) as cnt FROM steps s
        JOIN runs r ON r.id = s.run_id
-       WHERE s.agent_id = 'bug-fix-github-pr_triager' AND s.status IN ('pending', 'waiting')
+       WHERE s.agent_id = 'bug-fix-github-pr_triager' AND s.run_id = ?
+         AND s.status = 'pending'
          AND r.status = 'running'`
-    ).get() as { cnt: number };
+    ).get(runId) as { cnt: number };
 
     assert.equal(row.cnt, 0, "Done step should NOT count as pending work");
   });
@@ -179,9 +180,10 @@ describe("peekStep logic (direct DB validation)", () => {
     const row = db.prepare(
       `SELECT COUNT(*) as cnt FROM steps s
        JOIN runs r ON r.id = s.run_id
-       WHERE s.agent_id = 'bug-fix-github-pr_fixer' AND s.status IN ('pending', 'waiting')
+       WHERE s.agent_id = 'bug-fix-github-pr_fixer' AND s.run_id = ?
+         AND s.status = 'pending'
          AND r.status = 'running'`
-    ).get() as { cnt: number };
+    ).get(runId) as { cnt: number };
 
     assert.ok(row.cnt > 0, "Pending step should count as work");
   });
@@ -202,9 +204,10 @@ describe("peekStep logic (direct DB validation)", () => {
     const row = db.prepare(
       `SELECT COUNT(*) as cnt FROM steps s
        JOIN runs r ON r.id = s.run_id
-       WHERE s.agent_id = 'bug-fix-github-pr_fixer' AND s.status IN ('pending', 'waiting')
+       WHERE s.agent_id = 'bug-fix-github-pr_fixer' AND s.run_id = ?
+         AND s.status = 'pending'
          AND r.status = 'running'`
-    ).get() as { cnt: number };
+    ).get(runId) as { cnt: number };
 
     assert.equal(row.cnt, 0, "Failed run should not show work");
   });
@@ -234,19 +237,21 @@ describe("peekStep logic (direct DB validation)", () => {
       ).run(crypto.randomUUID(), runId, a.stepId, a.agentId, a.index, a.status, t, t);
     }
 
-    // Check each agent
+    // Check each agent. Run-scoped peek matches 'pending' only — 'waiting'
+    // steps are still upstream-blocked.
     for (const a of agents) {
       const row = db.prepare(
         `SELECT COUNT(*) as cnt FROM steps s
          JOIN runs r ON r.id = s.run_id
-         WHERE s.agent_id = ? AND s.status IN ('pending', 'waiting')
+         WHERE s.agent_id = ? AND s.run_id = ?
+           AND s.status = 'pending'
            AND r.status = 'running'`
-      ).get(a.agentId) as { cnt: number };
+      ).get(a.agentId, runId) as { cnt: number };
 
-      if (a.status === "done") {
-        assert.equal(row.cnt, 0, `${a.agentId} (done) should have NO_WORK`);
-      } else {
+      if (a.status === "pending") {
         assert.ok(row.cnt > 0, `${a.agentId} (${a.status}) should have HAS_WORK`);
+      } else {
+        assert.equal(row.cnt, 0, `${a.agentId} (${a.status}) should have NO_WORK`);
       }
     }
   });

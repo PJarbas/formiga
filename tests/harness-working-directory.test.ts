@@ -6,12 +6,18 @@ import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
 
 const repoRoot = process.cwd();
+let nextControlPort = 34339;
+let nextDashboardPort = 35339;
 
 function createTempHome() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-harness-cwd-"));
   const homeDir = path.join(root, "home");
-  fs.mkdirSync(homeDir, { recursive: true });
-  return { root, homeDir };
+  const tamanduaDir = path.join(homeDir, ".tamandua");
+  fs.mkdirSync(tamanduaDir, { recursive: true });
+  const controlPort = nextControlPort++;
+  const dashboardPort = nextDashboardPort++;
+  fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
+  return { root, homeDir, controlPort, dashboardPort };
 }
 
 function writeMinimalWorkflow(homeDir: string, workflowId: string): void {
@@ -65,7 +71,7 @@ function runNodeScript(script: string, env: Record<string, string>) {
 }
 
 describe("working-directory-for-harness", () => {
-  it("runWorkflow persists and applies explicit workingDirectoryForHarness", () => {
+  it("runWorkflow persists explicit workingDirectoryForHarness in run context and scheduler job metadata", () => {
     const temp = createTempHome();
 
     try {
@@ -77,11 +83,31 @@ describe("working-directory-for-harness", () => {
 
       const result = runNodeScript(
         `
-          import fs from "node:fs";
-          import path from "node:path";
           import { runWorkflow } from "./dist/installer/run.js";
           import { getDb } from "./dist/db.js";
           import { shutdownAllCrons } from "./dist/installer/agent-scheduler.js";
+          import { stopDaemon } from "./dist/server/daemonctl.js";
+          import { readDaemonSecret, getControlPort } from "./dist/server/control-server.js";
+          import http from "node:http";
+
+          async function daemonJobs() {
+            const secret = readDaemonSecret();
+            return await new Promise((resolve, reject) => {
+              const req = http.request({
+                hostname: "127.0.0.1",
+                port: getControlPort(),
+                path: "/control/jobs",
+                method: "GET",
+                headers: secret ? { "x-tamandua-secret": secret } : {},
+              }, (res) => {
+                const chunks = [];
+                res.on("data", (chunk) => chunks.push(chunk));
+                res.on("end", () => resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8"))));
+              });
+              req.on("error", reject);
+              req.end();
+            });
+          }
 
           try {
             const started = await runWorkflow({
@@ -91,29 +117,37 @@ describe("working-directory-for-harness", () => {
             });
 
             const db = getDb();
-            const row = db.prepare("SELECT context FROM runs WHERE id = ?").get(started.runId);
+            const row = db.prepare("SELECT context, scheduling_status FROM runs WHERE id = ?").get(started.runId);
             const context = JSON.parse(row.context);
-            const cronJobs = JSON.parse(fs.readFileSync(path.join(process.env.HOME, ".tamandua", "cron-jobs.json"), "utf-8"));
+            const jobs = await daemonJobs();
+            const job = (jobs.jobs ?? []).find((j) => j.runId === started.runId);
 
             console.log(JSON.stringify({
               resultDir: started.workingDirectoryForHarness,
               contextDir: context.working_directory_for_harness,
-              cronDir: cronJobs[0]?.workingDirectoryForHarness ?? cronJobs[0]?.workdir ?? null,
+              schedulingStatus: row.scheduling_status,
+              hasJob: Boolean(job),
+              jobRunId: job?.runId ?? null,
+              jobAgentId: job?.agentId ?? null,
             }));
           } finally {
             shutdownAllCrons();
+            stopDaemon();
           }
         `,
         {
           HOME: temp.homeDir,
           HARNESS_DIR: harnessDir,
+          TAMANDUA_CONTROL_PORT: String(temp.controlPort),
         },
       );
 
       const expected = path.resolve(harnessDir);
       assert.equal(result.resultDir, expected);
       assert.equal(result.contextDir, expected);
-      assert.equal(result.cronDir, expected);
+      assert.equal(result.schedulingStatus, "active");
+      assert.equal(result.hasJob, true);
+      assert.equal(result.jobAgentId, `${"harness-explicit"}_dev`);
     } finally {
       fs.rmSync(temp.root, { recursive: true, force: true });
     }
@@ -128,11 +162,10 @@ describe("working-directory-for-harness", () => {
 
       const result = runNodeScript(
         `
-          import fs from "node:fs";
-          import path from "node:path";
           import { runWorkflow } from "./dist/installer/run.js";
           import { getDb } from "./dist/db.js";
           import { shutdownAllCrons } from "./dist/installer/agent-scheduler.js";
+          import { stopDaemon } from "./dist/server/daemonctl.js";
 
           try {
             const started = await runWorkflow({
@@ -143,20 +176,20 @@ describe("working-directory-for-harness", () => {
             const db = getDb();
             const row = db.prepare("SELECT context FROM runs WHERE id = ?").get(started.runId);
             const context = JSON.parse(row.context);
-            const cronJobs = JSON.parse(fs.readFileSync(path.join(process.env.HOME, ".tamandua", "cron-jobs.json"), "utf-8"));
 
             console.log(JSON.stringify({
               cwd: process.cwd(),
               resultDir: started.workingDirectoryForHarness,
               contextDir: context.working_directory_for_harness,
-              cronDir: cronJobs[0]?.workingDirectoryForHarness ?? cronJobs[0]?.workdir ?? null,
             }));
           } finally {
             shutdownAllCrons();
+            stopDaemon();
           }
         `,
         {
           HOME: temp.homeDir,
+          TAMANDUA_CONTROL_PORT: String(temp.controlPort),
         },
       );
 
@@ -164,7 +197,6 @@ describe("working-directory-for-harness", () => {
       assert.equal(result.cwd, expected);
       assert.equal(result.resultDir, expected);
       assert.equal(result.contextDir, expected);
-      assert.equal(result.cronDir, expected);
     } finally {
       fs.rmSync(temp.root, { recursive: true, force: true });
     }

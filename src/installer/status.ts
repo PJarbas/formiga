@@ -1,5 +1,7 @@
 import { getDb } from "../db.js";
 import { scheduleRunCronTeardown } from "./step-ops.js";
+import { removeRunCrons } from "./agent-scheduler.js";
+import { terminateRunWithDaemon } from "../server/control-client.js";
 
 export interface RunInfo {
   id: string;
@@ -117,7 +119,7 @@ export function listRuns(limit = 50): RunInfo[] {
  * Cancel a running workflow.
  * Sets the run status to 'canceled' and tears down cron jobs.
  */
-export function stopWorkflow(runId: string): { ok: boolean; runId: string } {
+export async function stopWorkflow(runId: string): Promise<{ ok: boolean; runId: string }> {
   const db = getDb();
 
   const run = db
@@ -139,12 +141,21 @@ export function stopWorkflow(runId: string): { ok: boolean; runId: string } {
     "UPDATE steps SET status = 'canceled', updated_at = datetime('now') WHERE run_id = ? AND status IN ('waiting', 'pending', 'running')",
   ).run(runId);
 
-  // Mark the run as canceled
+  // Mark the run as canceled and clear scheduling status (terminal runs
+  // never carry a scheduling_status).
   db.prepare(
-    "UPDATE runs SET status = 'canceled', updated_at = datetime('now') WHERE id = ?",
+    "UPDATE runs SET status = 'canceled', scheduling_status = NULL, updated_at = datetime('now') WHERE id = ?",
   ).run(runId);
 
-  // Tear down cron jobs
+  // Tear down run-scoped cron jobs in this process (best-effort), and
+  // notify the daemon so it tears down its own timers too. The daemon
+  // reconciler will catch any drift on the next tick if either fails.
+  await Promise.allSettled([
+    removeRunCrons(runId),
+    terminateRunWithDaemon(runId),
+  ]);
+
+  // Workflow-wide idle teardown for back-compat (legacy callers).
   scheduleRunCronTeardown(runId);
 
   return { ok: true, runId };

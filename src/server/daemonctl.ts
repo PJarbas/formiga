@@ -20,7 +20,9 @@ const TAMANDUA_DIR = path.join(os.homedir(), ".tamandua");
 const PID_FILE = path.join(TAMANDUA_DIR, "tamandua.pid");
 const PORT_FILE = path.join(TAMANDUA_DIR, "port");
 const LOG_FILE = path.join(TAMANDUA_DIR, "dashboard.log");
+const START_LOCK_FILE = path.join(TAMANDUA_DIR, "daemon-start.lock");
 const STARTUP_ERROR_TAIL_LINES = 20;
+const START_LOCK_STALE_MS = 30_000;
 
 // ── MCP file paths ─────────────────────────────────────────────────
 
@@ -73,7 +75,7 @@ export function readPort(): number {
   } catch {
     // File doesn't exist or is invalid
   }
-  return 3333; // default
+  return 3334; // default
 }
 
 export function writePort(port: number): void {
@@ -111,6 +113,66 @@ function checkPidFile(pidFile: string): { running: true; pid: number } | { runni
     }
     return { running: false };
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function acquireStartLock(lockFile: string): number | null {
+  try {
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+    return fs.openSync(lockFile, "wx", 0o600);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST") throw err;
+
+    try {
+      const stat = fs.statSync(lockFile);
+      if (Date.now() - stat.mtimeMs > START_LOCK_STALE_MS) {
+        fs.unlinkSync(lockFile);
+        return fs.openSync(lockFile, "wx", 0o600);
+      }
+    } catch {
+      try {
+        return fs.openSync(lockFile, "wx", 0o600);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function releaseStartLock(fd: number | null, lockFile: string): void {
+  if (fd === null) return;
+  try { fs.closeSync(fd); } catch { /* ignore */ }
+  try { fs.unlinkSync(lockFile); } catch { /* ignore */ }
+}
+
+async function waitForDaemonPid(
+  pidFile: string,
+  portFile: string,
+  requestedPort: number,
+  timeoutMs = 10_000,
+): Promise<{ pid: number; port: number } | null> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = checkPidFile(pidFile);
+    if (status.running) {
+      let existingPort = requestedPort;
+      try {
+        const raw = fs.readFileSync(portFile, "utf-8").trim();
+        const p = parseInt(raw, 10);
+        if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
+      } catch {
+        // Use requested port.
+      }
+      return { pid: status.pid, port: existingPort };
+    }
+    await sleep(100);
+  }
+  return null;
 }
 
 /**
@@ -164,17 +226,18 @@ export interface StartOptions {
  *
  * If the daemon is already running, returns its info without restarting.
  *
- * @param port  Dashboard port (default 3333).
+ * @param port  Dashboard port (default 3334).
  * @param opts  When keepHandle is true, returns the ChildProcess handle.
  */
 export async function startDaemon(port?: number): Promise<{ pid: number; port: number }>;
 export async function startDaemon(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
-export async function startDaemon(port = 3333, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
+export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
   // When homeDir is set, compute isolated paths for all filesystem operations.
   const tamanduaDir = opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : TAMANDUA_DIR;
   const pidFile = opts?.homeDir ? path.join(tamanduaDir, "tamandua.pid") : PID_FILE;
   const portFile = opts?.homeDir ? path.join(tamanduaDir, "port") : PORT_FILE;
   const logFile = opts?.homeDir ? path.join(tamanduaDir, "dashboard.log") : LOG_FILE;
+  const lockFile = opts?.homeDir ? path.join(tamanduaDir, "daemon-start.lock") : START_LOCK_FILE;
 
   const status = checkPidFile(pidFile);
   if (status.running) {
@@ -190,47 +253,71 @@ export async function startDaemon(port = 3333, opts?: StartOptions): Promise<{ p
   }
 
   fs.mkdirSync(tamanduaDir, { recursive: true });
-  fs.writeFileSync(portFile, String(port), "utf-8");
-
-  const out = fs.openSync(logFile, "a");
-  const errFd = fs.openSync(logFile, "a");
-
-  const daemonScript = path.resolve(__dirname, "daemon.js");
-  const spawnOpts: Parameters<typeof spawn>[2] = {
-    detached: true,
-    stdio: ["ignore", out, errFd],
-  };
-  if (opts?.homeDir) {
-    spawnOpts.env = { ...process.env, HOME: opts.homeDir };
-  }
-  const child = spawn("node", [daemonScript, String(port)], spawnOpts);
-
-  if (opts?.keepHandle) {
-    // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
-    // Don't unref — the handle keeps the event loop alive, which is fine
-    // because the caller is responsible for killing the child.
-  } else {
-    child.unref();
+  const lockFd = acquireStartLock(lockFile);
+  if (lockFd === null) {
+    const existing = await waitForDaemonPid(pidFile, portFile, port);
+    if (existing) return existing;
+    throw new Error("Timed out waiting for another daemon start attempt to finish.");
   }
 
-  // Wait briefly for the daemon to start and write its PID file
-  await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-
-  const check = checkPidFile(pidFile);
-  if (!check.running) {
-    const logTail = readLogTail(logFile);
-    if (logTail) {
-      throw new Error(`Daemon failed to start. Recent daemon log:\n${logTail}`);
+  try {
+    const recheck = checkPidFile(pidFile);
+    if (recheck.running) {
+      let existingPort = port;
+      try {
+        const raw = fs.readFileSync(portFile, "utf-8").trim();
+        const p = parseInt(raw, 10);
+        if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
+      } catch {
+        // Use requested port.
+      }
+      return { pid: recheck.pid, port: existingPort };
     }
 
-    throw new Error("Daemon failed to start. Check " + logFile);
-  }
+    fs.writeFileSync(portFile, String(port), "utf-8");
 
-  if (opts?.keepHandle) {
-    return { pid: check.pid, port, child };
-  }
+    const out = fs.openSync(logFile, "a");
+    const errFd = fs.openSync(logFile, "a");
 
-  return { pid: check.pid, port };
+    const daemonScript = path.resolve(__dirname, "daemon.js");
+    const spawnOpts: Parameters<typeof spawn>[2] = {
+      detached: true,
+      stdio: ["ignore", out, errFd],
+    };
+    if (opts?.homeDir) {
+      spawnOpts.env = { ...process.env, HOME: opts.homeDir };
+    }
+    const child = spawn("node", [daemonScript, String(port)], spawnOpts);
+
+    if (opts?.keepHandle) {
+      // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
+      // Don't unref — the handle keeps the event loop alive, which is fine
+      // because the caller is responsible for killing the child.
+    } else {
+      child.unref();
+    }
+
+    // Wait briefly for the daemon to start and write its PID file
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+
+    const check = checkPidFile(pidFile);
+    if (!check.running) {
+      const logTail = readLogTail(logFile);
+      if (logTail) {
+        throw new Error(`Daemon failed to start. Recent daemon log:\n${logTail}`);
+      }
+
+      throw new Error("Daemon failed to start. Check " + logFile);
+    }
+
+    if (opts?.keepHandle) {
+      return { pid: check.pid, port, child };
+    }
+
+    return { pid: check.pid, port };
+  } finally {
+    releaseStartLock(lockFd, lockFile);
+  }
 }
 
 /**

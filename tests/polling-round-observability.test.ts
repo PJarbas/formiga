@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { executePollingRound } from "../dist/installer/agent-scheduler.js";
+import { getDb } from "../dist/db.js";
 import { logger } from "../dist/lib/logger.js";
 
 type CapturedLog = {
@@ -47,6 +49,29 @@ function captureLoggerCalls(): {
   };
 }
 
+/**
+ * Insert a synthetic running run so executePollingRound's run-status check
+ * passes. Returns a cleanup callback.
+ */
+function seedRunningRun(workflowId: string): { runId: string; cleanup: () => void } {
+  const db = getDb();
+  const runId = crypto.randomUUID();
+  const ts = new Date().toISOString();
+  db.prepare(
+    "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, ?, 'observability-test', 'running', '{}', 0, ?, ?)",
+  ).run(runId, workflowId, ts, ts);
+  return {
+    runId,
+    cleanup: () => {
+      try {
+        getDb().prepare("DELETE FROM runs WHERE id = ?").run(runId);
+      } catch {
+        /* best-effort */
+      }
+    },
+  };
+}
+
 describe("executePollingRound observability", () => {
   it("logs skip/start/complete with bounded output summaries", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-round-success-"));
@@ -63,15 +88,16 @@ describe("executePollingRound observability", () => {
     process.env.TAMANDUA_PI_BINARY = fakePi;
 
     const { calls, restore } = captureLoggerCalls();
+    const seeded = seedRunningRun("wf-observability-success");
 
     const job = {
-      id: "job-observability-success",
-      name: "wf/dev",
-      workflowId: "wf",
+      id: `job-observability-success-${seeded.runId}`,
+      workflowId: "wf-observability-success",
+      runId: seeded.runId,
       agentId: "wf_developer",
       intervalMinutes: 5,
       timeoutSeconds: 3,
-      workdir: tempDir,
+      workingDirectoryForHarness: tempDir,
       createdAt: new Date().toISOString(),
     };
 
@@ -122,6 +148,7 @@ describe("executePollingRound observability", () => {
       assert.ok((completeLog?.extra?.outputBytes as number) > (outputPreview as string).length);
     } finally {
       restore();
+      seeded.cleanup();
       if (originalPiBinary === undefined) {
         delete process.env.TAMANDUA_PI_BINARY;
       } else {
@@ -141,15 +168,16 @@ describe("executePollingRound observability", () => {
     process.env.TAMANDUA_PI_BINARY = fakePi;
 
     const { calls, restore } = captureLoggerCalls();
+    const seeded = seedRunningRun("wf-observability-heartbeat");
 
     const job = {
-      id: "job-observability-heartbeat",
-      name: "wf/dev",
-      workflowId: "wf",
+      id: `job-observability-heartbeat-${seeded.runId}`,
+      workflowId: "wf-observability-heartbeat",
+      runId: seeded.runId,
       agentId: "wf_developer",
       intervalMinutes: 5,
       timeoutSeconds: 3,
-      workdir: tempDir,
+      workingDirectoryForHarness: tempDir,
       createdAt: new Date().toISOString(),
     };
 
@@ -172,6 +200,7 @@ describe("executePollingRound observability", () => {
       assert.equal(completeLog?.extra?.outputPreview, "HEARTBEAT_OK");
     } finally {
       restore();
+      seeded.cleanup();
       if (originalPiBinary === undefined) {
         delete process.env.TAMANDUA_PI_BINARY;
       } else {
@@ -196,15 +225,16 @@ describe("executePollingRound observability", () => {
     process.env.TAMANDUA_PI_BINARY = fakePi;
 
     const { calls, restore } = captureLoggerCalls();
+    const seeded = seedRunningRun("wf-observability-fail");
 
     const job = {
-      id: "job-observability-fail",
-      name: "wf/dev",
-      workflowId: "wf",
+      id: `job-observability-fail-${seeded.runId}`,
+      workflowId: "wf-observability-fail",
+      runId: seeded.runId,
       agentId: "wf_developer",
       intervalMinutes: 5,
       timeoutSeconds: 3,
-      workdir: tempDir,
+      workingDirectoryForHarness: tempDir,
       createdAt: new Date().toISOString(),
     };
 
@@ -241,6 +271,7 @@ describe("executePollingRound observability", () => {
       assert.ok((failLog?.extra?.errorBytes as number) > (errorPreview as string).length);
     } finally {
       restore();
+      seeded.cleanup();
       if (originalPiBinary === undefined) {
         delete process.env.TAMANDUA_PI_BINARY;
       } else {

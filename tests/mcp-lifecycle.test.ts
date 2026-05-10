@@ -43,13 +43,19 @@ type CliResult = {
   stderr: string;
 };
 
-function createTempEnv(): { root: string; stateDir: string; homeDir: string } {
+let nextControlPort = 34500;
+let nextDashboardPort = 35500;
+
+function createTempEnv(): { root: string; stateDir: string; homeDir: string; controlPort: number; dashboardPort: number } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-mcp-lifecycle-"));
   const stateDir = path.join(root, "state");
   const homeDir = path.join(root, "home");
+  const tamanduaDir = path.join(homeDir, ".tamandua");
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.mkdirSync(homeDir, { recursive: true });
-  return { root, stateDir, homeDir };
+  fs.mkdirSync(tamanduaDir, { recursive: true });
+  const dashboardPort = nextDashboardPort++;
+  fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
+  return { root, stateDir, homeDir, controlPort: nextControlPort++, dashboardPort };
 }
 
 function writeMinimalWorkflow(stateDir: string, workflowId: string): void {
@@ -346,6 +352,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     try {
@@ -408,6 +415,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     try {
@@ -494,6 +502,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     try {
@@ -558,6 +567,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     try {
@@ -617,6 +627,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     try {
@@ -683,6 +694,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     try {
@@ -732,6 +744,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     // The MCP port file path in the isolated environment
@@ -832,6 +845,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     try {
@@ -907,6 +921,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(tempEnv.controlPort),
     };
 
     try {

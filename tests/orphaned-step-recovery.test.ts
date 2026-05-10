@@ -80,7 +80,7 @@ describe("recoverOrphanedStepsForAgent", () => {
 
   // ── AC 1: SIGKILL recovery — reset to pending, bump retry_count ──
   it("resets a running step to pending and bumps retry_count after SIGKILL", () => {
-    const result = recoverOrphanedStepsForAgent(TEST_AGENT_1);
+    const result = recoverOrphanedStepsForAgent(TEST_AGENT_1, testRunId);
 
     assert.equal(result.recovered, 1, "should recover 1 step");
     assert.equal(result.failed, 0, "should not fail any steps");
@@ -101,7 +101,7 @@ describe("recoverOrphanedStepsForAgent", () => {
 
   // ── AC 2: Exhausted retries → mark failed ────────────────────────
   it("marks step as failed when retry_count exceeds max_retries", () => {
-    const result = recoverOrphanedStepsForAgent(TEST_AGENT_3);
+    const result = recoverOrphanedStepsForAgent(TEST_AGENT_3, testRun2Id);
 
     assert.equal(result.failed, 1, "should fail 1 step");
     assert.equal(result.recovered, 0, "should not recover any steps");
@@ -134,7 +134,7 @@ describe("recoverOrphanedStepsForAgent", () => {
 
     // Stale threshold: 5 minutes (300,000 ms). The old step (10 min ago) should
     // be recovered, but the fresh step (updated just now) should not.
-    const result = recoverOrphanedStepsForAgent(TEST_AGENT_1, 5 * 60 * 1000);
+    const result = recoverOrphanedStepsForAgent(TEST_AGENT_1, testRunId, 5 * 60 * 1000);
 
     assert.equal(result.recovered, 1, "should recover the stale step");
 
@@ -146,7 +146,7 @@ describe("recoverOrphanedStepsForAgent", () => {
     assert.equal(step.retry_count, 2, "retry_count should be bumped again");
 
     // Verify the fresh step was NOT touched
-    const freshResult = recoverOrphanedStepsForAgent(TEST_AGENT_2, 5 * 60 * 1000);
+    const freshResult = recoverOrphanedStepsForAgent(TEST_AGENT_2, testRunId, 5 * 60 * 1000);
     assert.equal(freshResult.recovered, 0, "fresh step should NOT be recovered");
     assert.equal(freshResult.failed, 0);
     assert.equal(freshResult.skipped, 0);
@@ -154,7 +154,7 @@ describe("recoverOrphanedStepsForAgent", () => {
 
   // ── AC 4: No-op for agents with no running steps ─────────────────
   it("returns zero counts for agent with no running steps", () => {
-    const result = recoverOrphanedStepsForAgent("nonexistent-agent-xyz");
+    const result = recoverOrphanedStepsForAgent("nonexistent-agent-xyz", crypto.randomUUID());
     assert.equal(result.recovered, 0);
     assert.equal(result.failed, 0);
     assert.equal(result.skipped, 0);
@@ -183,9 +183,9 @@ describe("recoverOrphanedStepsForAgent", () => {
     ).run(tmpStepId, testRunId, TEST_AGENT_2);
 
     try {
-      // Without staleThreshold, ALL running steps for the agent are recovered
-      // regardless of how recently they were updated.
-      const result = recoverOrphanedStepsForAgent(TEST_AGENT_2);
+      // Without staleThreshold, ALL running steps for this (agent, run) tuple
+      // are recovered regardless of how recently they were updated.
+      const result = recoverOrphanedStepsForAgent(TEST_AGENT_2, testRunId);
       assert.equal(result.recovered, 2, "should recover both running steps");
       assert.equal(result.failed, 0);
     } finally {
@@ -222,7 +222,7 @@ describe("recoverOrphanedStepsForAgent", () => {
     try {
       // Execute recovery with a timeout reason
       const timeoutReason = "pi timed out after 1800000ms";
-      const result = recoverOrphanedStepsForAgent(agent, undefined, timeoutReason);
+      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, timeoutReason);
 
       assert.equal(result.recovered, 1, "should recover 1 step");
       assert.equal(result.failed, 0);
@@ -241,7 +241,7 @@ describe("recoverOrphanedStepsForAgent", () => {
       assert.equal(step.retry_count, 1);
 
       // ── Sub-test: claimStep sees timeout_retry in the resolved input ──
-      const claim = claimStep(agent);
+      const claim = claimStep(agent, runId);
       assert.ok(claim.found, "step should be claimable after recovery");
       assert.ok(claim.resolvedInput?.includes(timeoutReason),
         `resolved input should include timeout reason, got: ${claim.resolvedInput?.slice(0, 300)}`);
@@ -281,7 +281,7 @@ describe("recoverOrphanedStepsForAgent", () => {
 
     try {
       // Recovery WITHOUT a timeout reason (simulates non-timeout exit, e.g. SIGTERM)
-      const result = recoverOrphanedStepsForAgent(agent);
+      const result = recoverOrphanedStepsForAgent(agent, runId);
       assert.equal(result.recovered, 1, "should recover the step");
 
       // Context should NOT contain timeout_retry
@@ -326,7 +326,7 @@ describe("other_output recovery (clean pi exit without STATUS)", () => {
     try {
       // Simulate the other_output handler: call recoverOrphanedStepsForAgent
       // without staleThreshold or timeoutRetryReason (clean exit, not a timeout)
-      const result = recoverOrphanedStepsForAgent(agent);
+      const result = recoverOrphanedStepsForAgent(agent, runId);
 
       assert.equal(result.recovered, 1, "should recover 1 running step");
       assert.equal(result.failed, 0, "should not fail any steps");
@@ -402,7 +402,7 @@ describe("other_output recovery (clean pi exit without STATUS)", () => {
 
   // ── AC 4: other_output with no running step is a no-op ─────────
   it("recoverOrphanedStepsForAgent is a no-op when no running steps exist", () => {
-    const result = recoverOrphanedStepsForAgent("agent_with_no_claims_xyz");
+    const result = recoverOrphanedStepsForAgent("agent_with_no_claims_xyz", crypto.randomUUID());
 
     assert.equal(result.recovered, 0, "should recover 0 steps");
     assert.equal(result.failed, 0, "should fail 0 steps");
@@ -472,6 +472,7 @@ describe("autoCompleteStepIfRunning recovers wedged step on completeStep throw",
 
     const context: Record<string, unknown> = {
       jobId: "test-job",
+      runId,
       agentId: agent,
       role: "analysis",
       timeoutSeconds: 1800,
@@ -504,7 +505,7 @@ describe("autoCompleteStepIfRunning recovers wedged step on completeStep throw",
       // claimStep populates context.retry_feedback from step.output when
       // retry_count > 0, then resolves it into the input template — verify
       // the contract end-to-end by claiming and inspecting resolvedInput.
-      const claim = claimStep(agent);
+      const claim = claimStep(agent, runId);
       assert.ok(claim.found, "step must be re-claimable after recovery");
       assert.ok(claim.resolvedInput, "resolved input must be present");
       assert.match(

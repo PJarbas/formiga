@@ -100,8 +100,8 @@ function printUsage() {
     "", "tamandua dashboard [start] [--port N] Start dashboard (default: 3334)",
     "tamandua dashboard stop               Stop dashboard",
     "tamandua dashboard status             Check dashboard status",
-    "", "tamandua step peek <agent-id>         Check for pending work (HAS_WORK or NO_WORK)",
-    "tamandua step claim <agent-id>        Claim pending step (JSON output)",
+    "", "tamandua step peek <agent-id> --run-id <run-id>     Check for pending work (HAS_WORK or NO_WORK)",
+    "tamandua step claim <agent-id> --run-id <run-id>    Claim pending step (JSON output)",
     "tamandua step complete <step-id>      Complete step (reads output from stdin)",
     "tamandua step fail <step-id> <error>  Fail step with retry logic",
     "tamandua step stories <run-id>        List stories for a run",
@@ -280,8 +280,33 @@ async function main() {
   }
 
   if (group === "step") {
-    if (action === "peek") { if (!target) { process.stderr.write("Missing agent-id.\n"); process.exit(1); } console.log(peekStep(target)); return; }
-    if (action === "claim") { if (!target) { process.stderr.write("Missing agent-id.\n"); process.exit(1); } const r = claimStep(target); console.log(r.found ? JSON.stringify({ stepId: r.stepId, runId: r.runId, input: r.resolvedInput }) : "NO_WORK"); return; }
+    if (action === "peek" || action === "claim") {
+      if (!target) { process.stderr.write(`Missing agent-id.\nUsage: tamandua step ${action} <agent-id> --run-id <run-id>\n`); process.exit(1); }
+      // --run-id is required for peek/claim so concurrent runs of the same
+      // workflow + agent can't cross-claim. No implicit inference — the
+      // caller (typically the polling prompt) must pass it.
+      let runIdArg: string | undefined;
+      const remainder = args.slice(3);
+      for (let i = 0; i < remainder.length; i++) {
+        const tok = remainder[i];
+        if (tok === "--run-id") { runIdArg = remainder[i + 1]?.trim(); i++; continue; }
+        const inline = "--run-id=";
+        if (tok.startsWith(inline)) { runIdArg = tok.slice(inline.length).trim(); }
+      }
+      if (!runIdArg) {
+        process.stderr.write(
+          `Missing --run-id for step ${action}.\nUsage: tamandua step ${action} <agent-id> --run-id <run-id>\n`,
+        );
+        process.exit(1);
+      }
+      if (action === "peek") {
+        console.log(peekStep(target, runIdArg));
+        return;
+      }
+      const r = claimStep(target, runIdArg);
+      console.log(r.found ? JSON.stringify({ stepId: r.stepId, runId: r.runId, input: r.resolvedInput }) : "NO_WORK");
+      return;
+    }
     if (action === "complete") { if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); } let output = args.slice(3).join(" ").trim(); if (!output) { const chunks: Buffer[] = []; for await (const c of process.stdin) chunks.push(c); output = Buffer.concat(chunks).toString("utf-8").trim(); } console.log(JSON.stringify(completeStep(target, output))); return; }
     if (action === "fail") { if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); } console.log(JSON.stringify(await failStep(target, args.slice(3).join(" ").trim() || "Unknown error"))); return; }
     if (action === "stories") { if (!target) { process.stderr.write("Missing run-id.\n"); process.exit(1); } const fullRunId = getWorkflowStatus(target).id; const stories = getStories(fullRunId); if (stories.length === 0) { console.log("No stories found."); return; } for (const s of stories) console.log(`${s.storyId.padEnd(8)} [${s.status.padEnd(7)}] ${s.title}${s.retryCount > 0 ? ` (retry ${s.retryCount})` : ""}`); return; }
@@ -452,13 +477,15 @@ async function main() {
   }
 
   if (action === "ensure-crons") {
-    if (!target) { process.stderr.write("Missing workflow name.\n"); process.exit(1); }
-    const { loadWorkflowSpec } = await import("../installer/workflow-spec.js");
-    const { resolveWorkflowDir } = await import("../installer/paths.js");
-    const { ensureWorkflowCrons } = await import("../installer/agent-scheduler.js");
-    try { const wf = await loadWorkflowSpec(resolveWorkflowDir(target)); await ensureWorkflowCrons(wf); console.log(`Agent crons ensured for ${target}.`); }
-    catch (err) { process.stderr.write(`Failed: ${err instanceof Error ? err.message : String(err)}\n`); process.exit(1); }
-    return;
+    // Polling jobs are now tied to (runId, agentId) and admitted via the
+    // daemon control plane. There is no longer a workflow-wide
+    // "ensure-crons" notion — use `tamandua workflow run` instead
+    // (which registers the new run with the daemon).
+    process.stderr.write(
+      "`workflow ensure-crons` is removed. Run-scoped scheduling makes it obsolete \u2014 " +
+      "start a run with `tamandua workflow run <id> '<task>'`.\n",
+    );
+    process.exit(1);
   }
 
   printUsage(); process.exit(1);

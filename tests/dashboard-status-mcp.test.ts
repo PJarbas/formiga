@@ -119,10 +119,12 @@ describe("tamandua dashboard status MCP visibility", () => {
   // AC 1: Dashboard status shows MCP as independently managed
   it("shows MCP as not running when dashboard is started without MCP", async (t) => {
     const dashboardPort = await reserveRandomPort();
+    const controlPort = await reserveRandomPort();
     const tempEnv = createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(controlPort),
     };
 
     try {
@@ -153,10 +155,12 @@ describe("tamandua dashboard status MCP visibility", () => {
     }
 
     const dashboardPort = await reserveRandomPort();
+    const controlPort = await reserveRandomPort();
     const tempEnv = createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(controlPort),
     };
 
     try {
@@ -207,10 +211,12 @@ describe("tamandua dashboard status MCP visibility", () => {
   // AC 2 & 3: Dashboard HTML shows MCP status section and /api/mcp-status endpoint works
   it("dashboard HTML shows MCP status section with running/stopped state", async (t) => {
     const dashboardPort = await reserveRandomPort();
+    const controlPort = await reserveRandomPort();
     const tempEnv = createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(controlPort),
     };
 
     try {
@@ -259,9 +265,11 @@ describe("tamandua dashboard status MCP visibility", () => {
   // AC 4: install suggests tamandua mcp start
   it("tamandua install suggests MCP start when MCP is not running", async () => {
     const tempEnv = createTempEnv();
+    const controlPort = await reserveRandomPort();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(controlPort),
     };
 
     try {
@@ -281,9 +289,11 @@ describe("tamandua dashboard status MCP visibility", () => {
     }
 
     const tempEnv = createTempEnv();
+    const controlPort = await reserveRandomPort();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
+      TAMANDUA_CONTROL_PORT: String(controlPort),
     };
 
     try {

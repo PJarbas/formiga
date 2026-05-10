@@ -4,7 +4,10 @@ import path from "node:path";
 import { getDb, nextRunNumber } from "../db.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
 import { resolveWorkflowDir } from "./paths.js";
-import { setupAgentCrons } from "./agent-scheduler.js";
+import {
+  ensureDaemonControlAvailable,
+  registerRunWithDaemon,
+} from "../server/control-client.js";
 import { emitEvent } from "./events.js";
 import { advancePipeline } from "./step-ops.js";
 
@@ -54,6 +57,8 @@ export async function runWorkflow(
   const workflowDir = resolveWorkflowDir(workflowId);
   const workflow = await loadWorkflowSpec(workflowDir);
 
+  await ensureDaemonControlAvailable();
+
   const db = getDb();
   const now = new Date().toISOString();
   const runId = crypto.randomUUID();
@@ -93,11 +98,15 @@ export async function runWorkflow(
   };
   const contextJson = JSON.stringify(seededContext);
 
-  // Insert the run record
+  // Insert the run record. New runs start with
+  // scheduling_status='pending_register' so the daemon control plane
+  // (and/or reconciler) can admit them.
   db.prepare(
-    `INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, notify_url, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'running', ?, 0, ?, ?, ?)`,
-  ).run(runId, runNumber, workflowId, taskTitle, contextJson, notifyUrl ?? null, now, now);
+    `INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent,
+                       scheduling_status, scheduling_requested_at, notify_url,
+                       created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'running', ?, 0, 'pending_register', ?, ?, ?, ?)`,
+  ).run(runId, runNumber, workflowId, taskTitle, contextJson, now, notifyUrl ?? null, now, now);
 
   // Insert step records for each workflow step
   const insertStep = db.prepare(
@@ -131,17 +140,6 @@ export async function runWorkflow(
     );
   }
 
-  // Start agent cron jobs for polling
-  try {
-    await setupAgentCrons(workflow, {
-      workingDirectoryForHarness,
-    });
-  } catch (err) {
-    // Cron setup is best-effort; the workflow can still run if agents are
-    // triggered manually or via other means.
-    // Log but don't fail the run.
-  }
-
   // Emit run.started event
   emitEvent({
     ts: now,
@@ -155,6 +153,18 @@ export async function runWorkflow(
   // Without this kickoff, claimStep (which only matches 'pending') would never find
   // the first step and the run would loop forever on peek=HAS_WORK / claim=NO_WORK.
   advancePipeline(runId);
+
+  const registration = await registerRunWithDaemon(runId, 5000);
+  if (!registration || registration.status < 200 || registration.status >= 300) {
+    const message =
+      typeof registration?.body.error === "string"
+        ? registration.body.error
+        : "daemon registration failed";
+    db.prepare(
+      "UPDATE runs SET scheduling_status = 'error', scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
+    ).run(message, runId);
+    throw new Error(`Failed to register run with daemon: ${message}`);
+  }
 
   return {
     runId,
@@ -182,8 +192,13 @@ export async function resumeWorkflow(runId: string): Promise<ResumeResult> {
 
   if (!run) return { status: "not_found" };
 
-  // Reset the run to running
-  db.prepare("UPDATE runs SET status = 'running', updated_at = datetime('now') WHERE id = ?").run(run.id);
+  await ensureDaemonControlAvailable();
+
+  // Reset the run to running and request fresh scheduling admission.
+  const resumeNow = new Date().toISOString();
+  db.prepare(
+    "UPDATE runs SET status = 'running', scheduling_status = 'pending_register', scheduling_requested_at = ?, scheduling_error = NULL, updated_at = datetime('now') WHERE id = ?",
+  ).run(resumeNow, run.id);
 
   // Find the first failed step and reset it + subsequent steps
   const failedStep = db.prepare(
@@ -199,6 +214,18 @@ export async function resumeWorkflow(runId: string): Promise<ResumeResult> {
 
   // Promote the next eligible waiting step to 'pending' so polling agents can claim it.
   advancePipeline(run.id);
+
+  const registration = await registerRunWithDaemon(run.id, 5000);
+  if (!registration || registration.status < 200 || registration.status >= 300) {
+    const message =
+      typeof registration?.body.error === "string"
+        ? registration.body.error
+        : "daemon registration failed";
+    db.prepare(
+      "UPDATE runs SET scheduling_status = 'error', scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
+    ).run(message, run.id);
+    throw new Error(`Failed to register resumed run with daemon: ${message}`);
+  }
 
   return { status: "resumed", runId: run.id, workflowId: run.workflow_id, stepId: failedStep?.step_id };
 }
