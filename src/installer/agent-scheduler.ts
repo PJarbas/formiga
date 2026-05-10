@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveTamanduaCli } from "./paths.js";
+import { resolveTamanduaCli, resolveWorkflowWorkspaceDir } from "./paths.js";
 import type { WorkflowSpec, WorkflowAgent } from "./types.js";
 import { logger } from "../lib/logger.js";
 import { getRoleTimeoutSeconds, inferRole } from "./install.js";
@@ -50,6 +50,8 @@ interface InFlightChild {
   killed: boolean;
 }
 const inFlightChildren = new Map<string, InFlightChild>();
+
+const AGENT_PERSONA_FILES = ["AGENTS.md", "IDENTITY.md", "SOUL.md"] as const;
 
 export interface CronJobInfo {
   /** tamandua-${workflowId}-${runId}-${agentId} */
@@ -325,6 +327,43 @@ export async function runPi(
 
 // ── Prompt builders ─────────────────────────────────────────────────
 
+async function readOptionalPersonaFile(
+  workspaceDir: string,
+  fileName: typeof AGENT_PERSONA_FILES[number],
+): Promise<string | null> {
+  const filePath = path.join(workspaceDir, fileName);
+  try {
+    const content = await fs.promises.readFile(filePath, "utf-8");
+    const trimmed = content.trim();
+    if (trimmed.length === 0) return null;
+    return content.trimEnd();
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+async function buildAgentPersonaInstructions(agentId: string): Promise<string> {
+  const workspaceDir = resolveWorkflowWorkspaceDir(agentId);
+  const sections: string[] = [];
+
+  for (const fileName of AGENT_PERSONA_FILES) {
+    const content = await readOptionalPersonaFile(workspaceDir, fileName);
+    if (!content) continue;
+    sections.push(`### ${fileName}\n\n${content}`);
+  }
+
+  if (sections.length === 0) return "";
+
+  return [
+    "The following files are the provisioned Tamandua persona instructions for this workflow agent.",
+    "Follow them when executing claimed work. Repository-level instructions from the harness working directory still apply for repository-specific conventions.",
+    "",
+    ...sections,
+  ].join("\n\n");
+}
+
 /**
  * Build the prompt an agent gets to check for and execute work.
  *
@@ -407,12 +446,26 @@ export function buildPollingPrompt(
   workflowId: string,
   agentId: string,
   runId: string,
+  agentPersonaInstructions = "",
 ): string {
   const cli = resolveTamanduaCli();
 
-  return [
+  const persona = agentPersonaInstructions.trim();
+  const prompt = [
     `You are a polling agent for workflow "${workflowId}", agent "${agentId}", run "${runId}".`,
     `You run in --print mode. Your goal: check for work and execute it if present.`,
+  ];
+
+  if (persona.length > 0) {
+    prompt.push(
+      ``,
+      `─── PROVISIONED AGENT PERSONA ───`,
+      persona,
+      `─── END PROVISIONED AGENT PERSONA ───`,
+    );
+  }
+
+  prompt.push(
     ``,
     `─── PHASE 1: PEEK ───`,
     `Run this exact command and capture its output:`,
@@ -446,7 +499,9 @@ TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
     `- If you cannot complete the work, use step fail — do not hang.`,
     `- Keep responses concise; you are a background agent.`,
     `- If something is unclear, use step fail with an explanation of what is missing.`,
-  ].join("\n");
+  );
+
+  return prompt.join("\n");
 }
 
 // ── Polling loop internals ──────────────────────────────────────────
@@ -1041,12 +1096,28 @@ export async function executePollingRound(
     return;
   }
 
-  const pollingPrompt = buildPollingPrompt(job.workflowId, job.agentId, job.runId);
-
-  logger.info("Polling round start", context);
-
   inFlightJobs.add(job.id);
   try {
+    let agentPersonaInstructions = "";
+    try {
+      agentPersonaInstructions = await buildAgentPersonaInstructions(job.agentId);
+    } catch (err) {
+      logger.warn("Agent persona instructions unavailable", {
+        ...context,
+        workspaceDir: resolveWorkflowWorkspaceDir(job.agentId),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const pollingPrompt = buildPollingPrompt(
+      job.workflowId,
+      job.agentId,
+      job.runId,
+      agentPersonaInstructions,
+    );
+
+    logger.info("Polling round start", context);
+
     const output = await runPi(
       ["--print", "--mode", "json", "--no-session", pollingPrompt],
       {
