@@ -23,8 +23,19 @@ import {
   MCP_PORT_FILE,
   getMcpPidFile,
   getMcpPortFile,
+  readControlPlanePort,
+  writeControlPlanePort,
+  isControlPlaneRunning,
+  getControlPlaneStatus,
+  startControlPlane,
+  stopControlPlane,
+  CONTROL_PLANE_PID_FILE,
+  CONTROL_PLANE_PORT_FILE,
+  getControlPlanePidFile,
+  getControlPlanePortFile,
 } from "../../dist/server/daemonctl.js";
 import { DEFAULT_MCP_PORT } from "../../dist/server/mcp-server.js";
+import { DEFAULT_CONTROL_PORT } from "../../dist/server/control-server.js";
 
 // Module-level constants are resolved at import time against the original HOME.
 // We use these paths directly rather than hijacking HOME.
@@ -345,6 +356,13 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
 
 // ── Control plane file path tests ──────────────────────────────────
 
+const CONTROL_STANDALONE_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "control-standalone.js");
+
+function cleanupControlPlaneFiles(): void {
+  try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
+  try { fs.unlinkSync(CONTROL_PLANE_PORT_FILE); } catch {}
+}
+
 describe("daemonctl control plane file paths", () => {
   it("CONTROL_PLANE_PID_FILE points to ~/.tamandua/control-plane.pid", async () => {
     const { CONTROL_PLANE_PID_FILE } = await import("../../dist/server/daemonctl.js");
@@ -393,5 +411,279 @@ describe("daemonctl control plane file paths", () => {
     assert.ok(CONTROL_PLANE_PID_FILE.startsWith(home));
     assert.ok(CONTROL_PLANE_PORT_FILE.startsWith(home));
     assert.ok(CONTROL_PLANE_LOG_FILE.startsWith(home));
+  });
+});
+
+// ── Control plane lifecycle tests ─────────────────────────────────
+
+describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
+  after(() => {
+    // Best-effort cleanup of any files created during tests
+    cleanupControlPlaneFiles();
+  });
+
+  // AC 1: readControlPlanePort() returns DEFAULT_CONTROL_PORT (3339) when no port file exists
+  it("readControlPlanePort() returns DEFAULT_CONTROL_PORT (3339) when no port file exists", () => {
+    // Remove port file if it exists to test default
+    try { fs.unlinkSync(CONTROL_PLANE_PORT_FILE); } catch {}
+
+    const port = readControlPlanePort();
+    assert.equal(port, DEFAULT_CONTROL_PORT);
+    assert.equal(port, 3339);
+  });
+
+  // AC 2: writeControlPlanePort(4242) persists and readControlPlanePort() returns 4242
+  it("writeControlPlanePort(4242) persists and readControlPlanePort() returns 4242", () => {
+    try {
+      writeControlPlanePort(4242);
+
+      assert.ok(fs.existsSync(CONTROL_PLANE_PORT_FILE), "Control plane port file should exist after writeControlPlanePort");
+      assert.equal(fs.readFileSync(CONTROL_PLANE_PORT_FILE, "utf-8").trim(), "4242");
+
+      const port = readControlPlanePort();
+      assert.equal(port, 4242);
+    } finally {
+      // Clean up — restore default
+      try { fs.unlinkSync(CONTROL_PLANE_PORT_FILE); } catch {}
+    }
+  });
+
+  // AC 3: isControlPlaneRunning() returns false when no PID file exists
+  it("isControlPlaneRunning() returns false when no PID file exists", () => {
+    try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
+
+    const status = isControlPlaneRunning();
+    assert.equal(status.running, false);
+  });
+
+  // AC 4: isControlPlaneRunning() returns false when PID file exists but process is dead
+  it("isControlPlaneRunning() returns false when PID file exists but process is dead", () => {
+    // Save original state
+    let hadOriginalPidFile = false;
+    let originalPidContent: string | undefined;
+    try {
+      hadOriginalPidFile = fs.existsSync(CONTROL_PLANE_PID_FILE);
+      if (hadOriginalPidFile) {
+        originalPidContent = fs.readFileSync(CONTROL_PLANE_PID_FILE, "utf-8");
+      }
+    } catch {}
+
+    try {
+      cleanupControlPlaneFiles();
+
+      // Write a PID file with a PID that almost certainly doesn't exist
+      const fakePid = 999999;
+      fs.mkdirSync(path.dirname(CONTROL_PLANE_PID_FILE), { recursive: true });
+      fs.writeFileSync(CONTROL_PLANE_PID_FILE, String(fakePid), "utf-8");
+
+      const status = isControlPlaneRunning();
+      assert.equal(status.running, false);
+
+      // Verify it cleaned up the stale PID file
+      assert.equal(fs.existsSync(CONTROL_PLANE_PID_FILE), false);
+    } finally {
+      // Restore original state
+      if (hadOriginalPidFile && originalPidContent) {
+        try {
+          fs.mkdirSync(path.dirname(CONTROL_PLANE_PID_FILE), { recursive: true });
+          fs.writeFileSync(CONTROL_PLANE_PID_FILE, originalPidContent, "utf-8");
+        } catch {}
+      } else {
+        try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
+      }
+    }
+  });
+
+  // AC 5: getControlPlaneStatus() returns correct state before start
+  it("getControlPlaneStatus() returns correct state before start", () => {
+    try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
+    try { fs.unlinkSync(CONTROL_PLANE_PORT_FILE); } catch {}
+
+    const status = getControlPlaneStatus();
+    assert.equal(status.running, false);
+    assert.equal(status.pid, null);
+    assert.equal(status.port, DEFAULT_CONTROL_PORT);
+    assert.equal(status.endpoint, "/control/health");
+  });
+
+  // AC 6: startControlPlane() spawns server, writes PID/port files, health endpoint reachable
+  it("startControlPlane() spawns server and writes PID/port files", async (t) => {
+    if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
+      t.skip("control-standalone.js not found — run npm run build first");
+      return;
+    }
+
+    if (!(await canBind(DEFAULT_CONTROL_PORT))) {
+      t.skip(`Port ${DEFAULT_CONTROL_PORT} is already in use`);
+      return;
+    }
+
+    try {
+      // Ensure clean state
+      cleanupControlPlaneFiles();
+
+      const result = await startControlPlane();
+      assert.ok(result.pid > 0, "startControlPlane should return a valid PID");
+      assert.equal(result.port, DEFAULT_CONTROL_PORT);
+
+      // Verify PID file exists and contains a valid PID
+      assert.ok(fs.existsSync(CONTROL_PLANE_PID_FILE), "Control plane PID file should exist after startControlPlane");
+      const savedPid = parseInt(fs.readFileSync(CONTROL_PLANE_PID_FILE, "utf-8").trim(), 10);
+      assert.equal(savedPid, result.pid);
+
+      // Verify port file exists
+      assert.ok(fs.existsSync(CONTROL_PLANE_PORT_FILE), "Control plane port file should exist after startControlPlane");
+
+      // Verify health endpoint is reachable
+      const res = await fetch(`http://127.0.0.1:${DEFAULT_CONTROL_PORT}/control/health`);
+      assert.equal(res.status, 200);
+      const body = await res.json() as Record<string, unknown>;
+      assert.equal(body.status, "ok");
+
+      // Verify getControlPlaneStatus after start
+      const afterStatus = getControlPlaneStatus();
+      assert.equal(afterStatus.running, true);
+      assert.equal(afterStatus.pid, result.pid);
+      assert.equal(afterStatus.port, DEFAULT_CONTROL_PORT);
+      assert.equal(afterStatus.endpoint, "/control/health");
+    } finally {
+      stopControlPlane();
+      cleanupControlPlaneFiles();
+    }
+  });
+
+  // AC 7: stopControlPlane() kills process and cleans up files
+  it("stopControlPlane() kills control plane process and cleans up files", async (t) => {
+    if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
+      t.skip("control-standalone.js not found — run npm run build first");
+      return;
+    }
+
+    if (!(await canBind(DEFAULT_CONTROL_PORT))) {
+      t.skip(`Port ${DEFAULT_CONTROL_PORT} is already in use`);
+      return;
+    }
+
+    try {
+      cleanupControlPlaneFiles();
+
+      // Start the control plane
+      const { pid } = await startControlPlane();
+      assert.ok(pid > 0);
+
+      // Verify it's running
+      let status = isControlPlaneRunning();
+      assert.equal(status.running, true);
+
+      // Stop it
+      const stopped = stopControlPlane();
+      assert.equal(stopped, true);
+
+      // Verify PID file is cleaned up
+      assert.equal(fs.existsSync(CONTROL_PLANE_PID_FILE), false, "Control plane PID file should be cleaned up after stopControlPlane");
+
+      // Verify port file is cleaned up
+      assert.equal(fs.existsSync(CONTROL_PLANE_PORT_FILE), false, "Control plane port file should be cleaned up after stopControlPlane");
+
+      // Wait briefly for process to fully exit
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
+      // Verify process is gone
+      status = isControlPlaneRunning();
+      assert.equal(status.running, false, "isControlPlaneRunning should return false after stopControlPlane");
+
+      // Verify health endpoint is down
+      await waitForHttpDown(`http://127.0.0.1:${DEFAULT_CONTROL_PORT}/control/health`);
+    } finally {
+      try { stopControlPlane(); } catch {}
+      cleanupControlPlaneFiles();
+    }
+  });
+
+  // AC 8: Round-trip test with custom port
+  it("startControlPlane/stopControlPlane round-trip with custom port (3341)", async (t) => {
+    if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
+      t.skip("control-standalone.js not found — run npm run build first");
+      return;
+    }
+
+    const customPort = 3341;
+    if (!(await canBind(customPort))) {
+      t.skip(`Port ${customPort} is already in use`);
+      return;
+    }
+
+    try {
+      cleanupControlPlaneFiles();
+
+      const { pid, port } = await startControlPlane(customPort);
+      assert.ok(pid > 0);
+      assert.equal(port, customPort);
+
+      // Verify port file was written with custom port
+      assert.equal(readControlPlanePort(), customPort);
+
+      // Verify health endpoint on custom port
+      const res = await fetch(`http://127.0.0.1:${customPort}/control/health`);
+      assert.equal(res.status, 200);
+      const body = await res.json() as Record<string, unknown>;
+      assert.equal(body.status, "ok");
+
+      // Stop
+      const stopped = stopControlPlane();
+      assert.equal(stopped, true);
+
+      // Verify down
+      await waitForHttpDown(`http://127.0.0.1:${customPort}/control/health`);
+
+      // PID file cleaned up
+      assert.equal(fs.existsSync(CONTROL_PLANE_PID_FILE), false);
+
+      // Port file cleaned up
+      assert.equal(fs.existsSync(CONTROL_PLANE_PORT_FILE), false);
+
+      // Status reflects not running after stop
+      const status = getControlPlaneStatus();
+      assert.equal(status.running, false);
+    } finally {
+      try { stopControlPlane(); } catch {}
+      cleanupControlPlaneFiles();
+    }
+  });
+
+  // AC 9: startControlPlane() returns already-running info when already up
+  it("startControlPlane() returns existing info when already running", async (t) => {
+    if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
+      t.skip("control-standalone.js not found — run npm run build first");
+      return;
+    }
+
+    if (!(await canBind(DEFAULT_CONTROL_PORT))) {
+      t.skip(`Port ${DEFAULT_CONTROL_PORT} is already in use`);
+      return;
+    }
+
+    try {
+      cleanupControlPlaneFiles();
+
+      const first = await startControlPlane();
+      assert.ok(first.pid > 0);
+
+      // Second call should detect already running
+      const second = await startControlPlane();
+      assert.equal(second.pid, first.pid);
+      assert.equal(second.port, first.port);
+    } finally {
+      try { stopControlPlane(); } catch {}
+      cleanupControlPlaneFiles();
+    }
+  });
+
+  // AC 10: stopControlPlane() returns false when nothing is running
+  it("stopControlPlane() returns false when control plane is not running", () => {
+    try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
+
+    const result = stopControlPlane();
+    assert.equal(result, false);
   });
 });

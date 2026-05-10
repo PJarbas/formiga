@@ -13,6 +13,7 @@ import os from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "./mcp-server.js";
+import { DEFAULT_CONTROL_PORT } from "./control-server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -542,6 +543,209 @@ export function stopMcp(): boolean {
   // Clean up port file so a fresh start can pick a different port
   try {
     fs.unlinkSync(MCP_PORT_FILE);
+  } catch {
+    // Best effort
+  }
+
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Control plane standalone lifecycle management
+// ═══════════════════════════════════════════════════════════════════
+
+const CONTROL_PLANE_HEALTH_ENDPOINT = "/control/health";
+
+/**
+ * Resolve the control-standalone.js path.
+ * In production (compiled JS), the file lives alongside daemonctl.js in dist/server/.
+ * In development (tsx on-the-fly transpilation), the compiled output is in dist/server/.
+ */
+function resolveControlStandaloneScript(): string {
+  // Production: same directory as daemonctl.js (dist/server/)
+  const prodPath = path.resolve(__dirname, "control-standalone.js");
+  if (fs.existsSync(prodPath)) return prodPath;
+
+  // Development (tsx): compiled output lives in dist/server/
+  const devPath = path.resolve(__dirname, "..", "..", "dist", "server", "control-standalone.js");
+  if (fs.existsSync(devPath)) return devPath;
+
+  // Fallback: return prodPath so the caller gets a clear error
+  return prodPath;
+}
+
+async function waitForHealthEndpoint(url: string, timeoutMs = 10_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return;
+    } catch {
+      // Server not reachable yet
+    }
+    await sleep(100);
+  }
+  throw new Error(`Timed out waiting for health endpoint: ${url}`);
+}
+
+/**
+ * Read the control plane port from the control plane port file.
+ * Returns DEFAULT_CONTROL_PORT (3339) when no port file exists.
+ */
+export function readControlPlanePort(): number {
+  try {
+    const raw = fs.readFileSync(CONTROL_PLANE_PORT_FILE, "utf-8").trim();
+    const port = parseInt(raw, 10);
+    if (!isNaN(port) && port > 0 && port < 65536) {
+      return port;
+    }
+  } catch {
+    // File doesn't exist or is invalid
+  }
+  return DEFAULT_CONTROL_PORT;
+}
+
+/**
+ * Write the control plane port to the control plane port file.
+ */
+export function writeControlPlanePort(port: number): void {
+  fs.mkdirSync(TAMANDUA_DIR, { recursive: true });
+  fs.writeFileSync(CONTROL_PLANE_PORT_FILE, String(port), "utf-8");
+}
+
+/**
+ * Check if the standalone control plane server is running.
+ * Uses the control plane PID file and kill(0) for existence check.
+ */
+export function isControlPlaneRunning(): { running: true; pid: number } | { running: false } {
+  return checkPidFile(CONTROL_PLANE_PID_FILE);
+}
+
+/**
+ * Get full control plane status.
+ */
+export function getControlPlaneStatus(): {
+  running: boolean;
+  pid: number | null;
+  port: number;
+  endpoint: string;
+} {
+  const status = isControlPlaneRunning();
+  const port = readControlPlanePort();
+  return {
+    running: status.running,
+    pid: status.running ? status.pid : null,
+    port,
+    endpoint: CONTROL_PLANE_HEALTH_ENDPOINT,
+  };
+}
+
+/**
+ * Start the standalone control plane server.
+ *
+ * Spawns a detached node process running dist/server/control-standalone.js.
+ * Writes PID and port files that the spawned process also updates.
+ * Waits for startup and checks health endpoint.
+ *
+ * If the control plane server is already running, returns its info without restarting.
+ */
+export async function startControlPlane(port?: number): Promise<{ pid: number; port: number }>;
+export async function startControlPlane(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
+export async function startControlPlane(port?: number, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
+  // When homeDir is set, compute isolated paths for all filesystem operations.
+  const tamanduaDir = opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : TAMANDUA_DIR;
+  const cpPidFile = opts?.homeDir ? path.join(tamanduaDir, "control-plane.pid") : CONTROL_PLANE_PID_FILE;
+  const cpPortFile = opts?.homeDir ? path.join(tamanduaDir, "control-plane-port") : CONTROL_PLANE_PORT_FILE;
+  const cpLogFile = opts?.homeDir ? path.join(tamanduaDir, "control-plane.log") : CONTROL_PLANE_LOG_FILE;
+
+  const status = checkPidFile(cpPidFile);
+  if (status.running) {
+    let existingPort: number = DEFAULT_CONTROL_PORT;
+    try {
+      const raw = fs.readFileSync(cpPortFile, "utf-8").trim();
+      const p = parseInt(raw, 10);
+      if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
+    } catch {
+      // File missing or unreadable — use default
+    }
+    return { pid: status.pid, port: existingPort };
+  }
+
+  const cpPort = port ?? DEFAULT_CONTROL_PORT;
+
+  fs.mkdirSync(tamanduaDir, { recursive: true });
+  fs.writeFileSync(cpPortFile, String(cpPort), "utf-8");
+
+  const out = fs.openSync(cpLogFile, "a");
+  const errFd = fs.openSync(cpLogFile, "a");
+
+  const standaloneScript = resolveControlStandaloneScript();
+  const spawnOpts: Parameters<typeof spawn>[2] = {
+    detached: true,
+    stdio: ["ignore", out, errFd],
+  };
+  if (opts?.homeDir) {
+    spawnOpts.env = { ...process.env, HOME: opts.homeDir };
+  }
+  const child = spawn("node", [standaloneScript, String(cpPort)], spawnOpts);
+
+  if (opts?.keepHandle) {
+    // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
+    // Don't unref — the handle keeps the event loop alive, which is fine
+    // because the caller is responsible for killing the child.
+  } else {
+    child.unref();
+  }
+
+  // Wait briefly for the control plane to start and write its PID file
+  await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+
+  const check = checkPidFile(cpPidFile);
+  if (!check.running) {
+    const logTail = readLogTail(cpLogFile);
+    if (logTail) {
+      throw new Error(`Control plane failed to start. Recent control plane log:\n${logTail}`);
+    }
+    throw new Error("Control plane failed to start. Check " + cpLogFile);
+  }
+
+  // Wait for health endpoint to be reachable
+  await waitForHealthEndpoint(`http://127.0.0.1:${cpPort}${CONTROL_PLANE_HEALTH_ENDPOINT}`);
+
+  if (opts?.keepHandle) {
+    return { pid: check.pid, port: cpPort, child };
+  }
+
+  return { pid: check.pid, port: cpPort };
+}
+
+/**
+ * Stop the standalone control plane server.
+ *
+ * Sends SIGTERM to the control plane process and cleans up the PID file.
+ * Returns true if a control plane was stopped, false if none was running.
+ */
+export function stopControlPlane(): boolean {
+  const status = isControlPlaneRunning();
+  if (!status.running) return false;
+
+  try {
+    process.kill(status.pid, "SIGTERM");
+  } catch {
+    // Process may have already exited
+  }
+
+  // Clean up PID file — the control plane also cleans up on exit,
+  // but we do it here as a safety measure
+  try {
+    fs.unlinkSync(CONTROL_PLANE_PID_FILE);
+  } catch {
+    // Best effort
+  }
+
+  // Clean up port file so a fresh start can pick a different port
+  try {
+    fs.unlinkSync(CONTROL_PLANE_PORT_FILE);
   } catch {
     // Best effort
   }
