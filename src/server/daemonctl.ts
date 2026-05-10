@@ -30,6 +30,12 @@ export const MCP_PID_FILE = path.join(TAMANDUA_DIR, "mcp.pid");
 export const MCP_PORT_FILE = path.join(TAMANDUA_DIR, "mcp-port");
 const MCP_LOG_FILE = path.join(TAMANDUA_DIR, "mcp.log");
 
+// ── Control plane file paths ──────────────────────────────────────
+
+export const CONTROL_PLANE_PID_FILE = path.join(TAMANDUA_DIR, "control-plane.pid");
+export const CONTROL_PLANE_PORT_FILE = path.join(TAMANDUA_DIR, "control-plane-port");
+export const CONTROL_PLANE_LOG_FILE = path.join(TAMANDUA_DIR, "control-plane.log");
+
 // ── File path helpers ───────────────────────────────────────────────
 
 export function getPidFile(): string {
@@ -50,6 +56,18 @@ export function getMcpPidFile(): string {
 
 export function getMcpPortFile(): string {
   return MCP_PORT_FILE;
+}
+
+export function getControlPlanePidFile(): string {
+  return CONTROL_PLANE_PID_FILE;
+}
+
+export function getControlPlanePortFile(): string {
+  return CONTROL_PLANE_PORT_FILE;
+}
+
+export function getControlPlaneLogFile(): string {
+  return CONTROL_PLANE_LOG_FILE;
 }
 
 function readLogTail(logPath: string = LOG_FILE, lines = STARTUP_ERROR_TAIL_LINES): string {

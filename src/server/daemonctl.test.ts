@@ -342,3 +342,56 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
     assert.ok(portFile.includes("mcp-port"));
   });
 });
+
+// ── Control plane file path tests ──────────────────────────────────
+
+describe("daemonctl control plane file paths", () => {
+  it("CONTROL_PLANE_PID_FILE points to ~/.tamandua/control-plane.pid", async () => {
+    const { CONTROL_PLANE_PID_FILE } = await import("../../dist/server/daemonctl.js");
+    assert.ok(CONTROL_PLANE_PID_FILE.includes(".tamandua"));
+    assert.ok(CONTROL_PLANE_PID_FILE.endsWith("control-plane.pid"));
+  });
+
+  it("CONTROL_PLANE_PORT_FILE points to ~/.tamandua/control-plane-port", async () => {
+    const { CONTROL_PLANE_PORT_FILE } = await import("../../dist/server/daemonctl.js");
+    assert.ok(CONTROL_PLANE_PORT_FILE.includes(".tamandua"));
+    assert.ok(CONTROL_PLANE_PORT_FILE.endsWith("control-plane-port"));
+  });
+
+  it("CONTROL_PLANE_LOG_FILE points to ~/.tamandua/control-plane.log", async () => {
+    const { CONTROL_PLANE_LOG_FILE } = await import("../../dist/server/daemonctl.js");
+    assert.ok(CONTROL_PLANE_LOG_FILE.includes(".tamandua"));
+    assert.ok(CONTROL_PLANE_LOG_FILE.endsWith("control-plane.log"));
+  });
+
+  it("getControlPlanePidFile() returns CONTROL_PLANE_PID_FILE", async () => {
+    const { getControlPlanePidFile, CONTROL_PLANE_PID_FILE } = await import("../../dist/server/daemonctl.js");
+    assert.equal(getControlPlanePidFile(), CONTROL_PLANE_PID_FILE);
+  });
+
+  it("getControlPlanePortFile() returns CONTROL_PLANE_PORT_FILE", async () => {
+    const { getControlPlanePortFile, CONTROL_PLANE_PORT_FILE } = await import("../../dist/server/daemonctl.js");
+    assert.equal(getControlPlanePortFile(), CONTROL_PLANE_PORT_FILE);
+  });
+
+  it("getControlPlaneLogFile() returns CONTROL_PLANE_LOG_FILE", async () => {
+    const { getControlPlaneLogFile, CONTROL_PLANE_LOG_FILE } = await import("../../dist/server/daemonctl.js");
+    assert.equal(getControlPlaneLogFile(), CONTROL_PLANE_LOG_FILE);
+  });
+
+  it("control plane paths are distinct from MCP paths", async () => {
+    const { CONTROL_PLANE_PID_FILE, CONTROL_PLANE_PORT_FILE, CONTROL_PLANE_LOG_FILE, MCP_PID_FILE, MCP_PORT_FILE } = await import("../../dist/server/daemonctl.js");
+    assert.notEqual(CONTROL_PLANE_PID_FILE, MCP_PID_FILE);
+    assert.notEqual(CONTROL_PLANE_PORT_FILE, MCP_PORT_FILE);
+    assert.ok(CONTROL_PLANE_LOG_FILE.includes("control-plane.log"));
+  });
+
+  it("all control plane paths resolve via os.homedir()", async () => {
+    const os = await import("node:os");
+    const { CONTROL_PLANE_PID_FILE, CONTROL_PLANE_PORT_FILE, CONTROL_PLANE_LOG_FILE } = await import("../../dist/server/daemonctl.js");
+    const home = os.homedir();
+    assert.ok(CONTROL_PLANE_PID_FILE.startsWith(home));
+    assert.ok(CONTROL_PLANE_PORT_FILE.startsWith(home));
+    assert.ok(CONTROL_PLANE_LOG_FILE.startsWith(home));
+  });
+});
