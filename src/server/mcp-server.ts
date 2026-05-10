@@ -10,6 +10,7 @@ import {
   isInitializeRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import { getWorkflowStatus, listRuns, type RunDetail, type RunInfo } from "../installer/status.js";
+import { runWorkflow, type RunWorkflowResult } from "../installer/run.js";
 import { getRecentEvents, type TamanduaEvent } from "../installer/events.js";
 
 export const DEFAULT_MCP_PORT = 3338;
@@ -17,6 +18,7 @@ export const MCP_ENDPOINT_PATH = "/mcp";
 
 const MCP_TOOL_RUNS_LIST = "tamandua.runs.list";
 const MCP_TOOL_RUN_STATUS = "tamandua.run.status";
+const MCP_TOOL_RUN_START = "tamandua.run.start";
 const MCP_TOOL_EVENTS_RECENT = "tamandua.events.recent";
 
 type McpSession = {
@@ -27,6 +29,11 @@ type McpSession = {
 export interface TamanduaMcpToolServices {
   listRuns: (limit?: number) => RunInfo[];
   getWorkflowStatus: (query: string) => RunDetail;
+  runWorkflow: (params: {
+    workflowId: string;
+    taskTitle: string;
+    workingDirectoryForHarness: string;
+  }) => Promise<RunWorkflowResult>;
   getRecentEvents: (limit?: number) => TamanduaEvent[];
 }
 
@@ -44,6 +51,7 @@ export type TamanduaMcpServer = {
 const defaultToolServices: TamanduaMcpToolServices = {
   listRuns,
   getWorkflowStatus,
+  runWorkflow,
   getRecentEvents,
 };
 
@@ -112,6 +120,47 @@ const mcpTools: Array<Record<string, unknown>> = [
     },
   },
   {
+    name: MCP_TOOL_RUN_START,
+    title: "Start Tamandua Run",
+    description: "Start a workflow run. For remote safety, workingDirectoryForHarness is required.",
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["workflowId", "taskTitle", "workingDirectoryForHarness"],
+      properties: {
+        workflowId: {
+          type: "string",
+          minLength: 1,
+          description: "Workflow id to run.",
+        },
+        taskTitle: {
+          type: "string",
+          minLength: 1,
+          description: "Task description for the workflow run.",
+        },
+        workingDirectoryForHarness: {
+          type: "string",
+          minLength: 1,
+          description: "Mandatory harness working directory for remote MCP runs.",
+        },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      required: ["run"],
+      properties: {
+        run: {
+          type: "object",
+          description: "Run metadata returned by runWorkflow().",
+        },
+      },
+    },
+  },
+  {
     name: MCP_TOOL_EVENTS_RECENT,
     title: "Get Recent Tamandua Events",
     description: "List recent global Tamandua events.",
@@ -172,12 +221,16 @@ function readLimitArgument(args: Record<string, unknown>, defaultValue: number, 
   return limit;
 }
 
-function readRequiredQuery(args: Record<string, unknown>): string {
-  const rawQuery = args.query;
-  if (typeof rawQuery !== "string" || rawQuery.trim().length === 0) {
-    invalidParams('Argument "query" must be a non-empty string');
+function readRequiredStringArgument(args: Record<string, unknown>, key: string): string {
+  const rawValue = args[key];
+  if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+    invalidParams(`Argument "${key}" must be a non-empty string`);
   }
-  return rawQuery.trim();
+  return rawValue.trim();
+}
+
+function readRequiredQuery(args: Record<string, unknown>): string {
+  return readRequiredStringArgument(args, "query");
 }
 
 function createToolResult(payload: Record<string, unknown>): { content: [{ type: "text"; text: string }]; structuredContent: Record<string, unknown> } {
@@ -217,6 +270,22 @@ function createProtocolServer(services: TamanduaMcpToolServices): Server {
       const query = readRequiredQuery(args);
       try {
         return createToolResult({ run: services.getWorkflowStatus(query) });
+      } catch (err) {
+        throw new McpError(ErrorCode.InvalidParams, (err as Error).message);
+      }
+    }
+
+    if (name === MCP_TOOL_RUN_START) {
+      const workflowId = readRequiredStringArgument(args, "workflowId");
+      const taskTitle = readRequiredStringArgument(args, "taskTitle");
+      const workingDirectoryForHarness = readRequiredStringArgument(args, "workingDirectoryForHarness");
+      try {
+        const run = await services.runWorkflow({
+          workflowId,
+          taskTitle,
+          workingDirectoryForHarness,
+        });
+        return createToolResult({ run });
       } catch (err) {
         throw new McpError(ErrorCode.InvalidParams, (err as Error).message);
       }

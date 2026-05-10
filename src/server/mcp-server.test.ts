@@ -136,6 +136,7 @@ describe("mcp-server bootstrap", () => {
   it("supports initialize, tools/list, and tools/call over HTTP", async () => {
     const runListCalls: number[] = [];
     const runStatusCalls: string[] = [];
+    const runStartCalls: Array<{ workflowId: string; taskTitle: string; workingDirectoryForHarness: string }> = [];
     const eventCalls: number[] = [];
 
     const expectedRuns = [
@@ -182,6 +183,18 @@ describe("mcp-server bootstrap", () => {
           runStatusCalls.push(query);
           return expectedRunDetail;
         },
+        runWorkflow: async ({ workflowId, taskTitle, workingDirectoryForHarness }) => {
+          runStartCalls.push({ workflowId, taskTitle, workingDirectoryForHarness });
+          return {
+            runId: "run-new",
+            runNumber: 9,
+            workflowId,
+            taskTitle,
+            status: "running",
+            stepCount: 1,
+            workingDirectoryForHarness,
+          };
+        },
         getRecentEvents: (limit = 50) => {
           eventCalls.push(limit);
           return expectedEvents;
@@ -209,7 +222,7 @@ describe("mcp-server bootstrap", () => {
       const tools = (toolsList.body?.result?.tools ?? []) as Array<Record<string, unknown>>;
       assert.deepEqual(
         tools.map((tool) => tool.name),
-        ["tamandua.runs.list", "tamandua.run.status", "tamandua.events.recent"],
+        ["tamandua.runs.list", "tamandua.run.status", "tamandua.run.start", "tamandua.events.recent"],
       );
       assert.deepEqual((tools[0]?.inputSchema as { properties?: Record<string, unknown> }).properties?.limit, {
         type: "integer",
@@ -218,6 +231,7 @@ describe("mcp-server bootstrap", () => {
         description: "Maximum number of runs to return (default 50).",
       });
       assert.deepEqual((tools[1]?.inputSchema as { required?: string[] }).required, ["query"]);
+      assert.deepEqual((tools[2]?.inputSchema as { required?: string[] }).required, ["workflowId", "taskTitle", "workingDirectoryForHarness"]);
 
       const runsList = await callTool(server.port, sessionId, 3, "tamandua.runs.list", { limit: 10 });
       assert.equal(runsList.status, 200);
@@ -231,7 +245,31 @@ describe("mcp-server bootstrap", () => {
       assert.deepEqual(runStatus.body?.result?.structuredContent, { run: expectedRunDetail });
       assert.deepEqual(runStatusCalls, ["run-ab"]);
 
-      const eventsRecent = await callTool(server.port, sessionId, 5, "tamandua.events.recent", { limit: 7 });
+      const runStart = await callTool(server.port, sessionId, 5, "tamandua.run.start", {
+        workflowId: "feature-dev",
+        taskTitle: "Implement MCP start",
+        workingDirectoryForHarness: "/tmp/remote-harness",
+      });
+      assert.equal(runStart.status, 200);
+      assert.equal(runStart.body?.error, undefined);
+      assert.deepEqual(runStart.body?.result?.structuredContent, {
+        run: {
+          runId: "run-new",
+          runNumber: 9,
+          workflowId: "feature-dev",
+          taskTitle: "Implement MCP start",
+          status: "running",
+          stepCount: 1,
+          workingDirectoryForHarness: "/tmp/remote-harness",
+        },
+      });
+      assert.deepEqual(runStartCalls, [{
+        workflowId: "feature-dev",
+        taskTitle: "Implement MCP start",
+        workingDirectoryForHarness: "/tmp/remote-harness",
+      }]);
+
+      const eventsRecent = await callTool(server.port, sessionId, 6, "tamandua.events.recent", { limit: 7 });
       assert.equal(eventsRecent.status, 200);
       assert.equal(eventsRecent.body?.error, undefined);
       assert.deepEqual(eventsRecent.body?.result?.structuredContent, { events: expectedEvents });
@@ -246,6 +284,9 @@ describe("mcp-server bootstrap", () => {
       services: {
         listRuns: () => [],
         getWorkflowStatus: () => {
+          throw new Error("should not be called for invalid args");
+        },
+        runWorkflow: async () => {
           throw new Error("should not be called for invalid args");
         },
         getRecentEvents: () => [],
@@ -267,7 +308,16 @@ describe("mcp-server bootstrap", () => {
       assert.equal(badLimitType.body?.error?.code, -32602);
       assert.match(badLimitType.body?.error?.message ?? "", /limit/);
 
-      const validAfterErrors = await callTool(server.port, sessionId, 12, "tamandua.events.recent", { limit: 3 });
+      const missingHarnessDir = await callTool(server.port, sessionId, 12, "tamandua.run.start", {
+        workflowId: "feature-dev",
+        taskTitle: "remote run",
+      });
+      assert.equal(missingHarnessDir.status, 200);
+      assert.equal(missingHarnessDir.body?.result, undefined);
+      assert.equal(missingHarnessDir.body?.error?.code, -32602);
+      assert.match(missingHarnessDir.body?.error?.message ?? "", /workingDirectoryForHarness/);
+
+      const validAfterErrors = await callTool(server.port, sessionId, 13, "tamandua.events.recent", { limit: 3 });
       assert.equal(validAfterErrors.status, 200);
       assert.equal(validAfterErrors.body?.error, undefined);
       assert.deepEqual(validAfterErrors.body?.result?.structuredContent, { events: [] });

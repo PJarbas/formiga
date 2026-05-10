@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { getDb, nextRunNumber } from "../db.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
@@ -7,12 +8,16 @@ import { setupAgentCrons } from "./agent-scheduler.js";
 import { emitEvent } from "./events.js";
 import { advancePipeline } from "./step-ops.js";
 
+const RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY = "working_directory_for_harness";
+
 export interface RunWorkflowParams {
   workflowId: string;
   taskTitle: string;
   notifyUrl?: string;
   /** Optional initial context for template resolution */
   context?: Record<string, string>;
+  /** Working directory for the pi harness/tool execution environment */
+  workingDirectoryForHarness?: string;
 }
 
 export interface RunWorkflowResult {
@@ -22,6 +27,7 @@ export interface RunWorkflowResult {
   taskTitle: string;
   status: string;
   stepCount: number;
+  workingDirectoryForHarness: string;
 }
 
 /**
@@ -36,7 +42,13 @@ export interface RunWorkflowResult {
 export async function runWorkflow(
   params: RunWorkflowParams,
 ): Promise<RunWorkflowResult> {
-  const { workflowId, taskTitle, notifyUrl, context = {} } = params;
+  const {
+    workflowId,
+    taskTitle,
+    notifyUrl,
+    context = {},
+    workingDirectoryForHarness: requestedWorkingDirectoryForHarness,
+  } = params;
 
   // Load the workflow spec from the installed workflow directory
   const workflowDir = resolveWorkflowDir(workflowId);
@@ -47,11 +59,38 @@ export async function runWorkflow(
   const runId = crypto.randomUUID();
   const runNumber = nextRunNumber();
 
+  const workingDirectoryForHarness = path.resolve(
+    requestedWorkingDirectoryForHarness ?? process.cwd(),
+  );
+
+  let workingDirectoryStats;
+  try {
+    workingDirectoryStats = await fs.stat(workingDirectoryForHarness);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      throw new Error(
+        `working-directory-for-harness does not exist: ${workingDirectoryForHarness}`,
+      );
+    }
+    throw err;
+  }
+
+  if (!workingDirectoryStats.isDirectory()) {
+    throw new Error(
+      `working-directory-for-harness must be a directory: ${workingDirectoryForHarness}`,
+    );
+  }
+
   // Seed the run context with the task description so step input templates can
   // reference {{task}} from the very first step. Without this, the planner step
   // (which always references {{task}}) fails immediately on claim with a missing
   // template key error, aborting the whole run.
-  const seededContext = { task: taskTitle, ...context };
+  const seededContext = {
+    task: taskTitle,
+    ...context,
+    [RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY]: workingDirectoryForHarness,
+  };
   const contextJson = JSON.stringify(seededContext);
 
   // Insert the run record
@@ -94,7 +133,9 @@ export async function runWorkflow(
 
   // Start agent cron jobs for polling
   try {
-    await setupAgentCrons(workflow);
+    await setupAgentCrons(workflow, {
+      workingDirectoryForHarness,
+    });
   } catch (err) {
     // Cron setup is best-effort; the workflow can still run if agents are
     // triggered manually or via other means.
@@ -122,6 +163,7 @@ export async function runWorkflow(
     taskTitle,
     status: "running",
     stepCount: workflow.steps.length,
+    workingDirectoryForHarness,
   };
 }
 

@@ -88,7 +88,8 @@ function printUsage() {
     "tamandua uninstall [--force]          Full uninstall",
     "", "tamandua workflow list                List available workflows",
     "tamandua workflow install <name>      Install a workflow",
-    "tamandua workflow run <name> <task>   Start a workflow run",
+    "tamandua workflow run <name> <task> [--working-directory-for-harness <dir>]",
+    "                                      Start a workflow run",
     "tamandua workflow status <query>      Check run status",
     "tamandua workflow runs                List all workflow runs",
     "tamandua workflow resume <run-id>     Resume a failed run",
@@ -109,6 +110,42 @@ function printUsage() {
     "", "tamandua version                      Show installed version",
     "tamandua update                       Pull latest, rebuild, reinstall",
   ].join("\n") + "\n");
+}
+
+function parseWorkflowRunArgs(args: string[]): { taskTitle: string; workingDirectoryForHarness?: string } {
+  const taskParts: string[] = [];
+  let workingDirectoryForHarness: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+
+    if (token === "--working-directory-for-harness") {
+      const value = args[i + 1]?.trim();
+      if (!value) {
+        throw new Error("Missing value for --working-directory-for-harness.");
+      }
+      workingDirectoryForHarness = value;
+      i++;
+      continue;
+    }
+
+    const inlinePrefix = "--working-directory-for-harness=";
+    if (token.startsWith(inlinePrefix)) {
+      const value = token.slice(inlinePrefix.length).trim();
+      if (!value) {
+        throw new Error("Missing value for --working-directory-for-harness.");
+      }
+      workingDirectoryForHarness = value;
+      continue;
+    }
+
+    taskParts.push(token);
+  }
+
+  return {
+    taskTitle: taskParts.join(" ").trim(),
+    workingDirectoryForHarness,
+  };
 }
 
 async function main() {
@@ -368,11 +405,24 @@ async function main() {
   }
 
   if (action === "run") {
-    const workflowName = args[2]; const taskArgs = args.slice(3).join(" ");
+    const workflowName = args[2];
     if (!workflowName) { process.stderr.write("Missing workflow name.\n"); process.exit(1); }
-    if (!taskArgs) { process.stderr.write("Missing task description.\n"); process.exit(1); }
-    const result = await runWorkflow({ workflowId: workflowName, taskTitle: taskArgs });
-    console.log(`Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}`);
+
+    let runArgs: ReturnType<typeof parseWorkflowRunArgs>;
+    try {
+      runArgs = parseWorkflowRunArgs(args.slice(3));
+    } catch (err) {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+
+    if (!runArgs.taskTitle) { process.stderr.write("Missing task description.\n"); process.exit(1); }
+    const result = await runWorkflow({
+      workflowId: workflowName,
+      taskTitle: runArgs.taskTitle,
+      workingDirectoryForHarness: runArgs.workingDirectoryForHarness,
+    });
+    console.log(`Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}\nHarness CWD: ${result.workingDirectoryForHarness}`);
     return;
   }
 

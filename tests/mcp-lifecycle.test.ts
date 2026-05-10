@@ -52,6 +52,29 @@ function createTempEnv(): { root: string; stateDir: string; homeDir: string } {
   return { root, stateDir, homeDir };
 }
 
+function writeMinimalWorkflow(stateDir: string, workflowId: string): void {
+  const workflowDir = path.join(stateDir, "workflows", workflowId);
+  fs.mkdirSync(workflowDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(workflowDir, "workflow.yml"),
+    [
+      `id: ${workflowId}`,
+      "agents:",
+      "  - id: dev",
+      "    model: fake",
+      "    workspace:",
+      "      baseDir: .",
+      "steps:",
+      "  - id: implement",
+      "    agent: dev",
+      "    input: Implement the task",
+      "    expects: STATUS, CHANGES, TESTS",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+}
+
 async function runCli(args: string[], env: Record<string, string>): Promise<CliResult> {
   const child = spawn(
     process.execPath,
@@ -354,11 +377,12 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
 
       const tools = (toolsResult.body.result as { tools: Array<{ name: string }> }).tools;
       assert.ok(Array.isArray(tools), "tools/list should return a tools array");
-      assert.ok(tools.length >= 3, `Expected at least 3 MCP tools, got ${tools.length}`);
+      assert.ok(tools.length >= 4, `Expected at least 4 MCP tools, got ${tools.length}`);
 
       const toolNames = tools.map((t: { name: string }) => t.name);
       assert.ok(toolNames.includes("tamandua.runs.list"), "Should include tamandua.runs.list tool");
       assert.ok(toolNames.includes("tamandua.run.status"), "Should include tamandua.run.status tool");
+      assert.ok(toolNames.includes("tamandua.run.start"), "Should include tamandua.run.start tool");
       assert.ok(toolNames.includes("tamandua.events.recent"), "Should include tamandua.events.recent tool");
 
       // Verify MCP is independently running
@@ -367,6 +391,84 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.match(status.stdout, /MCP server running/);
       assert.match(status.stdout, new RegExp(`Port: ${mcpPort}`));
 
+    } finally {
+      await runCli(["mcp", "stop"], cliEnv);
+      fs.rmSync(tempEnv.root, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua.run.start requires workingDirectoryForHarness and can start runs", async (t) => {
+    if (!fs.existsSync(cliPath)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const mcpPort = await reserveRandomPort();
+    const tempEnv = createTempEnv();
+    const cliEnv = {
+      HOME: tempEnv.homeDir,
+      TAMANDUA_STATE_DIR: tempEnv.stateDir,
+    };
+
+    try {
+      writeMinimalWorkflow(tempEnv.stateDir, "mcp-run-start");
+
+      const start = await runCli(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(start.code, 0, `MCP start failed: ${cleanStderr(start.stderr) || start.stdout}`);
+
+      const baseUrl = `http://127.0.0.1:${mcpPort}/mcp`;
+      const { sessionId } = await mcpInitialize(baseUrl);
+
+      const missingHarness = await mcpRpc(
+        baseUrl,
+        "tools/call",
+        {
+          name: "tamandua.run.start",
+          arguments: {
+            workflowId: "mcp-run-start",
+            taskTitle: "Remote start without harness cwd",
+          },
+        },
+        sessionId,
+      );
+
+      assert.ok(missingHarness.body.error, "expected invalid params error for missing workingDirectoryForHarness");
+      assert.equal((missingHarness.body.error as { code: number }).code, -32602);
+      assert.match(String((missingHarness.body.error as { message?: string }).message ?? ""), /workingDirectoryForHarness/);
+
+      const harnessDir = path.join(tempEnv.root, "remote-repo");
+      fs.mkdirSync(harnessDir, { recursive: true });
+
+      const started = await mcpRpc(
+        baseUrl,
+        "tools/call",
+        {
+          name: "tamandua.run.start",
+          arguments: {
+            workflowId: "mcp-run-start",
+            taskTitle: "Remote start with explicit harness cwd",
+            workingDirectoryForHarness: harnessDir,
+          },
+        },
+        sessionId,
+      );
+
+      const startResult = started.body.result as {
+        structuredContent?: {
+          run?: {
+            runId: string;
+            workflowId: string;
+            taskTitle: string;
+            status: string;
+            workingDirectoryForHarness: string;
+          };
+        };
+      };
+      assert.ok(startResult?.structuredContent?.run, `expected run.start result, got ${JSON.stringify(started.body)}`);
+      assert.equal(startResult.structuredContent!.run!.workflowId, "mcp-run-start");
+      assert.equal(startResult.structuredContent!.run!.taskTitle, "Remote start with explicit harness cwd");
+      assert.equal(startResult.structuredContent!.run!.status, "running");
+      assert.equal(startResult.structuredContent!.run!.workingDirectoryForHarness, path.resolve(harnessDir));
     } finally {
       await runCli(["mcp", "stop"], cliEnv);
       fs.rmSync(tempEnv.root, { recursive: true, force: true });

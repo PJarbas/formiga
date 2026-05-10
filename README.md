@@ -171,7 +171,7 @@ You're installing agent teams that run code on your machine. We take that seriou
 
 | Command | Description |
 |---------|-------------|
-| `tamandua workflow run <id> <task>` | Start a run |
+| `tamandua workflow run <id> <task> [--working-directory-for-harness <dir>]` | Start a run (defaults harness CWD to your current directory) |
 | `tamandua workflow status <query>` | Check run status |
 | `tamandua workflow runs` | List all runs |
 | `tamandua workflow resume <run-id>` | Resume a failed run |
@@ -193,6 +193,23 @@ When you start the management dashboard (`tamandua dashboard`), Tamandua automat
 - MCP endpoint: `http://localhost:3338/mcp` (fixed port)
 
 Use `tamandua dashboard status` to verify both endpoints are up.
+
+### Remote MCP tools
+
+The remote MCP endpoint exposes these tools:
+
+- `tamandua.runs.list`
+- `tamandua.run.status`
+- `tamandua.run.start`
+- `tamandua.events.recent`
+
+For remote run creation, `tamandua.run.start` requires:
+
+- `workflowId`
+- `taskTitle`
+- `workingDirectoryForHarness` (**mandatory**)
+
+If omitted, MCP returns an invalid-params error (`Argument "workingDirectoryForHarness" must be a non-empty string`).
 
 ---
 

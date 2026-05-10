@@ -29,12 +29,17 @@ Use these when managing workflow runs (outside individual step execution):
 
 ```bash
 tamandua workflow list
-tamandua workflow run <workflow-id> "<task>"
+tamandua workflow run <workflow-id> "<task>" [--working-directory-for-harness <dir>]
 tamandua workflow status <run-id-or-query>
 tamandua workflow runs
 tamandua workflow resume <run-id>
 tamandua workflow stop <run-id>
 ```
+
+Harness working directory guidance:
+
+- CLI run: `--working-directory-for-harness` is optional; if omitted it defaults to the shell's current working directory.
+- Prefer passing an explicit absolute path when the task depends on a specific repo checkout.
 
 ### 3) Follow the step lifecycle exactly
 
@@ -61,6 +66,22 @@ On success, provide structured output that includes:
 Then pipe that output into `tamandua step complete <stepId>`.
 
 On failure, call `tamandua step fail <stepId> "<clear reason>"` with actionable detail.
+
+### 2.1) MCP run start (remote)
+
+When using MCP, `tamandua.run.start` requires a harness working directory.
+Always provide `workingDirectoryForHarness`.
+
+Required MCP args:
+
+- `workflowId`
+- `taskTitle`
+- `workingDirectoryForHarness` (mandatory)
+
+Recovery pattern for tool-calling models:
+
+- If MCP returns: `Argument "workingDirectoryForHarness" must be a non-empty string`
+- Retry the same tool call with an explicit absolute path (for example `/home/user/repo`).
 
 ## Examples
 

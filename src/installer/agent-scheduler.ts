@@ -29,6 +29,7 @@ const jobMetadata = new Map<string, CronJobInfo>();
  * and memory exhaustion.
  */
 const inFlightJobs = new Set<string>();
+const RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY = "working_directory_for_harness";
 
 export interface CronJobInfo {
   id: string;
@@ -40,7 +41,9 @@ export interface CronJobInfo {
   workModel?: string;
   sessionLabel?: string;
   timeoutSeconds?: number;
+  /** @deprecated Use workingDirectoryForHarness. Kept for persisted-job compatibility. */
   workdir?: string;
+  workingDirectoryForHarness?: string;
   createdAt: string;
 }
 
@@ -50,7 +53,13 @@ export interface CreateCronJobParams {
   workflow?: WorkflowSpec;
   intervalMinutes?: number;
   staggerOffsetMs?: number;
+  /** @deprecated Use workingDirectoryForHarness. */
   workdir?: string;
+  workingDirectoryForHarness?: string;
+}
+
+export interface SetupAgentCronsOptions {
+  workingDirectoryForHarness?: string;
 }
 
 // ── Persistence helpers ────────────────────────────────────────────
@@ -73,6 +82,129 @@ function loadPersistedJobs(): CronJobInfo[] {
     return JSON.parse(raw) as CronJobInfo[];
   } catch {
     return [];
+  }
+}
+
+function resolveJobWorkingDirectoryForHarness(job: CronJobInfo): string | undefined {
+  return job.workingDirectoryForHarness ?? job.workdir;
+}
+
+export interface WorkflowHarnessWorkingDirectoryResolution {
+  workingDirectoryForHarness?: string;
+  ambiguous: boolean;
+  reason:
+    | "active_runs_conflicting_workdirs"
+    | "active_runs_partially_missing_workdir"
+    | "active_runs_all_missing_workdir"
+    | "single_active_run"
+    | "single_active_run_missing_workdir"
+    | "no_active_runs"
+    | "lookup_failed";
+  activeRunCount: number;
+  runIds: string[];
+  workingDirectories: string[];
+  fallbackApplied: boolean;
+  lookupError?: string;
+}
+
+function readRunHarnessWorkingDirectory(contextRaw: string): string | null {
+  try {
+    const parsed = JSON.parse(contextRaw) as Record<string, unknown>;
+    const value = parsed[RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY];
+    if (typeof value !== "string" || value.trim().length === 0) return null;
+    return path.resolve(value.trim());
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveWorkflowHarnessWorkingDirectory(
+  workflowId: string,
+  fallbackWorkingDirectoryForHarness?: string,
+): Promise<WorkflowHarnessWorkingDirectoryResolution> {
+  try {
+    const { getDb } = await import("../db.js");
+    const db = getDb();
+    const runs = db
+      .prepare(
+        "SELECT id, context FROM runs WHERE workflow_id = ? AND status IN ('running', 'paused') ORDER BY created_at ASC",
+      )
+      .all(workflowId) as Array<{ id: string; context: string }>;
+
+    if (runs.length === 0) {
+      return {
+        workingDirectoryForHarness: fallbackWorkingDirectoryForHarness,
+        ambiguous: false,
+        reason: "no_active_runs",
+        activeRunCount: 0,
+        runIds: [],
+        workingDirectories: [],
+        fallbackApplied: fallbackWorkingDirectoryForHarness !== undefined,
+      };
+    }
+
+    const runIds = runs.map((run) => run.id);
+    const runWorkingDirectories = runs
+      .map((run) => readRunHarnessWorkingDirectory(run.context))
+      .filter((value): value is string => Boolean(value));
+    const uniqueWorkingDirectories = [...new Set(runWorkingDirectories)];
+
+    if (uniqueWorkingDirectories.length === 0) {
+      return {
+        workingDirectoryForHarness: fallbackWorkingDirectoryForHarness,
+        ambiguous: false,
+        reason: runs.length === 1 ? "single_active_run_missing_workdir" : "active_runs_all_missing_workdir",
+        activeRunCount: runs.length,
+        runIds,
+        workingDirectories: [],
+        fallbackApplied: fallbackWorkingDirectoryForHarness !== undefined,
+      };
+    }
+
+    if (uniqueWorkingDirectories.length > 1) {
+      return {
+        workingDirectoryForHarness: undefined,
+        ambiguous: true,
+        reason: "active_runs_conflicting_workdirs",
+        activeRunCount: runs.length,
+        runIds,
+        workingDirectories: uniqueWorkingDirectories,
+        fallbackApplied: false,
+      };
+    }
+
+    if (runWorkingDirectories.length !== runs.length) {
+      return {
+        workingDirectoryForHarness: undefined,
+        ambiguous: true,
+        reason: "active_runs_partially_missing_workdir",
+        activeRunCount: runs.length,
+        runIds,
+        workingDirectories: uniqueWorkingDirectories,
+        fallbackApplied: false,
+      };
+    }
+
+    return {
+      workingDirectoryForHarness: uniqueWorkingDirectories[0],
+      ambiguous: false,
+      reason: "single_active_run",
+      activeRunCount: runs.length,
+      runIds,
+      workingDirectories: uniqueWorkingDirectories,
+      fallbackApplied: false,
+    };
+  } catch (err) {
+    return {
+      workingDirectoryForHarness: fallbackWorkingDirectoryForHarness,
+      ambiguous: false,
+      reason: "lookup_failed",
+      activeRunCount: 0,
+      runIds: [],
+      workingDirectories: [],
+      fallbackApplied: fallbackWorkingDirectoryForHarness !== undefined,
+      lookupError: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -908,6 +1040,7 @@ function buildPollingRoundContext(
   job: CronJobInfo,
   agent: WorkflowAgent,
   timeoutSeconds: number,
+  workingDirectoryForHarness: string | undefined,
   workflow?: WorkflowSpec,
 ): Record<string, unknown> {
   const model = agent.pollingModel ?? workflow?.polling?.model ?? agent.model ?? job.workModel ?? job.model;
@@ -917,7 +1050,8 @@ function buildPollingRoundContext(
     agentId: job.agentId,
     role: agent.role ?? inferRole(agent.id),
     timeoutSeconds,
-    workdir: job.workdir,
+    workdir: workingDirectoryForHarness,
+    workingDirectoryForHarness,
     model,
   };
 }
@@ -929,7 +1063,28 @@ export async function executePollingRound(
 ): Promise<void> {
   const role = agent.role ?? inferRole(agent.id);
   const timeout = agent.timeoutSeconds ?? job.timeoutSeconds ?? getRoleTimeoutSeconds(role);
-  const context = buildPollingRoundContext(job, agent, timeout, workflow);
+  const fallbackWorkingDirectoryForHarness = resolveJobWorkingDirectoryForHarness(job);
+  const harnessResolution = await resolveWorkflowHarnessWorkingDirectory(
+    job.workflowId,
+    fallbackWorkingDirectoryForHarness,
+  );
+
+  if (harnessResolution.ambiguous) {
+    logger.warn("Polling round skipped — active runs require different harness working directories", {
+      jobId: job.id,
+      agentId: job.agentId,
+      role,
+      timeoutSeconds: timeout,
+      reason: harnessResolution.reason,
+      activeRunCount: harnessResolution.activeRunCount,
+      runIds: harnessResolution.runIds,
+      workingDirectories: harnessResolution.workingDirectories,
+    });
+    return;
+  }
+
+  const workingDirectoryForHarness = harnessResolution.workingDirectoryForHarness;
+  const context = buildPollingRoundContext(job, agent, timeout, workingDirectoryForHarness, workflow);
 
   // ── Stale-claim sweeper ───────────────────────────────────────────
   // Belt-and-suspenders: if pi was SIGKILL'd (or the polling node died)
@@ -1019,7 +1174,7 @@ export async function executePollingRound(
       ["--print", "--mode", "json", "--no-session", pollingPrompt],
       {
         timeout,
-        workdir: job.workdir,
+        workdir: workingDirectoryForHarness,
       },
     );
 
@@ -1124,9 +1279,16 @@ export async function executePollingRound(
 export async function createAgentCronJob(
   params: CreateCronJobParams,
 ): Promise<{ ok: boolean; error?: string; id?: string }> {
-  const { workflowId, agent, workflow, workdir } = params;
+  const {
+    workflowId,
+    agent,
+    workflow,
+    workdir,
+    workingDirectoryForHarness,
+  } = params;
   const intervalMinutes = params.intervalMinutes ?? 5;
   const staggerMs = params.staggerOffsetMs ?? 0;
+  const effectiveWorkingDirectoryForHarness = workingDirectoryForHarness ?? workdir;
 
   const id = `tamandua-${workflowId}-${agent.id}`;
   const name = `${workflowId}/${agent.id}`;
@@ -1153,7 +1315,8 @@ export async function createAgentCronJob(
     intervalMinutes,
     sessionLabel: `${agent.id}-cron`,
     timeoutSeconds,
-    workdir,
+    workdir: effectiveWorkingDirectoryForHarness,
+    workingDirectoryForHarness: effectiveWorkingDirectoryForHarness,
     createdAt: new Date().toISOString(),
   };
 
@@ -1170,7 +1333,13 @@ export async function createAgentCronJob(
     jobMetadata.set(id, jobInfo);
     persistJobs();
 
-    logger.info("Cron job created", { id, agentId: agent.id, intervalMinutes, staggerMs });
+    logger.info("Cron job created", {
+      id,
+      agentId: agent.id,
+      intervalMinutes,
+      staggerMs,
+      workingDirectoryForHarness: effectiveWorkingDirectoryForHarness,
+    });
   };
 
   if (staggerMs > 0) {
@@ -1187,7 +1356,10 @@ export async function createAgentCronJob(
  * Set up polling for all agents in a workflow.
  * Staggers agent starts by 1 minute each.
  */
-export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
+export async function setupAgentCrons(
+  workflow: WorkflowSpec,
+  options: SetupAgentCronsOptions = {},
+): Promise<void> {
   const staggerBaseMs = 60_000; // 1 minute per agent
 
   for (let i = 0; i < workflow.agents.length; i++) {
@@ -1195,6 +1367,19 @@ export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
     const staggerMs = i * staggerBaseMs;
 
     const fullAgentId = agent.id.startsWith(`${workflow.id}_`) ? agent.id : `${workflow.id}_${agent.id}`;
+    const defaultWorkdir = resolveWorkflowWorkspaceDir(fullAgentId);
+    const workingDirectoryForHarness = options.workingDirectoryForHarness ?? defaultWorkdir;
+
+    const existingJobId = `tamandua-${workflow.id}-${agent.id}`;
+    const existing = jobMetadata.get(existingJobId);
+    if (existing) {
+      logger.info("Cron job already exists; retaining existing scheduler instance", {
+        jobId: existing.id,
+        agentId: existing.agentId,
+        requestedWorkingDirectoryForHarness: workingDirectoryForHarness,
+      });
+      continue;
+    }
 
     const result = await createAgentCronJob({
       workflowId: workflow.id,
@@ -1204,7 +1389,7 @@ export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
         ? Math.max(1, Math.ceil(workflow.polling.timeoutSeconds / 60))
         : 5,
       staggerOffsetMs: staggerMs,
-      workdir: resolveWorkflowWorkspaceDir(fullAgentId),
+      workingDirectoryForHarness,
     });
 
     if (!result.ok) {
@@ -1242,21 +1427,32 @@ export async function removeAgentCrons(workflowId: string): Promise<void> {
  * Ensure crons are set up for a workflow.
  * Idempotent — will not duplicate existing jobs.
  */
-export async function ensureWorkflowCrons(workflow: WorkflowSpec): Promise<void> {
+export async function ensureWorkflowCrons(
+  workflow: WorkflowSpec,
+  options: SetupAgentCronsOptions = {},
+): Promise<void> {
   for (const agent of workflow.agents) {
     const id = `tamandua-${workflow.id}-${agent.id}`;
-    if (activeTimers.has(id)) continue;
 
     const fullAgentId = agent.id.startsWith(`${workflow.id}_`) ? agent.id : `${workflow.id}_${agent.id}`;
+    const defaultWorkdir = resolveWorkflowWorkspaceDir(fullAgentId);
+    const workingDirectoryForHarness = options.workingDirectoryForHarness ?? defaultWorkdir;
+
+    const existing = jobMetadata.get(id);
+    if (existing) {
+      continue;
+    }
 
     await createAgentCronJob({
       workflowId: workflow.id,
       agent,
       workflow,
       intervalMinutes: 5,
-      workdir: resolveWorkflowWorkspaceDir(fullAgentId),
+      workingDirectoryForHarness,
     });
   }
+
+  persistJobs();
 }
 
 /**
@@ -1342,6 +1538,11 @@ export async function resumePersistedCrons(workflows: WorkflowSpec[]): Promise<v
   for (const job of persisted) {
     // Skip if already running
     if (activeTimers.has(job.id)) continue;
+
+    // Backward compatibility with older persisted cron metadata.
+    if (!job.workingDirectoryForHarness && job.workdir) {
+      job.workingDirectoryForHarness = job.workdir;
+    }
 
     const workflow = workflowMap.get(job.workflowId);
     if (!workflow) {

@@ -4,6 +4,7 @@ dist/
 *.db
 events.jsonl*
 tamandua.log*
+test-output.log
 medic.json
 .tamandua-pid
 *.key
