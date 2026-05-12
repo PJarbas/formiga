@@ -121,6 +121,8 @@
     }
     .num { font-family: "SF Mono", "Fira Code", monospace; color: #8b949e; }
     .mono { font-family: "SF Mono", "Fira Code", monospace; }
+    a.run-link { color: #58a6ff; text-decoration: none; }
+    a.run-link:hover { text-decoration: underline; }
     .truncate {
       max-width: 200px;
       overflow: hidden;
@@ -291,7 +293,7 @@
 
         return `<tr>
           <td class="num">#${r.run_number ?? "-"}</td>
-          <td><span class="mono">${esc(r.id).slice(0, 8)}</span></td>
+          <td><a class="mono run-link" href="/runs/${encodeURIComponent(r.id)}/kanban" title="Open kanban view">${esc(r.id).slice(0, 8)}</a></td>
           <td>${esc(r.workflow_id)}</td>
           <td class="truncate" title="${esc(r.task || "")}">${esc(task)}</td>
           <td><span class="badge ${badgeClass}">${r.status}</span></td>

@@ -4,11 +4,13 @@
  * Creates an HTTP server that serves the dashboard UI and API endpoints.
  *
  * Routes:
- *   GET /             -> index.html (dashboard UI)
- *   GET /api/runs     -> list all workflow runs
- *   GET /api/runs/:id -> detail for a specific run
- *   GET /api/events   -> recent events (global)
- *   GET /api/logs-tail -> logs-tail formatted event lines (cursor based)
+ *   GET /                        -> index.html (dashboard UI)
+ *   GET /runs/:id/kanban         -> kanban.html (per-run swim-lane view)
+ *   GET /api/runs                -> list all workflow runs
+ *   GET /api/runs/:id            -> detail for a specific run
+ *   GET /api/runs/:id/kanban     -> lane-grouped snapshot for the kanban view
+ *   GET /api/events              -> recent events (global)
+ *   GET /api/logs-tail           -> logs-tail formatted event lines (cursor based)
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -18,9 +20,11 @@ import { getDb } from "../db.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { getMcpStatus } from "./daemonctl.js";
+import { buildKanbanSnapshot } from "./kanban-data.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_HTML = path.join(__dirname, "index.html");
+const KANBAN_HTML = path.join(__dirname, "kanban.html");
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -125,6 +129,23 @@ function handleRunDetail(
   }
 }
 
+function handleRunKanban(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): void {
+  try {
+    const snapshot = buildKanbanSnapshot(getDb(), runId);
+    if (!snapshot) {
+      errorResponse(res, `Run not found: ${runId}`, 404);
+      return;
+    }
+    jsonResponse(res, snapshot);
+  } catch (err) {
+    errorResponse(res, `Failed to build kanban snapshot: ${(err as Error).message}`);
+  }
+}
+
 function handleEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -217,6 +238,29 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
 <body><h1>Tamandua Dashboard</h1><p>Dashboard HTML not found. Rebuild tamandua or check dist/server/index.html.</p></body>
 </html>`, 200);
     }
+    return;
+  }
+
+  // GET /runs/:id/kanban
+  const kanbanHtmlMatch = pathname.match(/^\/runs\/([a-zA-Z0-9_-]+)\/kanban$/);
+  if (method === "GET" && kanbanHtmlMatch) {
+    try {
+      const html = fs.readFileSync(KANBAN_HTML, "utf-8");
+      htmlResponse(res, html);
+    } catch {
+      htmlResponse(res, `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Tamandua Kanban</title></head>
+<body><h1>Tamandua Kanban</h1><p>Kanban HTML not found. Rebuild tamandua or check dist/server/kanban.html.</p></body>
+</html>`, 200);
+    }
+    return;
+  }
+
+  // GET /api/runs/:id/kanban (registered before /api/runs/:id below)
+  const kanbanApiMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/kanban$/);
+  if (method === "GET" && kanbanApiMatch) {
+    handleRunKanban(req, res, kanbanApiMatch[1]);
     return;
   }
 
