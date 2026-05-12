@@ -135,7 +135,14 @@ describe("dashboard kanban view", () => {
 
   it("links the kanban view from each run row in index.html", () => {
     const html = fs.readFileSync(path.join(repoRoot, "src", "server", "index.html"), "utf-8");
+    // Two affordances: the run-ID chip stays clickable, and there is also an
+    // explicit "Kanban →" pill in a dedicated "View" column so the option is
+    // unambiguous on every row.
     assert.match(html, /\/runs\/\$\{encodeURIComponent\(r\.id\)\}\/kanban/);
     assert.match(html, /class="mono run-link"/);
+    assert.match(html, /class="kanban-link"/);
+    assert.match(html, /Kanban &rarr;/);
+    assert.match(html, /<th>View<\/th>/);
+    assert.match(html, /a\.kanban-link\s*\{[^}]*border-radius:\s*999px/);
   });
 });
