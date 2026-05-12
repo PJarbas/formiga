@@ -202,6 +202,17 @@ When you start the management dashboard (`tamandua dashboard`), Tamandua automat
 
 Use `tamandua dashboard status` to verify both endpoints are up.
 
+#### Kanban view
+
+Each run also has a swim-lane view at `http://localhost:3334/runs/<run-id>/kanban`
+(linked from the run-ID in the dashboard's runs table). Lanes are derived
+dynamically from the workflow's steps: single steps render one card per lane,
+loop steps (e.g. the developer agent iterating over user stories) render one
+card per story. Cards are colour-coded by status (todo / running / done /
+failed) and the page polls `/api/runs/<run-id>/kanban` every 3 seconds. The
+JSON endpoint is also useful for external integrations — see
+`src/server/kanban-data.ts` for the response shape.
+
 ### Remote MCP tools
 
 The remote MCP endpoint exposes these tools:

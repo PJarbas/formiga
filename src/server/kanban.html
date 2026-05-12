@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tamandua Kanban</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-2: #1c222b;
+      --line: #21262d;
+      --line-2: #30363d;
+      --ink: #c9d1d9;
+      --ink-soft: #8b949e;
+      --ink-strong: #e6edf3;
+      --accent: #f0883e;
+      --todo: #8b949e;
+      --running: #d29922;
+      --done: #3fb950;
+      --failed: #f85149;
+    }
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.5;
+    }
+    body { display: flex; flex-direction: column; min-height: 100vh; }
+
+    header.bar {
+      background: var(--panel);
+      border-bottom: 1px solid var(--line-2);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .brand { display: flex; align-items: baseline; gap: 12px; }
+    .brand h1 { font-size: 20px; font-weight: 600; color: var(--accent); }
+    .brand .subtitle { font-size: 13px; color: var(--ink-soft); }
+    .brand a.back {
+      color: var(--ink-soft);
+      text-decoration: none;
+      font-size: 12px;
+      border: 1px solid var(--line-2);
+      padding: 4px 10px;
+      border-radius: 999px;
+      margin-left: 12px;
+    }
+    .brand a.back:hover { color: var(--ink-strong); border-color: var(--ink-soft); }
+
+    .meta {
+      display: flex;
+      gap: 28px;
+      margin-left: auto;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .meta .stat { display: flex; flex-direction: column; line-height: 1.1; }
+    .meta .stat .label {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      font-weight: 500;
+    }
+    .meta .stat .value {
+      font-size: 22px;
+      font-weight: 600;
+      color: var(--ink-strong);
+      margin-top: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .meta .stat.run .value { font-size: 13px; color: var(--ink); font-weight: 500; }
+    .meta .pulse {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--running); margin-right: 8px;
+      animation: pulse 1.8s infinite;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .meta .pulse.todo { background: var(--todo); animation: none; }
+    .meta .pulse.done { background: var(--done); animation: none; }
+    .meta .pulse.failed { background: var(--failed); animation: none; }
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(210, 153, 34, 0.55); }
+      70%  { box-shadow: 0 0 0 10px rgba(210, 153, 34, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(210, 153, 34, 0); }
+    }
+
+    main.board {
+      flex: 1 1 auto;
+      display: grid;
+      grid-template-columns: repeat(var(--lanes, 6), minmax(0, 1fr));
+      gap: 14px;
+      padding: 20px 24px 28px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .lane {
+      background: var(--panel);
+      border: 1px solid var(--line-2);
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .lane-head {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--line-2);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .lane-name {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--ink-strong);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .lane-name .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--todo);
+    }
+    .lane-name.running .dot { background: var(--running); }
+    .lane-name.done    .dot { background: var(--done); }
+    .lane-name.failed  .dot { background: var(--failed); }
+    .lane-sub {
+      font-size: 11px;
+      color: var(--ink-soft);
+    }
+    .cards {
+      flex: 1 1 auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .card {
+      background: var(--panel-2);
+      border: 1px solid var(--line-2);
+      border-left: 3px solid var(--todo);
+      border-radius: 8px;
+      padding: 9px 11px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      transition: border-color 120ms ease;
+    }
+    .card.running { border-left-color: var(--running); animation: card-pulse 2.4s infinite ease-in-out; }
+    .card.done    { border-left-color: var(--done); }
+    .card.failed  { border-left-color: var(--failed); }
+    @keyframes card-pulse {
+      0%, 100% { background: var(--panel-2); }
+      50%      { background: #2a2410; }
+    }
+    .card .id-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--ink-soft);
+      letter-spacing: 0.04em;
+      font-weight: 500;
+    }
+    .card .id-row .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--todo);
+      display: inline-block;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .card.running .id-row .dot { background: var(--running); }
+    .card.done    .id-row .dot { background: var(--done); }
+    .card.failed  .id-row .dot { background: var(--failed); }
+    .card .title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--ink-strong);
+      line-height: 1.3;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
+    .card .meta-row {
+      font-size: 10.5px;
+      color: var(--ink-soft);
+      letter-spacing: 0.02em;
+    }
+
+    .lane-foot {
+      border-top: 1px solid var(--line-2);
+      padding: 10px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11.5px;
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+      gap: 12px;
+    }
+    .lane-foot .progress {
+      flex: 1 1 auto;
+      height: 4px;
+      background: var(--line);
+      border-radius: 2px;
+      position: relative;
+      overflow: hidden;
+    }
+    .lane-foot .progress .fill {
+      position: absolute; inset: 0 auto 0 0;
+      background: var(--done);
+      width: 0%;
+      transition: width 200ms ease;
+    }
+    .lane-foot .progress.failed .fill { background: var(--failed); }
+    .lane-foot .progress.running .fill { background: var(--running); }
+
+    footer.status {
+      border-top: 1px solid var(--line-2);
+      padding: 10px 24px;
+      font-size: 11px;
+      color: var(--ink-soft);
+      display: flex;
+      justify-content: space-between;
+      letter-spacing: 0.04em;
+      background: var(--panel);
+    }
+    footer.status .err { color: var(--failed); font-weight: 500; }
+
+    @media (max-width: 1100px) {
+      main.board { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow-y: auto; }
+    }
+    @media (max-width: 720px) {
+      main.board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      header.bar { padding: 14px 16px; gap: 16px; }
+      .meta { gap: 18px; width: 100%; margin-left: 0; }
+      .meta .stat .value { font-size: 18px; }
+    }
+    @media (max-width: 480px) {
+      main.board { grid-template-columns: 1fr; padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <h1>Tamandua</h1>
+      <span class="subtitle">workflow kanban</span>
+      <a href="/" class="back">← all runs</a>
+    </div>
+    <div class="meta">
+      <div class="stat run">
+        <div class="label">Run</div>
+        <div class="value" id="run-id">—</div>
+      </div>
+      <div class="stat">
+        <div class="label">Status</div>
+        <div class="value" id="run-status">
+          <span class="pulse" id="run-pulse"></span><span id="run-status-text">—</span>
+        </div>
+      </div>
+      <div class="stat">
+        <div class="label">Elapsed</div>
+        <div class="value" id="elapsed">—</div>
+      </div>
+      <div class="stat">
+        <div class="label">Tokens</div>
+        <div class="value" id="tokens">—</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="board" id="board"><!-- lanes injected --></main>
+
+  <footer class="status">
+    <span id="footer-left">connecting…</span>
+    <span id="footer-right"></span>
+  </footer>
+
+<script>
+(function () {
+  const REFRESH_MS = 3000;
+  const runId = window.location.pathname.split("/")[2];
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function fmtElapsed(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (h) return h + "h " + String(m).padStart(2, "0") + "m";
+    if (m) return m + "m " + String(s).padStart(2, "0") + "s";
+    return s + "s";
+  }
+
+  function fmtTokens(n) {
+    if (n == null) return "—";
+    const v = Number(n);
+    if (!Number.isFinite(v)) return "—";
+    if (v >= 1e6) return (v / 1e6).toFixed(2) + "M";
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + "k";
+    return String(v);
+  }
+
+  function parseTimestamp(ts) {
+    if (!ts) return NaN;
+    // Tamandua mixes ISO-Z and naive space-separated UTC strings.
+    const iso = /Z$/.test(ts) ? ts : ts.replace(" ", "T") + "Z";
+    return Date.parse(iso);
+  }
+
+  function fmtTime(ts) {
+    const t = parseTimestamp(ts);
+    if (!Number.isFinite(t)) return "";
+    return new Date(t).toLocaleTimeString([], {
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+  }
+
+  function renderHeader(snapshot) {
+    const run = snapshot.run;
+    const idChip = run.workflow_id + " #" + (run.run_number ?? "?") +
+      " · " + String(run.id).slice(0, 8);
+    document.getElementById("run-id").textContent = idChip;
+    document.getElementById("run-status-text").textContent = run.status;
+    const pulse = document.getElementById("run-pulse");
+    pulse.className = "pulse " + statusBucket(run.status);
+
+    const createdMs = parseTimestamp(run.created_at);
+    document.getElementById("elapsed").textContent =
+      Number.isFinite(createdMs) ? fmtElapsed((Date.now() - createdMs) / 1000) : "—";
+    document.getElementById("tokens").textContent = fmtTokens(run.tokens_spent);
+  }
+
+  function statusBucket(raw) {
+    const s = String(raw || "").toLowerCase();
+    if (s === "running") return "running";
+    if (s === "done" || s === "completed") return "done";
+    if (s === "failed" || s === "canceled" || s === "cancelled") return "failed";
+    return "todo";
+  }
+
+  function renderBoard(snapshot) {
+    const board = document.getElementById("board");
+    board.style.setProperty("--lanes", String(Math.max(1, snapshot.lanes.length)));
+    board.innerHTML = "";
+    for (const lane of snapshot.lanes) {
+      const laneEl = document.createElement("section");
+      laneEl.className = "lane";
+
+      const head = document.createElement("div");
+      head.className = "lane-head";
+      const itemWord = lane.summary.total === 1 ? "item" : "items";
+      head.innerHTML =
+        '<div class="lane-name ' + lane.status + '">' +
+        '<span class="dot"></span>' + escapeHtml(lane.label) +
+        '</div>' +
+        '<div class="lane-sub">' + lane.summary.total + ' ' + itemWord +
+        ' · ' + escapeHtml(lane.stepType) + '</div>';
+      laneEl.appendChild(head);
+
+      const cardsEl = document.createElement("div");
+      cardsEl.className = "cards";
+      if (lane.cards.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "card";
+        empty.innerHTML = '<div class="title" style="color:var(--ink-soft)">—</div>';
+        cardsEl.appendChild(empty);
+      } else {
+        for (const c of lane.cards) {
+          const cardEl = document.createElement("div");
+          cardEl.className = "card " + c.status;
+          cardEl.innerHTML =
+            '<div class="id-row">' +
+              '<span><span class="dot"></span>' + escapeHtml(c.id) + '</span>' +
+              '<span>' + escapeHtml(c.status) + '</span>' +
+            '</div>' +
+            '<div class="title">' + escapeHtml(c.title) + '</div>' +
+            '<div class="meta-row">' + escapeHtml(c.sub) + '</div>';
+          cardsEl.appendChild(cardEl);
+        }
+      }
+      laneEl.appendChild(cardsEl);
+
+      const total = lane.summary.total;
+      const done = lane.summary.done;
+      const failed = lane.summary.failed;
+      const running = lane.summary.running;
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      const progressClass = failed > 0 ? "failed" : (running > 0 ? "running" : "");
+      const progressWidth = failed > 0 ? 100 : pct;
+
+      const foot = document.createElement("div");
+      foot.className = "lane-foot";
+      foot.innerHTML =
+        '<span>' + done + '/' + total + ' done' +
+        (failed ? ' · ' + failed + ' failed' : '') + '</span>' +
+        '<div class="progress ' + progressClass + '">' +
+          '<div class="fill" style="width:' + progressWidth + '%"></div>' +
+        '</div>' +
+        '<span>' + pct + '%</span>';
+      laneEl.appendChild(foot);
+
+      board.appendChild(laneEl);
+    }
+  }
+
+  let lastGoodAt = null;
+
+  async function tick() {
+    if (!runId) {
+      document.getElementById("footer-left").innerHTML =
+        '<span class="err">no runId in URL — expected /runs/&lt;id&gt;/kanban</span>';
+      return;
+    }
+    try {
+      const r = await fetch("/api/runs/" + encodeURIComponent(runId) + "/kanban", {
+        cache: "no-store",
+      });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error("HTTP " + r.status + " — " + txt.slice(0, 200));
+      }
+      const data = await r.json();
+      renderHeader(data);
+      renderBoard(data);
+      lastGoodAt = new Date();
+      document.getElementById("footer-left").textContent =
+        "live · refreshed " + lastGoodAt.toLocaleTimeString();
+      document.getElementById("footer-right").textContent =
+        runId + " · poll " + (REFRESH_MS / 1000) + "s";
+    } catch (e) {
+      const last = lastGoodAt ? lastGoodAt.toLocaleTimeString() : "never";
+      document.getElementById("footer-left").innerHTML =
+        '<span class="err">disconnected</span> · ' + escapeHtml(e.message) +
+        ' · last good ' + last;
+    }
+  }
+
+  tick();
+  setInterval(tick, REFRESH_MS);
+})();
+</script>
+</body>
+</html>

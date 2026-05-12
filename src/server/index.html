@@ -121,6 +121,26 @@
     }
     .num { font-family: "SF Mono", "Fira Code", monospace; color: #8b949e; }
     .mono { font-family: "SF Mono", "Fira Code", monospace; }
+    a.run-link { color: #58a6ff; text-decoration: none; }
+    a.run-link:hover { text-decoration: underline; }
+    a.kanban-link {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid #30363d;
+      background: #161b22;
+      color: #c9d1d9;
+      text-decoration: none;
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+      transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+    }
+    a.kanban-link:hover {
+      border-color: #f0883e;
+      color: #f0883e;
+      background: #1c222b;
+    }
     .truncate {
       max-width: 200px;
       overflow: hidden;
@@ -291,7 +311,7 @@
 
         return `<tr>
           <td class="num">#${r.run_number ?? "-"}</td>
-          <td><span class="mono">${esc(r.id).slice(0, 8)}</span></td>
+          <td><a class="mono run-link" href="/runs/${encodeURIComponent(r.id)}/kanban" title="Open kanban view">${esc(r.id).slice(0, 8)}</a></td>
           <td>${esc(r.workflow_id)}</td>
           <td class="truncate" title="${esc(r.task || "")}">${esc(task)}</td>
           <td><span class="badge ${badgeClass}">${r.status}</span></td>
@@ -302,12 +322,13 @@
           </td>
           <td class="num">${tokensSpent}</td>
           <td class="num" style="font-size:11px">${timeAgo(r.updated_at)}</td>
+          <td><a class="kanban-link" href="/runs/${encodeURIComponent(r.id)}/kanban" aria-label="Open kanban for run ${esc(r.id)}">Kanban &rarr;</a></td>
         </tr>`;
       }).join("");
 
       el.innerHTML = `<table>
         <thead><tr>
-          <th>#</th><th>Run ID</th><th>Workflow</th><th>Task</th><th>Status</th><th>Progress</th><th>Tokens</th><th>Updated</th>
+          <th>#</th><th>Run ID</th><th>Workflow</th><th>Task</th><th>Status</th><th>Progress</th><th>Tokens</th><th>Updated</th><th>View</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
