@@ -384,13 +384,15 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
 
       const tools = (toolsResult.body.result as { tools: Array<{ name: string }> }).tools;
       assert.ok(Array.isArray(tools), "tools/list should return a tools array");
-      assert.ok(tools.length >= 4, `Expected at least 4 MCP tools, got ${tools.length}`);
+      assert.ok(tools.length >= 6, `Expected at least 6 MCP tools, got ${tools.length}`);
 
       const toolNames = tools.map((t: { name: string }) => t.name);
       assert.ok(toolNames.includes("tamandua.runs.list"), "Should include tamandua.runs.list tool");
       assert.ok(toolNames.includes("tamandua.run.status"), "Should include tamandua.run.status tool");
       assert.ok(toolNames.includes("tamandua.run.start"), "Should include tamandua.run.start tool");
       assert.ok(toolNames.includes("tamandua.events.recent"), "Should include tamandua.events.recent tool");
+      assert.ok(toolNames.includes("tamandua.source.path"), "Should include tamandua.source.path tool");
+      assert.ok(toolNames.includes("tamandua.update.command"), "Should include tamandua.update.command tool");
 
       // Verify MCP is independently running
       const status = await runCli(["mcp", "status"], cliEnv);

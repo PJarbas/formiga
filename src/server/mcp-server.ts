@@ -12,6 +12,7 @@ import {
 import { getWorkflowStatus, listRuns, type RunDetail, type RunInfo } from "../installer/status.js";
 import { runWorkflow, type RunWorkflowResult } from "../installer/run.js";
 import { getRecentEvents, type TamanduaEvent } from "../installer/events.js";
+import { resolveSourcePath } from "../installer/paths.js";
 
 export const DEFAULT_MCP_PORT = 3338;
 export const MCP_ENDPOINT_PATH = "/mcp";
@@ -20,6 +21,8 @@ const MCP_TOOL_RUNS_LIST = "tamandua.runs.list";
 const MCP_TOOL_RUN_STATUS = "tamandua.run.status";
 const MCP_TOOL_RUN_START = "tamandua.run.start";
 const MCP_TOOL_EVENTS_RECENT = "tamandua.events.recent";
+const MCP_TOOL_SOURCE_PATH = "tamandua.source.path";
+const MCP_TOOL_UPDATE_COMMAND = "tamandua.update.command";
 
 type McpSession = {
   protocolServer: Server;
@@ -35,6 +38,7 @@ export interface TamanduaMcpToolServices {
     workingDirectoryForHarness: string;
   }) => Promise<RunWorkflowResult>;
   getRecentEvents: (limit?: number) => TamanduaEvent[];
+  getSourcePath: () => string;
 }
 
 export type TamanduaMcpServerOptions = {
@@ -53,6 +57,7 @@ const defaultToolServices: TamanduaMcpToolServices = {
   getWorkflowStatus,
   runWorkflow,
   getRecentEvents,
+  getSourcePath: resolveSourcePath,
 };
 
 const mcpTools: Array<Record<string, unknown>> = [
@@ -192,6 +197,62 @@ const mcpTools: Array<Record<string, unknown>> = [
       },
     },
   },
+  {
+    name: MCP_TOOL_SOURCE_PATH,
+    title: "Get Tamandua Source Path",
+    description: "Return the local Tamandua source checkout path.",
+    annotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: "object",
+      required: ["sourcePath"],
+      properties: {
+        sourcePath: {
+          type: "string",
+          description: "Tamandua source checkout path.",
+        },
+      },
+    },
+  },
+  {
+    name: MCP_TOOL_UPDATE_COMMAND,
+    title: "Get Tamandua Update Command",
+    description: "Return local CLI guidance for updating Tamandua safely.",
+    annotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: "object",
+      required: ["command", "description", "safety"],
+      properties: {
+        command: {
+          type: "string",
+          description: "The local CLI command.",
+        },
+        description: {
+          type: "string",
+          description: "What the command does.",
+        },
+        safety: {
+          type: "string",
+          description: "Important service lifecycle guidance.",
+        },
+      },
+    },
+  },
 ];
 
 function invalidParams(message: string): never {
@@ -294,6 +355,20 @@ function createProtocolServer(services: TamanduaMcpToolServices): Server {
     if (name === MCP_TOOL_EVENTS_RECENT) {
       const limit = readLimitArgument(args, 50, 500);
       return createToolResult({ events: services.getRecentEvents(limit) });
+    }
+
+    if (name === MCP_TOOL_SOURCE_PATH) {
+      return createToolResult({ sourcePath: services.getSourcePath() });
+    }
+
+    if (name === MCP_TOOL_UPDATE_COMMAND) {
+      return createToolResult({
+        command: "tamandua update [--force]",
+        description:
+          "Runs git pull in the Tamandua source checkout, rebuilds when the pulled HEAD changes, reinstalls bundled workflows, and restarts previously running Tamandua services when safe.",
+        safety:
+          "Run this command through the local CLI. The update process manages dashboard, MCP, and control-plane lifecycle; without --force it refuses the service reinstall/restart step while Tamandua runs are active.",
+      });
     }
 
     throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${name}`);

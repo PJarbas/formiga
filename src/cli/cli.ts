@@ -21,7 +21,8 @@ import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "../server/mcp-server.js";
 import { DEFAULT_CONTROL_PORT } from "../server/control-server.js";
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
 import { ensureCliSymlink } from "../installer/symlink.js";
-import { execSync } from "node:child_process";
+import { resolveSourcePath } from "../installer/paths.js";
+import { runUpdate } from "./update.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -112,7 +113,8 @@ function printUsage() {
     "", "tamandua logs [<lines>|<run-id>|#<run-number>] Show recent activity",
     "tamandua logs-tail [<lines>|<run-id>|#<run-number>] Follow recent activity",
     "", "tamandua version                      Show installed version",
-    "tamandua update                       Pull latest, rebuild, reinstall",
+    "tamandua source-path                  Print source checkout path",
+    "tamandua update [--force]             Pull latest, rebuild, reinstall",
   ].join("\n") + "\n");
 }
 
@@ -162,18 +164,23 @@ async function main() {
   if (group === "tamandua") {
     const { printTamandua } = await import("./ant.js"); printTamandua(); return;
   }
+  if (group === "source-path") {
+    console.log(resolveSourcePath()); return;
+  }
 
   if (group === "update") {
-    const repoRoot = join(__dirname, "..", "..");
-    console.log("Pulling latest...");
-    try { execSync("git pull", { cwd: repoRoot, stdio: "inherit" }); } catch { process.stderr.write("Failed to git pull.\n"); process.exit(1); }
-    execSync("npm install", { cwd: repoRoot, stdio: "inherit" });
-    execSync("npm run build", { cwd: repoRoot, stdio: "inherit" });
-    const workflows = await listBundledWorkflows();
-    if (workflows.length > 0) { console.log(`Reinstalling ${workflows.length} workflow(s)...`);
-      for (const wf of workflows) { try { await installWorkflow({ workflowId: wf }); console.log(`  ✓ ${wf}`); } catch (err) { console.log(`  ✗ ${wf}: ${err instanceof Error ? err.message : String(err)}`); } }
+    const force = args.includes("--force");
+    const unknownArgs = args.slice(1).filter((arg) => arg !== "--force");
+    if (unknownArgs.length > 0) {
+      process.stderr.write(`Unknown update option: ${unknownArgs[0]}\nUsage: tamandua update [--force]\n`);
+      process.exitCode = 1;
+      return;
     }
-    ensureCliSymlink(); console.log(`\nUpdated to v${getVersion()}.`); return;
+    const result = await runUpdate({ force });
+    if (result.status === "blocked_active_runs") {
+      process.exitCode = 1;
+    }
+    return;
   }
 
   if (group === "uninstall" && (!args[1] || args[1] === "--force")) {
@@ -545,4 +552,4 @@ async function main() {
   printUsage(); process.exit(1);
 }
 
-main().catch((err) => { console.error("Error:", err.message); process.exit(1); });
+await main().catch((err) => { console.error("Error:", err.message); process.exit(1); });

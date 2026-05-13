@@ -15,6 +15,7 @@ Use the `tamandua` CLI if available on PATH.
 
 ```bash
 tamandua version
+tamandua source-path
 ```
 
 If the binary is not on PATH, use the Node entrypoint directly:
@@ -35,6 +36,12 @@ tamandua workflow runs
 tamandua workflow resume <run-id>
 tamandua workflow stop <run-id>
 ```
+
+Use `tamandua update [--force]` only for local Tamandua maintenance. Without
+`--force`, update stops after rebuilding if active runs are present.
+Remote MCP clients can discover the same maintenance command via
+`tamandua.update.command`; run the actual update through the local CLI because
+it may restart dashboard, MCP, and the control plane.
 
 Harness working directory guidance:
 

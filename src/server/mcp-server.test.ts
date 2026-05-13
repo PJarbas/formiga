@@ -138,6 +138,7 @@ describe("mcp-server bootstrap", () => {
     const runStatusCalls: string[] = [];
     const runStartCalls: Array<{ workflowId: string; taskTitle: string; workingDirectoryForHarness: string }> = [];
     const eventCalls: number[] = [];
+    const sourcePathCalls: string[] = [];
 
     const expectedRuns = [
       {
@@ -199,6 +200,10 @@ describe("mcp-server bootstrap", () => {
           eventCalls.push(limit);
           return expectedEvents;
         },
+        getSourcePath: () => {
+          sourcePathCalls.push("called");
+          return "/tmp/tamandua-source";
+        },
       },
     });
 
@@ -222,7 +227,14 @@ describe("mcp-server bootstrap", () => {
       const tools = (toolsList.body?.result?.tools ?? []) as Array<Record<string, unknown>>;
       assert.deepEqual(
         tools.map((tool) => tool.name),
-        ["tamandua.runs.list", "tamandua.run.status", "tamandua.run.start", "tamandua.events.recent"],
+        [
+          "tamandua.runs.list",
+          "tamandua.run.status",
+          "tamandua.run.start",
+          "tamandua.events.recent",
+          "tamandua.source.path",
+          "tamandua.update.command",
+        ],
       );
       assert.deepEqual((tools[0]?.inputSchema as { properties?: Record<string, unknown> }).properties?.limit, {
         type: "integer",
@@ -274,6 +286,18 @@ describe("mcp-server bootstrap", () => {
       assert.equal(eventsRecent.body?.error, undefined);
       assert.deepEqual(eventsRecent.body?.result?.structuredContent, { events: expectedEvents });
       assert.deepEqual(eventCalls, [7]);
+
+      const sourcePath = await callTool(server.port, sessionId, 7, "tamandua.source.path", {});
+      assert.equal(sourcePath.status, 200);
+      assert.equal(sourcePath.body?.error, undefined);
+      assert.deepEqual(sourcePath.body?.result?.structuredContent, { sourcePath: "/tmp/tamandua-source" });
+      assert.deepEqual(sourcePathCalls, ["called"]);
+
+      const updateCommand = await callTool(server.port, sessionId, 8, "tamandua.update.command", {});
+      assert.equal(updateCommand.status, 200);
+      assert.equal(updateCommand.body?.error, undefined);
+      assert.match(updateCommand.body?.result?.structuredContent?.command, /tamandua update/);
+      assert.match(updateCommand.body?.result?.structuredContent?.safety, /local CLI/);
     } finally {
       await stopTamanduaMcpServer(server);
     }

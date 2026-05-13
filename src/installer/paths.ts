@@ -1,4 +1,5 @@
 import os from "node:os";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +9,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export function resolveBundledWorkflowsDir(): string {
   // From dist/installer/paths.js -> ../../workflows
   return path.resolve(__dirname, "..", "..", "workflows");
+}
+
+export function resolveSourcePath(): string {
+  // From dist/installer/paths.js -> ../.. (the checkout/package root)
+  const sourcePath = path.resolve(__dirname, "..", "..");
+  try {
+    return fs.realpathSync(sourcePath);
+  } catch {
+    return sourcePath;
+  }
 }
 
 export function resolveBundledWorkflowDir(workflowId: string): string {

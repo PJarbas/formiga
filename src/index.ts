@@ -40,7 +40,15 @@ export {
   resolveWorkflowWorkspaceRoot,
   resolveBundledWorkflowsDir,
   resolveBundledWorkflowDir,
+  resolveSourcePath,
 } from "./installer/paths.js";
+
+export {
+  createDefaultUpdateServices,
+  defaultRunCommand,
+  installAllBundledWorkflowsForUpdate,
+  runUpdate,
+} from "./cli/update.js";
 
 // Database
 export { getDb, nextRunNumber, getDbPath } from "./db.js";
