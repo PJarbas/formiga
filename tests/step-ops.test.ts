@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { parseOutputKeyValues, resolveTemplate, buildStoryPlanSection, mergeStoryPlanIntoProgress, validateExpects, completeStep, resolveStepContext } from "../dist/installer/step-ops.js";
+import { parseOutputKeyValues, resolveTemplate, buildStoryPlanSection, mergeStoryPlanIntoProgress, validateExpects, completeStep, resolveStepContext, failStep, claimStep } from "../dist/installer/step-ops.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -604,5 +604,493 @@ describe("completeStep STORIES_JSON guard — only blocks when loop-step is imme
     // run should also be failed
     const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
     assert.equal(run.status, "failed", "run should be failed");
+  });
+});
+
+describe("completeStep STORIES_JSON guard — story-producer blamed across intermediate steps", () => {
+  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
+  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  let _testIsolationDir: string;
+
+  before(() => {
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-stories-guard-intermediate-test-"));
+    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
+    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+  });
+
+  after(() => {
+    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  function ts(): string {
+    return new Date().toISOString();
+  }
+
+  it("blames planner (not setup) when planner omits STORIES_JSON and there is an intermediate step before the loop", async () => {
+    // Simulates e49c370d failure mode: plan(idx 0) -> setup(idx 1) -> implement(idx 2, loop-over-stories)
+    // Planner is the story producer (input mentions STORIES_JSON).
+    // When planner completes without STORIES_JSON, the guard should blame planner,
+    // NOT setup — even though setup sits between planner and the loop step.
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const planStepId = crypto.randomUUID();
+    const setupStepId = crypto.randomUUID();
+    const implementStepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "implement feature X" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'feature-dev-merge', 'implement feature X', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // plan step (index 0, single) — input_template mentions STORIES_JSON
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'plan', 'fdm_planner', 0, 'Plan {{task}}\
+Reply with:\
+STORIES_JSON: [...]', 'STATUS: done', 'running', 0, 4, 'single', ?, ?)"
+    ).run(planStepId, runId, now, now);
+
+    // setup step (index 1, single) — input_template does NOT mention STORIES_JSON
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'setup', 'fdm_setup', 1, 'Setup {{task}}\
+RETRY FEEDBACK: {{retry_feedback}}\
+Instructions:', 'STATUS: done', 'waiting', 0, 4, 'single', ?, ?)"
+    ).run(setupStepId, runId, now, now);
+
+    // implement step (index 2, loop over stories) — two steps away from planner
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'implement', 'fdm_developer', 2, 'Implement story', '', 'waiting', 0, 4, 'loop', ?, ?, ?)"
+    ).run(implementStepId, runId, JSON.stringify({ over: "stories" }), now, now);
+
+    // Complete plan with STATUS: done but NO STORIES_JSON
+    const result = completeStep(planStepId, "STATUS: done\nREPO: /tmp/repo\nBRANCH: feature/x\nCHANGES: planned");
+
+    // Planner should be blamed (retried) — NOT setup
+    assert.equal(result.status, "retrying", "planner should be retried when it omits STORIES_JSON, even with intermediate setup step");
+    assert.ok(result.detail, "retry response should include detail field");
+    assert.ok(result.detail!.includes("STORIES_JSON"), `detail should mention STORIES_JSON, got: ${result.detail}`);
+
+    // Planner should be reset to pending
+    const planStep = db.prepare("SELECT status, retry_count, output FROM steps WHERE id = ?").get(planStepId) as { status: string; retry_count: number; output: string | null };
+    assert.equal(planStep.status, "pending", "planner should be reset to pending for retry");
+    assert.equal(planStep.retry_count, 1, "planner retry_count should be incremented");
+    assert.ok(planStep.output?.includes("STORIES_JSON"), "planner output should contain retry feedback about STORIES_JSON");
+
+    // Setup should remain waiting — NOT reset to pending
+    const setupStep = db.prepare("SELECT status FROM steps WHERE id = ?").get(setupStepId) as { status: string };
+    assert.equal(setupStep.status, "waiting", "setup should remain waiting (not blamed)");
+
+    // Implement should also stay waiting
+    const implementStep = db.prepare("SELECT status FROM steps WHERE id = ?").get(implementStepId) as { status: string };
+    assert.equal(implementStep.status, "waiting", "implement should remain waiting");
+  });
+
+  it("does not blame planner across intermediate steps when stories already exist", async () => {
+    // After planner produces STORIES_JSON, completing planner should succeed
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const planStepId = crypto.randomUUID();
+    const setupStepId = crypto.randomUUID();
+    const implementStepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "implement feature X" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 2, 'feature-dev-merge', 'implement feature X', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // plan step (index 0) — already retried once
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'plan', 'fdm_planner', 0, 'Plan {{task}}\
+Reply with:\
+STORIES_JSON: [...]', 'STATUS: done', 'running', 1, 4, 'single', ?, ?)"
+    ).run(planStepId, runId, now, now);
+
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'setup', 'fdm_setup', 1, 'Setup', 'STATUS: done', 'waiting', 0, 4, 'single', ?, ?)"
+    ).run(setupStepId, runId, now, now);
+
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'implement', 'fdm_developer', 2, 'Implement', '', 'waiting', 0, 4, 'loop', ?, ?, ?)"
+    ).run(implementStepId, runId, JSON.stringify({ over: "stories" }), now, now);
+
+    // This time the planner output INCLUDES valid STORIES_JSON
+    const outputWithStories = 'STATUS: done\nREPO: /tmp/repo\nBRANCH: feature/x\nSTORIES_JSON: [{"id":"US-001","title":"Add feature","description":"Add the feature","acceptanceCriteria":["Feature works","Typecheck passes"]}]';
+    const result = completeStep(planStepId, outputWithStories);
+
+    // Should succeed (not retry) — stories now exist
+    assert.notEqual(result.status, "retrying", "planner should succeed when STORIES_JSON is present");
+    assert.notEqual(result.status, "failed", "planner should not fail");
+
+    // Planner should be marked done
+    const planStep = db.prepare("SELECT status FROM steps WHERE id = ?").get(planStepId) as { status: string };
+    assert.equal(planStep.status, "done", "planner should be done");
+
+    // Setup should be advanced to pending
+    const setupStep = db.prepare("SELECT status FROM steps WHERE id = ?").get(setupStepId) as { status: string };
+    assert.equal(setupStep.status, "pending", "setup should advance to pending");
+  });
+});
+
+describe("failStep retry feedback persistence", () => {
+  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
+  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  let _testIsolationDir: string;
+
+  before(() => {
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-failstep-retry-test-"));
+    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
+    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+  });
+
+  after(() => {
+    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  function ts(): string {
+    return new Date().toISOString();
+  }
+
+  it("failStep non-final retry writes error to steps.output", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug", repo: "/tmp/repo", branch: "fix/example" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'bug-fix', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // Single step with retry_count=0, max_retries=3, currently running
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'fix', 'bf_fixer', 0, 'Fix {{task}}', '', 'running', 0, 3, 'single', ?, ?)"
+    ).run(stepId, runId, now, now);
+
+    const errorMsg = "Build failed: type errors in src/foo.ts";
+
+    const result = await failStep(stepId, errorMsg);
+
+    assert.equal(result.status, "retrying", "should return retrying status");
+
+    // Verify step.output now contains the error message
+    const step = db.prepare("SELECT status, retry_count, output FROM steps WHERE id = ?").get(stepId) as { status: string; retry_count: number; output: string | null };
+    assert.equal(step.status, "pending", "step should be reset to pending");
+    assert.equal(step.retry_count, 1, "retry_count should be incremented to 1");
+    assert.equal(step.output, errorMsg, "step.output should contain the error message");
+
+    // Verify run is still running (not failed)
+    const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+    assert.equal(run.status, "running", "run should still be running after non-final retry");
+  });
+
+  it("failStep final retry (exhausted) writes error to output and marks step failed", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug", repo: "/tmp/repo", branch: "fix/example" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 2, 'bug-fix', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // Single step already at retry_count=2 with max_retries=2 — next failure exhausts
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'fix', 'bf_fixer', 0, 'Fix {{task}}', '', 'running', 2, 2, 'single', ?, ?)"
+    ).run(stepId, runId, now, now);
+
+    const errorMsg = "Persistent build failure: cannot resolve imports";
+
+    const result = await failStep(stepId, errorMsg);
+
+    assert.equal(result.status, "failed", "should return failed status when retries exhausted");
+
+    // Verify step is failed with error in output
+    const step = db.prepare("SELECT status, retry_count, output FROM steps WHERE id = ?").get(stepId) as { status: string; retry_count: number; output: string | null };
+    assert.equal(step.status, "failed", "step should be marked failed");
+    assert.equal(step.retry_count, 3, "retry_count should be incremented to 3");
+    assert.equal(step.output, errorMsg, "step.output should contain the error message even on final failure");
+
+    // Verify run is failed
+    const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+    assert.equal(run.status, "failed", "run should be marked failed when retries exhausted");
+  });
+
+  it("claimStep surfaces retry_feedback from persisted output when retry_count > 0", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug", repo: "/tmp/repo", branch: "fix/example" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 3, 'bug-fix', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // Step that has been retried once, with output containing prior failure reason
+    const priorError = "Timeout: step took too long to complete";
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, output, type, created_at, updated_at) VALUES (?, ?, 'fix', 'bf_fixer', 0, 'Fix {{task}}\\n\\nRETRY FEEDBACK: {{retry_feedback}}', '', 'pending', 1, 3, ?, 'single', ?, ?)"
+    ).run(stepId, runId, priorError, now, now);
+
+    const result = claimStep("bf_fixer", runId);
+
+    assert.ok(result.found, "claimStep should find the pending retry step");
+    assert.equal(result!.stepId, stepId, "should claim the fix step by its row id");
+
+    // The resolved input should contain the retry_feedback
+    assert.ok(result!.resolvedInput!.includes(priorError), `resolved input should contain the retry_feedback text "${priorError}", got: ${result!.resolvedInput}`);
+    assert.ok(result!.resolvedInput!.includes("RETRY FEEDBACK:"), "resolved input should contain the RETRY FEEDBACK section label");
+  });
+
+  it("claimStep sets retry_feedback to empty string when retry_count is 0", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug", repo: "/tmp/repo", branch: "fix/example" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 4, 'bug-fix', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // First attempt step (retry_count=0), output is null
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'fix', 'bf_fixer', 0, 'Fix {{task}}\\n\\nRETRY FEEDBACK: {{retry_feedback}}', '', 'pending', 0, 3, 'single', ?, ?)"
+    ).run(stepId, runId, now, now);
+
+    const result = claimStep("bf_fixer", runId);
+
+    assert.ok(result.found, "claimStep should find the first-attempt step");
+    assert.equal(result!.stepId, stepId, "should claim the fix step by its row id");
+
+    // The resolved input should have retry_feedback as empty (not "[missing: retry_feedback]")
+    assert.ok(!result!.resolvedInput!.includes("[missing: retry_feedback]"), "retry_feedback should not be missing-key");
+    assert.ok(!result!.resolvedInput!.includes("Timeout"), "retry_feedback should be empty on first attempt");
+  });
+});
+
+describe("setup-specific retry_feedback rendering", () => {
+  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
+  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  let _testIsolationDir: string;
+
+  before(() => {
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-setup-retry-test-"));
+    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
+    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+  });
+
+  after(() => {
+    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  function ts(): string {
+    return new Date().toISOString();
+  }
+
+  it("claimStep resolves setup input with retry_feedback when retry_count > 0", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const setupStepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "implement feature X", repo: "/tmp/repo", branch: "feature/x" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'feature-dev-merge', 'implement feature X', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // Setup step that has been retried once, with output containing prior failure reason
+    const priorError = "Setup rejected: STORIES_JSON guard — planner produced no stories";
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, output, type, created_at, updated_at) VALUES (?, ?, 'setup', 'fdm_setup', 0, 'Prepare env for {{task}}\
+\
+RETRY FEEDBACK: {{retry_feedback}}\
+\
+Instructions:', 'STATUS: done', 'pending', 1, 4, ?, 'single', ?, ?)"
+    ).run(setupStepId, runId, priorError, now, now);
+
+    const result = claimStep("fdm_setup", runId);
+
+    assert.ok(result.found, "claimStep should find the pending retry setup step");
+    assert.equal(result!.stepId, setupStepId, "should claim the setup step by its row id");
+
+    // The resolved input should contain the retry_feedback text
+    assert.ok(result!.resolvedInput!.includes(priorError), `resolved setup input should contain the retry_feedback text "${priorError}", got: ${result!.resolvedInput}`);
+    assert.ok(result!.resolvedInput!.includes("RETRY FEEDBACK:"), "resolved setup input should contain the RETRY FEEDBACK section label");
+  });
+
+  it("claimStep resolves setup input with empty retry_feedback when retry_count is 0", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const setupStepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "implement feature X", repo: "/tmp/repo", branch: "feature/x" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 2, 'feature-dev-merge', 'implement feature X', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // First-attempt setup step (retry_count=0, output is null)
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'setup', 'fdm_setup', 0, 'Prepare env for {{task}}\
+\
+RETRY FEEDBACK: {{retry_feedback}}\
+\
+Instructions:', 'STATUS: done', 'pending', 0, 4, 'single', ?, ?)"
+    ).run(setupStepId, runId, now, now);
+
+    const result = claimStep("fdm_setup", runId);
+
+    assert.ok(result.found, "claimStep should find the first-attempt setup step");
+    assert.equal(result!.stepId, setupStepId, "should claim the setup step by its row id");
+
+    // The resolved input should have retry_feedback as empty (not "[missing: retry_feedback]")
+    assert.ok(!result!.resolvedInput!.includes("[missing: retry_feedback]"), "retry_feedback should not be missing-key on first attempt");
+    assert.ok(!result!.resolvedInput!.includes("STORIES_JSON guard"), "retry_feedback should be empty on first attempt");
+  });
+});
+
+describe("completeStep retry response includes detail field", () => {
+  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
+  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  let _testIsolationDir: string;
+
+  before(() => {
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-completestep-detail-test-"));
+    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
+    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+  });
+
+  after(() => {
+    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
+  function ts(): string {
+    return new Date().toISOString();
+  }
+
+  it("expects validation retry response includes detail with the validation error", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug", repo: "/tmp/repo", branch: "fix/example" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'test-wf', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // Step with expects='STATUS: done' — output will fail validation
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'plan', 'test-wf_planner', 0, '{{task}}', 'STATUS: done', 'running', 0, 4, 'single', ?, ?)"
+    ).run(stepId, runId, now, now);
+
+    const result = completeStep(stepId, "missing status line");
+
+    assert.equal(result.status, "retrying", "should retry when expects validation fails");
+    assert.ok(result.detail, "retry response should include detail field");
+    assert.ok(result.detail!.includes("STATUS: done"), `detail should mention the missing expects key, got: ${result.detail}`);
+
+    // Verify the detail was also written to step.output
+    const step = db.prepare("SELECT output FROM steps WHERE id = ?").get(stepId) as { output: string };
+    assert.equal(step.output, result.detail, "step.output should match the detail field");
+  });
+
+  it("STORIES_JSON guard retry response includes detail with the guard reason", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const planStepId = crypto.randomUUID();
+    const fixStepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 1, 'bug-fix-merge', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // Plan step (index 0, single) — the step being completed
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'plan', 'bfm_planner', 0, 'Plan fix', '', 'running', 0, 3, 'single', ?, ?)"
+    ).run(planStepId, runId, now, now);
+
+    // Fix step (index 1, loop over stories) — immediately next step
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'fix', 'bfm_fixer', 1, 'Fix', '', 'waiting', 0, 4, 'loop', ?, ?, ?)"
+    ).run(fixStepId, runId, JSON.stringify({ over: "stories" }), now, now);
+
+    // Complete plan without STORIES_JSON — should trigger guard retry
+    const result = completeStep(planStepId, "STATUS: done\nREPO: /tmp/repo\nBRANCH: bugfix/x\nCHANGES: analyzed");
+
+    assert.equal(result.status, "retrying", "should retry when STORIES_JSON guard fires");
+    assert.ok(result.detail, "retry response should include detail field");
+    assert.ok(result.detail!.includes("STORIES_JSON"), `detail should mention STORIES_JSON, got: ${result.detail}`);
+    assert.ok(result.detail!.includes("fix"), `detail should mention the downstream step id, got: ${result.detail}`);
+
+    // Verify the detail was also written to step.output
+    const planStep = db.prepare("SELECT output FROM steps WHERE id = ?").get(planStepId) as { output: string };
+    assert.equal(planStep.output, result.detail, "step.output should match the detail field");
+  });
+
+  it("success path does not include detail field", async () => {
+    const { getDb } = await import("../dist/db.js");
+    const db = getDb();
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+    const now = ts();
+
+    const seededContext = JSON.stringify({ task: "fix bug" });
+
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 2, 'test-wf', 'fix bug', 'running', ?, 0, ?, ?)"
+    ).run(runId, seededContext, now, now);
+
+    // Simple single step with no next loop step — success path
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at) VALUES (?, ?, 'scan', 'test-wf_scanner', 0, 'Scan codebase', '', 'running', 0, 4, 'single', ?, ?)"
+    ).run(stepId, runId, now, now);
+
+    const result = completeStep(stepId, "STATUS: done\nREPO: /tmp/repo\nCHANGES: scanned");
+
+    assert.notEqual(result.status, "retrying", "success path should not retry");
+    assert.notEqual(result.status, "failed", "success path should not fail");
+    assert.equal(result.detail, undefined, "success path should not include detail field");
   });
 });

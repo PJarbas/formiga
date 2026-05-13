@@ -1128,14 +1128,15 @@ export function validateExpects(output: string, expects: string): string | null 
 /**
  * Complete a step: validate expects, save output, merge context, advance pipeline.
  */
-export function completeStep(stepId: string, output: string): { status: string } {
+export function completeStep(stepId: string, output: string): { status: string; detail?: string } {
   const db = getDb();
 
   const step = db.prepare(
-    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id, expects FROM steps WHERE id = ?"
+    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id, expects, input_template FROM steps WHERE id = ?"
   ).get(stepId) as {
     id: string; run_id: string; step_id: string; step_index: number; type: string;
     loop_config: string | null; current_story_id: string | null; expects: string;
+    input_template: string | null;
   } | undefined;
 
   if (!step) throw new Error(`Step not found: ${stepId}`);
@@ -1174,7 +1175,7 @@ export function completeStep(stepId: string, output: string): { status: string }
     ).run(validationError, newRetry, stepId);
     emitEvent({ ts: new Date().toISOString(), event: "step.retry", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: validationError });
     logger.warn(validationError, { runId: step.run_id, stepId: step.step_id });
-    return { status: "retrying" };
+    return { status: "retrying", detail: validationError };
   }
 
   // Merge KEY: value lines into run context
@@ -1198,18 +1199,32 @@ export function completeStep(stepId: string, output: string): { status: string }
   // Write story plan to progress log after STORIES_JSON is parsed
   writeStoryPlanToProgress(step.run_id);
 
-  // Robustness: if the immediately-following step is a loop-over-stories
-  // and this run still has no stories AND this step was the latest opportunity
-  // to produce them (i.e. this step is single-type and the immediately-following
-  // step is the loop-over-stories), this step's output is incomplete. Don't
-  // mark it done and trigger a fatal "Loop cannot run because planning did not
-  // produce STORIES_JSON" later — instead, mark this step pending again so the
-  // agent gets another chance to emit STORIES_JSON. Honor max_retries so a
-  // permanently-broken planner still escalates.
+  // Robustness: if there is a downstream loop-over-stories and this run still
+  // has no stories, the story-producing step's output is incomplete. For steps
+  // whose input template mentions STORIES_JSON (planners/story-producers),
+  // search the entire downstream pipeline for a loop-over-stories, because an
+  // intermediate step like setup may sit between the planner and the loop (as
+  // in feature-dev-merge: plan → setup → implement). For other steps, only
+  // check the immediately-following step to avoid blaming a non-producing step
+  // when a later intermediate step is supposed to generate stories (e.g.
+  // security-audit: scan → prioritize(produces stories) → fix(loop)).
+  // Honor max_retries so a permanently-broken planner still escalates.
   if (step.type !== "loop") {
-    const downstreamLoopExpectingStories = db.prepare(
+    const stepMentionsStories = step.input_template?.includes("STORIES_JSON");
+    let downstreamLoopExpectingStories: { id: string; step_id: string; loop_config: string | null } | undefined;
+
+    // Always check the immediately-following step first
+    downstreamLoopExpectingStories = db.prepare(
       "SELECT id, step_id, loop_config FROM steps WHERE run_id = ? AND step_index = ? AND type = 'loop'"
     ).get(step.run_id, step.step_index + 1) as { id: string; step_id: string; loop_config: string | null } | undefined;
+
+    // If this step is a story producer and the immediate next is NOT a loop,
+    // search further downstream — an intermediate step like setup may sit between
+    if (!downstreamLoopExpectingStories && stepMentionsStories) {
+      downstreamLoopExpectingStories = db.prepare(
+        "SELECT id, step_id, loop_config FROM steps WHERE run_id = ? AND step_index > ? AND type = 'loop' ORDER BY step_index ASC LIMIT 1"
+      ).get(step.run_id, step.step_index) as { id: string; step_id: string; loop_config: string | null } | undefined;
+    }
     if (downstreamLoopExpectingStories?.loop_config) {
       try {
         const lc = JSON.parse(downstreamLoopExpectingStories.loop_config) as LoopConfig;
@@ -1239,7 +1254,7 @@ export function completeStep(stepId: string, output: string): { status: string }
             "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
           ).run(errorDetail, newRetry, step.id);
           logger.warn(errorDetail, { runId: step.run_id, stepId: step.step_id });
-          return { status: "retrying" };
+          return { status: "retrying", detail: errorDetail };
         }
       } catch {
         // best-effort: if loop_config can't be parsed, don't block completion
@@ -1645,8 +1660,8 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
     return { status: "failed" };
   } else {
     db.prepare(
-      "UPDATE steps SET status = 'pending', retry_count = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(newRetryCount, stepId);
+      "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(error, newRetryCount, stepId);
     return { status: "retrying" };
   }
 }

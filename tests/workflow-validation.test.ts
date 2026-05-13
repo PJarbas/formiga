@@ -304,4 +304,30 @@ describe("workflow structure", () => {
     assert.match(readme, /ORIGINAL_BRANCH/);
     assert.match(readme, /plan → setup → implement → verify → test → finalize_merge/);
   });
+
+  it("feature-dev family setup prompts include {{retry_feedback}} placeholder", async () => {
+    // Verify all three feature-dev family workflows have retry_feedback in their
+    // setup step input templates so retried setups receive prior failure context.
+    const featureFamily = ["feature-dev", "feature-dev-merge", "feature-dev-github-pr"];
+
+    for (const id of featureFamily) {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      const setupStep = spec.steps.find((s) => s.id === "setup");
+      assert.ok(setupStep, `${id}: must define a setup step`);
+
+      // The setup input must include the {{retry_feedback}} placeholder
+      assert.match(
+        setupStep!.input,
+        /\{\{retry_feedback\}\}/,
+        `${id}: setup step input must include {{retry_feedback}} placeholder`,
+      );
+
+      // Verify it's placed correctly: after the TASK/REPO/BRANCH context block
+      // and before the Instructions block
+      assert.match(setupStep!.input, /RETRY FEEDBACK/,
+        `${id}: setup input should contain a RETRY FEEDBACK section`);
+      assert.match(setupStep!.input, /Instructions:/,
+        `${id}: setup input should contain an Instructions section`);
+    }
+  });
 });

@@ -132,6 +132,9 @@ steps:
       REPO: {{repo}}
       BRANCH: {{branch}}
 
+      RETRY FEEDBACK (only present if your previous attempt was rejected — read carefully and fix specifically what it complains about):
+      {{retry_feedback}}
+
       Instructions:
       1. cd into the repo
       2. Create the feature branch (git checkout -b {{branch}})
