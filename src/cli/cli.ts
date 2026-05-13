@@ -323,7 +323,8 @@ async function main() {
     }
     try {
       const result = await startControlPlane(port);
-      console.log(`Control plane started (PID ${result.pid})`);
+      const label = result.alreadyRunning ? "already running" : "started";
+      console.log(`Control plane ${label}${result.pid > 0 ? ` (PID ${result.pid})` : ""}`);
       console.log(`Endpoint: http://localhost:${result.port}${getControlPlaneStatus().endpoint}`);
     } catch (err) {
       process.stderr.write(`Failed to start control plane: ${err instanceof Error ? err.message : String(err)}\n`);

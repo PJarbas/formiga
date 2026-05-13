@@ -88,6 +88,19 @@ async function canBind(port: number): Promise<boolean> {
   }
 }
 
+async function getAvailablePort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const port = address.port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 function cleanupMcpFiles(): void {
   try { fs.unlinkSync(MCP_PID_FILE); } catch {}
   try { fs.unlinkSync(MCP_PORT_FILE); } catch {}
@@ -714,6 +727,60 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
     } finally {
       try { stopControlPlane(); } catch {}
       cleanupControlPlaneFiles();
+    }
+  });
+
+  it("startControlPlane() treats a healthy control plane without PID file as already running", async (t) => {
+    if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
+      t.skip("control-standalone.js not found — run npm run build first");
+      return;
+    }
+
+    const port = await getAvailablePort();
+    let childPid: number | undefined;
+    try {
+      cleanupControlPlaneFiles();
+
+      const first = await startControlPlane(port, { keepHandle: true });
+      childPid = first.pid;
+      assert.ok(first.pid > 0);
+
+      fs.unlinkSync(CONTROL_PLANE_PID_FILE);
+
+      const second = await startControlPlane(port);
+      assert.equal(second.pid, first.pid);
+      assert.equal(second.port, port);
+      assert.equal(second.alreadyRunning, true);
+      assert.equal(fs.readFileSync(CONTROL_PLANE_PID_FILE, "utf-8").trim(), String(first.pid));
+    } finally {
+      if (childPid) {
+        try { process.kill(childPid, "SIGTERM"); } catch {}
+      }
+      await waitForHttpDown(`http://127.0.0.1:${port}/control/health`).catch(() => {});
+      cleanupControlPlaneFiles();
+    }
+  });
+
+  it("startControlPlane() reports an unrelated process on the requested port clearly", async () => {
+    const server = await new Promise<http.Server>((resolve, reject) => {
+      const s = http.createServer((_req, res) => {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("not tamandua");
+      });
+      s.once("error", reject);
+      s.listen(0, "127.0.0.1", () => resolve(s));
+    });
+
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+
+      await assert.rejects(
+        () => startControlPlane(address.port),
+        /not a healthy Tamandua control plane/,
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 

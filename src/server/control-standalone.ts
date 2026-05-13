@@ -140,11 +140,31 @@ async function bootstrap(): Promise<void> {
   // Ensure daemon secret exists before starting the server
   ensureDaemonSecret();
 
+  // Use a Promise-based listen so we catch async EADDRINUSE errors
+  // (http.createServer + server.listen emits errors as events, not sync throws).
   try {
-    controlServer = createControlServer({ port });
+    await new Promise<void>((resolve, reject) => {
+      const server = createControlServer({ port, listen: false });
+
+      const onError = (err: NodeJS.ErrnoException) => {
+        server.off("listening", onListening);
+        reject(err);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(port, "127.0.0.1");
+
+      controlServer = server;
+    });
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     console.error(
-      `Failed to start control plane on port ${port}: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to start control plane on port ${port}: ${msg}`,
     );
     cleanupPidFile();
     cleanupPortFile();

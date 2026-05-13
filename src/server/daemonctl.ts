@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "./mcp-server.js";
@@ -236,6 +237,12 @@ export interface StartOptions {
    */
   homeDir?: string;
 }
+
+export type StartControlPlaneResult = {
+  pid: number;
+  port: number;
+  alreadyRunning?: boolean;
+};
 
 /**
  * Start the dashboard daemon.
@@ -588,6 +595,75 @@ async function waitForHealthEndpoint(url: string, timeoutMs = 10_000): Promise<v
   throw new Error(`Timed out waiting for health endpoint: ${url}`);
 }
 
+async function isTcpPortOpen(port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    const done = (result: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.setTimeout(timeoutMs, () => done(false));
+  });
+}
+
+async function fetchControlPlaneHealth(port: number): Promise<{ healthy: true; pid: number | null } | { healthy: false; status?: number }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1000);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}${CONTROL_PLANE_HEALTH_ENDPOINT}`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) return { healthy: false, status: res.status };
+    let pid: number | null = null;
+    try {
+      const body = await res.json() as { pid?: unknown };
+      if (typeof body.pid === "number" && Number.isFinite(body.pid) && body.pid > 0) {
+        pid = body.pid;
+      }
+    } catch {
+      // Treat a 2xx health response as healthy even if the body is malformed.
+    }
+    return { healthy: true, pid };
+  } catch {
+    return { healthy: false };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function detectExistingControlPlane(
+  port: number,
+  pidFile: string,
+  portFile: string,
+): Promise<StartControlPlaneResult | null> {
+  const health = await fetchControlPlaneHealth(port);
+  if (health.healthy) {
+    if (health.pid !== null) {
+      try {
+        fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+        fs.writeFileSync(pidFile, String(health.pid), "utf-8");
+        fs.writeFileSync(portFile, String(port), "utf-8");
+      } catch {
+        // Best effort; returning existing info is still better than spawning.
+      }
+    }
+    return { pid: health.pid ?? 0, port, alreadyRunning: true };
+  }
+
+  if (await isTcpPortOpen(port)) {
+    const suffix = health.status ? `; health endpoint returned HTTP ${health.status}` : "";
+    throw new Error(
+      `Port ${port} is already in use, but it is not a healthy Tamandua control plane${suffix}. ` +
+      `Stop the other process or choose a different port.`,
+    );
+  }
+
+  return null;
+}
+
 /**
  * Read the control plane port from the control plane port file.
  * Returns DEFAULT_CONTROL_PORT (3339) when no port file exists.
@@ -649,9 +725,9 @@ export function getControlPlaneStatus(): {
  *
  * If the control plane server is already running, returns its info without restarting.
  */
-export async function startControlPlane(port?: number): Promise<{ pid: number; port: number }>;
-export async function startControlPlane(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
-export async function startControlPlane(port?: number, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
+export async function startControlPlane(port?: number): Promise<StartControlPlaneResult>;
+export async function startControlPlane(port: number, opts: StartOptions & { keepHandle: true }): Promise<StartControlPlaneResult & { child: ChildProcess }>;
+export async function startControlPlane(port?: number, opts?: StartOptions): Promise<StartControlPlaneResult | (StartControlPlaneResult & { child: ChildProcess })> {
   // When homeDir is set, compute isolated paths for all filesystem operations.
   const tamanduaDir = opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : TAMANDUA_DIR;
   const cpPidFile = opts?.homeDir ? path.join(tamanduaDir, "control-plane.pid") : CONTROL_PLANE_PID_FILE;
@@ -668,10 +744,13 @@ export async function startControlPlane(port?: number, opts?: StartOptions): Pro
     } catch {
       // File missing or unreadable — use default
     }
-    return { pid: status.pid, port: existingPort };
+    return { pid: status.pid, port: existingPort, alreadyRunning: true };
   }
 
   const cpPort = port ?? DEFAULT_CONTROL_PORT;
+
+  const existing = await detectExistingControlPlane(cpPort, cpPidFile, cpPortFile);
+  if (existing) return existing;
 
   fs.mkdirSync(tamanduaDir, { recursive: true });
   fs.writeFileSync(cpPortFile, String(cpPort), "utf-8");
@@ -702,6 +781,8 @@ export async function startControlPlane(port?: number, opts?: StartOptions): Pro
 
   const check = checkPidFile(cpPidFile);
   if (!check.running) {
+    const existingAfterSpawn = await detectExistingControlPlane(cpPort, cpPidFile, cpPortFile);
+    if (existingAfterSpawn) return existingAfterSpawn;
     const logTail = readLogTail(cpLogFile);
     if (logTail) {
       throw new Error(`Control plane failed to start. Recent control plane log:\n${logTail}`);

@@ -64,6 +64,19 @@ async function canBind(port: number): Promise<boolean> {
   }
 }
 
+async function getAvailablePort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const port = address.port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
 async function waitForHttpUp(url: string, timeoutMs = 7000): Promise<Response> {
   const startedAt = Date.now();
   let lastError: unknown;
@@ -311,6 +324,40 @@ describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
       assert.ok(second.stdout.includes("/control/health"));
       // Should NOT show "started" (second attempt didn't restart)
       assert.ok(!second.stdout.includes("Control plane started"));
+
+    } finally {
+      stopControlPlane();
+      cleanupControlPlaneFiles();
+    }
+  });
+
+  it("control-plane start reports already running when the health endpoint is up but PID file is missing", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+    const port = await getAvailablePort();
+    try {
+      cleanupControlPlaneFiles();
+
+      const first = await runCli(["control-plane", "start", String(port)]);
+      assert.equal(first.exitCode, 0, cleanStderr(first.stderr));
+      assert.ok(first.stdout.includes("started"));
+      assert.ok(first.stdout.includes(`localhost:${port}`));
+
+      const runningStatus = getControlPlaneStatus();
+      assert.equal(runningStatus.running, true);
+      assert.ok(runningStatus.pid);
+
+      fs.unlinkSync(CONTROL_PLANE_PID_FILE);
+
+      const second = await runCli(["control-plane", "start", String(port)]);
+      assert.equal(second.exitCode, 0, cleanStderr(second.stderr));
+      assert.ok(second.stdout.includes("already running"), `Expected "already running", got: ${second.stdout}`);
+      assert.ok(second.stdout.includes(`PID ${runningStatus.pid}`), `Expected PID ${runningStatus.pid}, got: ${second.stdout}`);
+      assert.ok(second.stdout.includes(`localhost:${port}`));
+      assert.ok(!second.stdout.includes("Control plane started"));
+      assert.equal(fs.readFileSync(CONTROL_PLANE_PID_FILE, "utf-8").trim(), String(runningStatus.pid));
 
     } finally {
       stopControlPlane();
