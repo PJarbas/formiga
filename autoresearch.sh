@@ -2,6 +2,7 @@
 # Autoresearch benchmark wrapper for test coverage.
 # Runs the coverage measurement script and outputs a METRIC line.
 set -euo pipefail
+export LC_ALL=C
 
 cd "$(dirname "$0")"
 

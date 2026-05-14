@@ -13,16 +13,19 @@
 # How it works:
 #   1. Run the Node test runner with --experimental-test-coverage.
 #   2. Read the coverage table's "all files" row.
-#   3. Extract the line coverage percentage, strip whitespace and "%", then divide by 100.
+#   3. Extract the line coverage percentage, strip whitespace and "%", normalize
+#      any locale decimal comma to ".", then divide by 100.
+#   4. Run awk with LC_ALL=C so printf always emits "." as the decimal separator.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 node --test --experimental-test-coverage tests/*.test.ts src/**/*.test.ts 2>&1 \
-  | awk -F'|' '
+  | LC_ALL=C awk -F'|' '
       /all files/ {
         gsub(/[[:space:]%]/, "", $2)
+        gsub(/,/, ".", $2)
         printf "%.6f\n", $2 / 100
         found = 1
       }
