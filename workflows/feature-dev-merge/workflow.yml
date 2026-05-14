@@ -125,8 +125,14 @@ steps:
       BRANCH: <new-feature-branch-name to create for this run, e.g. feature/short-description — MUST be a fresh, descriptive name; MUST NOT be a default/integration branch like main, master, trunk, develop, dev, or release; the setup step will `git checkout -b` this name and the finalize_merge step squashes it back into the original branch>
       STORIES_JSON: [ ... array of story objects ... ]
 
-      The STORIES_JSON line is REQUIRED and MUST be a literal JSON array. Example (illustrative — produce real stories for the actual TASK, not these):
+      The STORIES_JSON line is REQUIRED and MUST be a literal JSON array on a single line with no line breaks inside the JSON array. Example (illustrative — produce real stories for the actual TASK, not these):
       STORIES_JSON: [{"id":"US-001","title":"Add foo column","description":"...","acceptanceCriteria":["foo exists","tests pass","Typecheck passes"]}]
+
+      ⚠️ ANTI-PATTERNS — DO NOT DO:
+      - Do NOT use triple backticks (```) around STORIES_JSON
+      - Do NOT add comments inside the JSON
+      - Do NOT put any text after the closing ] on the STORIES_JSON line
+
       Without STORIES_JSON the run cannot proceed; do not summarize stories in prose under CHANGES — only the literal STORIES_JSON line is parsed.
     expects: "STATUS: done"
     max_retries: 4
