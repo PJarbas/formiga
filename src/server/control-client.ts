@@ -111,9 +111,9 @@ export async function terminateRunWithDaemon(runId: string): Promise<ControlPlan
   return controlRequest("POST", "/control/terminate-run", { runId });
 }
 
-/** Pause a run (clears timers; sets status='paused'). */
-export async function pauseRunWithDaemon(runId: string): Promise<ControlPlaneResponse | null> {
-  return controlRequest("POST", "/control/pause-run", { runId });
+/** Pause a run (clears timers; sets status='paused'). Optionally drain first. */
+export async function pauseRunWithDaemon(runId: string, drain = false): Promise<ControlPlaneResponse | null> {
+  return controlRequest("POST", "/control/pause-run", drain ? { runId, drain: true } : { runId });
 }
 
 /** Resume a paused run (re-enters admission). */

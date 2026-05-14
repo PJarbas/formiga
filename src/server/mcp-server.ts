@@ -13,6 +13,7 @@ import { getWorkflowStatus, listRuns, type RunDetail, type RunInfo } from "../in
 import { runWorkflow, type RunWorkflowResult } from "../installer/run.js";
 import { getRecentEvents, type TamanduaEvent } from "../installer/events.js";
 import { resolveSourcePath } from "../installer/paths.js";
+import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 
 export const DEFAULT_MCP_PORT = 3338;
 export const MCP_ENDPOINT_PATH = "/mcp";
@@ -20,6 +21,8 @@ export const MCP_ENDPOINT_PATH = "/mcp";
 const MCP_TOOL_RUNS_LIST = "tamandua.runs.list";
 const MCP_TOOL_RUN_STATUS = "tamandua.run.status";
 const MCP_TOOL_RUN_START = "tamandua.run.start";
+const MCP_TOOL_RUN_PAUSE = "tamandua.run.pause";
+const MCP_TOOL_RUN_RESUME = "tamandua.run.resume";
 const MCP_TOOL_EVENTS_RECENT = "tamandua.events.recent";
 const MCP_TOOL_SOURCE_PATH = "tamandua.source.path";
 const MCP_TOOL_UPDATE_COMMAND = "tamandua.update.command";
@@ -39,6 +42,8 @@ export interface TamanduaMcpToolServices {
   }) => Promise<RunWorkflowResult>;
   getRecentEvents: (limit?: number) => TamanduaEvent[];
   getSourcePath: () => string;
+  pauseRun: (runId: string, drain?: boolean) => Promise<{ runId: string; status: string }>;
+  resumeRun: (runId: string) => Promise<{ runId: string; status: string }>;
 }
 
 export type TamanduaMcpServerOptions = {
@@ -58,6 +63,18 @@ const defaultToolServices: TamanduaMcpToolServices = {
   runWorkflow,
   getRecentEvents,
   getSourcePath: resolveSourcePath,
+  async pauseRun(runId, drain = false) {
+    const r = await pauseRunWithDaemon(runId, drain);
+    if (!r) throw new Error("Daemon control plane unreachable");
+    if (r.body.error) throw new Error(String(r.body.error));
+    return { runId, status: String(r.body.state ?? r.status) };
+  },
+  async resumeRun(runId) {
+    const r = await resumeRunWithDaemon(runId);
+    if (!r) throw new Error("Daemon control plane unreachable");
+    if (r.body.error) throw new Error(String(r.body.error));
+    return { runId, status: String(r.body.state ?? r.status) };
+  },
 };
 
 const mcpTools: Array<Record<string, unknown>> = [
@@ -194,6 +211,68 @@ const mcpTools: Array<Record<string, unknown>> = [
           description: "Event records returned by getRecentEvents().",
           items: { type: "object" },
         },
+      },
+    },
+  },
+  {
+    name: MCP_TOOL_RUN_PAUSE,
+    title: "Pause Tamandua Run",
+    description: "Pause a running Tamandua workflow run. Optionally drain in-flight work before pausing.",
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["runId"],
+      properties: {
+        runId: {
+          type: "string",
+          minLength: 1,
+          description: "Run id to pause.",
+        },
+        drain: {
+          type: "boolean",
+          description: "If true, wait for in-flight work to complete before pausing (default false).",
+        },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      required: ["runId", "status"],
+      properties: {
+        runId: { type: "string", description: "Run id that was paused." },
+        status: { type: "string", description: "New run status after pause." },
+      },
+    },
+  },
+  {
+    name: MCP_TOOL_RUN_RESUME,
+    title: "Resume Tamandua Run",
+    description: "Resume a paused Tamandua workflow run.",
+    annotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+    },
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["runId"],
+      properties: {
+        runId: {
+          type: "string",
+          minLength: 1,
+          description: "Run id to resume.",
+        },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      required: ["runId", "status"],
+      properties: {
+        runId: { type: "string", description: "Run id that was resumed." },
+        status: { type: "string", description: "New run status after resume." },
       },
     },
   },
@@ -355,6 +434,27 @@ function createProtocolServer(services: TamanduaMcpToolServices): Server {
     if (name === MCP_TOOL_EVENTS_RECENT) {
       const limit = readLimitArgument(args, 50, 500);
       return createToolResult({ events: services.getRecentEvents(limit) });
+    }
+
+    if (name === MCP_TOOL_RUN_PAUSE) {
+      const runId = readRequiredStringArgument(args, "runId");
+      const drain = args.drain === true;
+      try {
+        const result = await services.pauseRun(runId, drain);
+        return createToolResult({ runId: result.runId, status: result.status });
+      } catch (err) {
+        throw new McpError(ErrorCode.InvalidParams, (err as Error).message);
+      }
+    }
+
+    if (name === MCP_TOOL_RUN_RESUME) {
+      const runId = readRequiredStringArgument(args, "runId");
+      try {
+        const result = await services.resumeRun(runId);
+        return createToolResult({ runId: result.runId, status: result.status });
+      } catch (err) {
+        throw new McpError(ErrorCode.InvalidParams, (err as Error).message);
+      }
     }
 
     if (name === MCP_TOOL_SOURCE_PATH) {

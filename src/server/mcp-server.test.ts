@@ -204,6 +204,12 @@ describe("mcp-server bootstrap", () => {
           sourcePathCalls.push("called");
           return "/tmp/tamandua-source";
         },
+        pauseRun: async (runId, _drain) => {
+          return { runId, status: "paused" };
+        },
+        resumeRun: async (runId) => {
+          return { runId, status: "running" };
+        },
       },
     });
 
@@ -232,6 +238,8 @@ describe("mcp-server bootstrap", () => {
           "tamandua.run.status",
           "tamandua.run.start",
           "tamandua.events.recent",
+          "tamandua.run.pause",
+          "tamandua.run.resume",
           "tamandua.source.path",
           "tamandua.update.command",
         ],
@@ -314,6 +322,12 @@ describe("mcp-server bootstrap", () => {
           throw new Error("should not be called for invalid args");
         },
         getRecentEvents: () => [],
+        pauseRun: async () => {
+          throw new Error("should not be called for invalid args");
+        },
+        resumeRun: async () => {
+          throw new Error("should not be called for invalid args");
+        },
       },
     });
 
@@ -345,6 +359,122 @@ describe("mcp-server bootstrap", () => {
       assert.equal(validAfterErrors.status, 200);
       assert.equal(validAfterErrors.body?.error, undefined);
       assert.deepEqual(validAfterErrors.body?.result?.structuredContent, { events: [] });
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("supports tamandua.run.pause and tamandua.run.resume tools", async () => {
+    const pauseCalls: Array<{ runId: string; drain: boolean }> = [];
+    const resumeCalls: string[] = [];
+
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async () => ({ runId: "x", runNumber: 1, workflowId: "x", taskTitle: "x", status: "running", stepCount: 0, workingDirectoryForHarness: "/x" }),
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async (runId, drain = false) => {
+          pauseCalls.push({ runId, drain });
+          return { runId, status: drain ? "draining_pause" : "paused" };
+        },
+        resumeRun: async (runId) => {
+          resumeCalls.push(runId);
+          return { runId, status: "running" };
+        },
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      // Test pause (immediate)
+      const pauseResult = await callTool(server.port, sessionId, 20, "tamandua.run.pause", { runId: "run-abc" });
+      assert.equal(pauseResult.status, 200);
+      assert.equal(pauseResult.body?.error, undefined);
+      assert.deepEqual(pauseResult.body?.result?.structuredContent, { runId: "run-abc", status: "paused" });
+      assert.deepEqual(pauseCalls, [{ runId: "run-abc", drain: false }]);
+
+      // Test pause with drain
+      const pauseDrainResult = await callTool(server.port, sessionId, 21, "tamandua.run.pause", { runId: "run-def", drain: true });
+      assert.equal(pauseDrainResult.status, 200);
+      assert.equal(pauseDrainResult.body?.error, undefined);
+      assert.deepEqual(pauseDrainResult.body?.result?.structuredContent, { runId: "run-def", status: "draining_pause" });
+      assert.deepEqual(pauseCalls, [{ runId: "run-abc", drain: false }, { runId: "run-def", drain: true }]);
+
+      // Test resume
+      const resumeResult = await callTool(server.port, sessionId, 22, "tamandua.run.resume", { runId: "run-abc" });
+      assert.equal(resumeResult.status, 200);
+      assert.equal(resumeResult.body?.error, undefined);
+      assert.deepEqual(resumeResult.body?.result?.structuredContent, { runId: "run-abc", status: "running" });
+      assert.deepEqual(resumeCalls, ["run-abc"]);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("pause run rejects terminal runs with MCP error", async () => {
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async () => ({ runId: "x", runNumber: 1, workflowId: "x", taskTitle: "x", status: "running", stepCount: 0, workingDirectoryForHarness: "/x" }),
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => {
+          throw new Error("Run is terminal: completed");
+        },
+        resumeRun: async () => {
+          throw new Error("should not be called");
+        },
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      const result = await callTool(server.port, sessionId, 30, "tamandua.run.pause", { runId: "run-terminal" });
+      assert.equal(result.status, 200);
+      assert.equal(result.body?.result, undefined);
+      assert.equal(result.body?.error?.code, -32602);
+      assert.match(result.body?.error?.message ?? "", /terminal/);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("pause and resume tools require runId argument", async () => {
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async () => ({ runId: "x", runNumber: 1, workflowId: "x", taskTitle: "x", status: "running", stepCount: 0, workingDirectoryForHarness: "/x" }),
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => {
+          throw new Error("should not be called");
+        },
+        resumeRun: async () => {
+          throw new Error("should not be called");
+        },
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      const missingRunIdPause = await callTool(server.port, sessionId, 40, "tamandua.run.pause", {});
+      assert.equal(missingRunIdPause.status, 200);
+      assert.equal(missingRunIdPause.body?.result, undefined);
+      assert.equal(missingRunIdPause.body?.error?.code, -32602);
+      assert.match(missingRunIdPause.body?.error?.message ?? "", /runId/);
+
+      const missingRunIdResume = await callTool(server.port, sessionId, 41, "tamandua.run.resume", {});
+      assert.equal(missingRunIdResume.status, 200);
+      assert.equal(missingRunIdResume.body?.result, undefined);
+      assert.equal(missingRunIdResume.body?.error?.code, -32602);
+      assert.match(missingRunIdResume.body?.error?.message ?? "", /runId/);
     } finally {
       await stopTamanduaMcpServer(server);
     }

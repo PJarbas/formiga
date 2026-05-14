@@ -19,6 +19,7 @@ import { parseLogsSelector, lookupRunIdByNumber } from "./logs-selector.js";
 import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startMcp, stopMcp, getMcpStatus, isMcpRunning, startControlPlane, stopControlPlane, getControlPlaneStatus, isControlPlaneRunning } from "../server/daemonctl.js";
 import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "../server/mcp-server.js";
 import { DEFAULT_CONTROL_PORT } from "../server/control-server.js";
+import { pauseRunWithDaemon, resumeRunWithDaemon } from "../server/control-client.js";
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
 import { ensureCliSymlink } from "../installer/symlink.js";
 import { resolveSourcePath } from "../installer/paths.js";
@@ -94,7 +95,10 @@ function printUsage() {
     "                                      Start a workflow run",
     "tamandua workflow status <query>      Check run status",
     "tamandua workflow runs                List all workflow runs",
-    "tamandua workflow resume <run-id>     Resume a failed run",
+    "tamandua workflow pause <run-id>      Pause a running workflow",
+    "tamandua workflow pause-all [--drain]  Pause all running workflows",
+    "tamandua workflow resume <run-id>     Resume a paused or failed run",
+    "tamandua workflow resume-all           Resume all paused workflows",
     "tamandua workflow stop <run-id>       Stop/cancel a running workflow",
     "tamandua mcp start [--port N]         Start MCP server (default: 3338)",
     "tamandua mcp stop                     Stop MCP server",
@@ -480,6 +484,124 @@ async function main() {
     return;
   }
 
+  if (action === "pause") {
+    if (!target) { process.stderr.write("Missing run-id.\n"); process.exit(1); }
+    const drain = args.includes("--drain");
+    let fullId: string;
+    let runStatus: string;
+    try {
+      const detail = getWorkflowStatus(target);
+      fullId = detail.id;
+      runStatus = detail.status;
+    } catch (err) {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+    if (runStatus !== "running") {
+      process.stderr.write(`Cannot pause run ${fullId.slice(0, 8)}: status is "${runStatus}" (only running runs can be paused).\n`);
+      process.exit(1);
+    }
+    const response = await pauseRunWithDaemon(fullId, drain);
+    if (response === null) {
+      process.stderr.write("Daemon is unreachable. Is the daemon running? Try: tamandua dashboard start\n");
+      process.exit(1);
+    }
+    if (response.status !== 200) {
+      const errMsg = typeof response.body.error === "string" ? response.body.error : "Unknown error";
+      process.stderr.write(`Failed to pause run: ${errMsg}\n`);
+      process.exit(1);
+    }
+    console.log(`Paused run ${fullId.slice(0, 8)}.`);
+    return;
+  }
+
+  if (action === "resume") {
+    if (!target) { process.stderr.write("Missing run-id.\n"); process.exit(1); }
+    let fullId: string;
+    let runStatus: string;
+    try {
+      const detail = getWorkflowStatus(target);
+      fullId = detail.id;
+      runStatus = detail.status;
+    } catch (err) {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+    if (runStatus === "paused") {
+      const response = await resumeRunWithDaemon(fullId);
+      if (response === null) {
+        process.stderr.write("Daemon is unreachable. Is the daemon running? Try: tamandua dashboard start\n");
+        process.exit(1);
+      }
+      if (response.status !== 200 && response.status !== 202) {
+        const errMsg = typeof response.body.error === "string" ? response.body.error : "Unknown error";
+        process.stderr.write(`Failed to resume run: ${errMsg}\n`);
+        process.exit(1);
+      }
+      console.log(`Resumed run ${fullId.slice(0, 8)}.`);
+      return;
+    }
+    if (runStatus === "failed") {
+      const result = await resumeWorkflow(fullId);
+      if (result.status === "not_found") { console.log(`No failed run found matching "${target}".`); return; }
+      console.log(`Resumed run ${result.runId!.slice(0, 8)} (${result.workflowId}), restarting from step: ${result.stepId}`);
+      return;
+    }
+    if (runStatus === "completed" || runStatus === "canceled") {
+      process.stderr.write(`Cannot resume run ${fullId.slice(0, 8)}: status is "${runStatus}" (terminal runs cannot be resumed).\n`);
+      process.exit(1);
+    }
+    process.stderr.write(`Cannot resume run ${fullId.slice(0, 8)}: status is "${runStatus}" (only paused or failed runs can be resumed).\n`);
+    process.exit(1);
+  }
+
+  if (action === "pause-all") {
+    const drain = args.includes("--drain");
+    const runs = listRuns(1000).filter(r => r.status === "running");
+    if (runs.length === 0) {
+      console.log("No runs to pause.");
+      return;
+    }
+    let paused = 0;
+    for (const r of runs) {
+      const response = await pauseRunWithDaemon(r.id, drain);
+      if (response === null) {
+        console.warn(`Warning: daemon unreachable for run ${r.id.slice(0, 8)} — skipped`);
+        continue;
+      }
+      if (response.status !== 200) {
+        console.warn(`Warning: failed to pause run ${r.id.slice(0, 8)} — skipped`);
+        continue;
+      }
+      paused++;
+    }
+    console.log(`Paused ${paused} run(s).`);
+    return;
+  }
+
+  if (action === "resume-all") {
+    const runs = listRuns(1000).filter(r => r.status === "paused");
+    if (runs.length === 0) {
+      console.log("No runs to resume.");
+      return;
+    }
+    let resumed = 0;
+    for (const r of runs) {
+      const response = await resumeRunWithDaemon(r.id);
+      if (response === null) {
+        console.warn(`Warning: daemon unreachable for run ${r.id.slice(0, 8)} — skipped`);
+        continue;
+      }
+      if (response.status !== 200 && response.status !== 202) {
+        console.warn(`Warning: failed to resume run ${r.id.slice(0, 8)} — skipped`);
+        continue;
+      }
+      resumed++;
+    }
+    console.log(`Resumed ${resumed} run(s).`);
+    return;
+  }
+
   if (!target) { printUsage(); process.exit(1); }
 
   if (action === "install") {
@@ -533,15 +655,7 @@ async function main() {
     return;
   }
 
-  if (action === "resume") {
-    if (!target) { process.stderr.write("Missing run-id.\n"); process.exit(1); }
-    let fullId = target;
-    try { fullId = getWorkflowStatus(target).id; } catch { /* fall through to resumeWorkflow which will return not_found */ }
-    const result = await resumeWorkflow(fullId);
-    if (result.status === "not_found") { console.log(`No failed run found matching "${target}".`); return; }
-    console.log(`Resumed run ${result.runId!.slice(0, 8)} (${result.workflowId}), restarting from step: ${result.stepId}`);
-    return;
-  }
+
 
   if (action === "ensure-crons") {
     // Polling jobs are now tied to (runId, agentId) and admitted via the

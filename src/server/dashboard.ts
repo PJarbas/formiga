@@ -21,6 +21,7 @@ import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSo
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { getMcpStatus } from "./daemonctl.js";
 import { buildKanbanSnapshot } from "./kanban-data.js";
+import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_HTML = path.join(__dirname, "index.html");
@@ -216,6 +217,108 @@ function handleHealth(_req: http.IncomingMessage, res: http.ServerResponse): voi
   }
 }
 
+async function handlePauseRun(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): Promise<void> {
+  try {
+    const db = getDb();
+
+    // Parse drain query parameter
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const drain = url.searchParams.get("drain") === "true";
+
+    const run = db.prepare("SELECT id, status FROM runs WHERE id = ?").get(runId) as
+      | { id: string; status: string }
+      | undefined;
+
+    if (!run) {
+      errorResponse(res, `Run not found: ${runId}`, 404);
+      return;
+    }
+
+    if (run.status !== "running") {
+      errorResponse(
+        res,
+        `Cannot pause run in ${run.status} state`,
+        409,
+      );
+      return;
+    }
+
+    const result = await pauseRunWithDaemon(runId, drain);
+
+    if (result === null) {
+      errorResponse(res, "Daemon unreachable", 502);
+      return;
+    }
+
+    if (result.status === 200 || result.status === 202) {
+      jsonResponse(res, { paused: true, runId });
+      return;
+    }
+
+    // Forward daemon error
+    errorResponse(
+      res,
+      (result.body.error as string) ?? "Failed to pause run",
+      result.status >= 400 ? result.status : 500,
+    );
+  } catch (err) {
+    errorResponse(res, `Failed to pause run: ${(err as Error).message}`);
+  }
+}
+
+async function handleResumeRun(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): Promise<void> {
+  try {
+    const db = getDb();
+
+    const run = db.prepare("SELECT id, status FROM runs WHERE id = ?").get(runId) as
+      | { id: string; status: string }
+      | undefined;
+
+    if (!run) {
+      errorResponse(res, `Run not found: ${runId}`, 404);
+      return;
+    }
+
+    if (run.status !== "paused") {
+      errorResponse(
+        res,
+        `Cannot resume run in ${run.status} state`,
+        409,
+      );
+      return;
+    }
+
+    const result = await resumeRunWithDaemon(runId);
+
+    if (result === null) {
+      errorResponse(res, "Daemon unreachable", 502);
+      return;
+    }
+
+    if (result.status === 200) {
+      jsonResponse(res, { resumed: true, runId });
+      return;
+    }
+
+    // Forward daemon error
+    errorResponse(
+      res,
+      (result.body.error as string) ?? "Failed to resume run",
+      result.status >= 400 ? result.status : 500,
+    );
+  } catch (err) {
+    errorResponse(res, `Failed to resume run: ${(err as Error).message}`);
+  }
+}
+
 function handleMcpStatus(_req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
     const status = getMcpStatus();
@@ -239,7 +342,7 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     });
     res.end();
@@ -327,6 +430,20 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /api/mcp-status
   if (method === "GET" && pathname === "/api/mcp-status") {
     handleMcpStatus(req, res);
+    return;
+  }
+
+  // POST /api/runs/:id/pause
+  const pauseMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/pause$/);
+  if (method === "POST" && pauseMatch) {
+    handlePauseRun(req, res, pauseMatch[1]);
+    return;
+  }
+
+  // POST /api/runs/:id/resume
+  const resumeMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/resume$/);
+  if (method === "POST" && resumeMatch) {
+    handleResumeRun(req, res, resumeMatch[1]);
     return;
   }
 

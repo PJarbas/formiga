@@ -1156,6 +1156,48 @@ export function validateExpects(output: string, expects: string): string | null 
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Draining Pause Finalization
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * When a run's scheduling_status is 'draining_pause', check whether all
+ * running steps have completed; if so, finalize the pause by clearing
+ * scheduler timers and setting status to 'paused'.
+ */
+export function finalizeDrainingPause(runId: string): void {
+  const db = getDb();
+  const run = db
+    .prepare("SELECT scheduling_status, workflow_id FROM runs WHERE id = ?")
+    .get(runId) as { scheduling_status: string; workflow_id: string } | undefined;
+  if (!run || run.scheduling_status !== "draining_pause") return;
+
+  const runningSteps = db
+    .prepare("SELECT COUNT(*) as cnt FROM steps WHERE run_id = ? AND status = 'running'")
+    .get(runId) as { cnt: number };
+  if (runningSteps.cnt > 0) return;
+
+  // Finalize the pause: clear timers and set status to paused.
+  import("./agent-scheduler.js")
+    .then((m) => m.removeRunCrons(runId))
+    .catch((err) => {
+      logger.warn("finalizeDrainingPause: removeRunCrons failed", { runId, error: String(err) });
+    });
+
+  db.prepare(
+    "UPDATE runs SET status = 'paused', scheduling_status = 'paused', updated_at = datetime('now') WHERE id = ?",
+  ).run(runId);
+
+  emitEvent({
+    ts: new Date().toISOString(),
+    event: "run.paused",
+    runId,
+    workflowId: run.workflow_id,
+  });
+
+  logger.info("Drain-before-pause completed — run now paused", { runId });
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Complete Step
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1176,7 +1218,8 @@ export function completeStep(stepId: string, output: string): { status: string; 
   if (!step) throw new Error(`Step not found: ${stepId}`);
 
   // Guard: don't process completions for failed runs
-  const runCheck = db.prepare("SELECT status FROM runs WHERE id = ?").get(step.run_id) as { status: string } | undefined;
+  const runId = step.run_id;
+  const runCheck = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string } | undefined;
   if (runCheck?.status === "failed" || runCheck?.status === "canceled") {
     return { status: "blocked" };
   }
@@ -1199,21 +1242,23 @@ export function completeStep(stepId: string, output: string): { status: string; 
         "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
       ).run(step.run_id);
       emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: validationError });
-      emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Expects validation failed and retries exhausted" });
-      scheduleRunCronTeardown(step.run_id);
+      emitRunTerminalEvent({ event: "run.failed", runId, workflowId: wfId, detail: "Expects validation failed and retries exhausted" });
+      scheduleRunCronTeardown(runId);
+      finalizeDrainingPause(runId);
       return { status: "failed" };
     }
 
     db.prepare(
       "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
     ).run(validationError, newRetry, stepId);
-    emitEvent({ ts: new Date().toISOString(), event: "step.retry", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: validationError });
-    logger.warn(validationError, { runId: step.run_id, stepId: step.step_id });
+    emitEvent({ ts: new Date().toISOString(), event: "step.retry", runId, workflowId: wfId, stepId: step.step_id, detail: validationError });
+    logger.warn(validationError, { runId, stepId: step.step_id });
+    finalizeDrainingPause(runId);
     return { status: "retrying", detail: validationError };
   }
 
   // Merge KEY: value lines into run context
-  const run = db.prepare("SELECT context FROM runs WHERE id = ?").get(step.run_id) as { context: string };
+  const run = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string };
   const context: Record<string, string> = JSON.parse(run.context);
 
   const parsed = parseOutputKeyValues(output);
@@ -1225,13 +1270,13 @@ export function completeStep(stepId: string, output: string): { status: string; 
 
   db.prepare(
     "UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(JSON.stringify(context), step.run_id);
+  ).run(JSON.stringify(context), runId);
 
   // Parse STORIES_JSON from output (any step, typically the planner)
-  parseAndInsertStories(output, step.run_id);
+  parseAndInsertStories(output, runId);
 
   // Write story plan to progress log after STORIES_JSON is parsed
-  writeStoryPlanToProgress(step.run_id);
+  writeStoryPlanToProgress(runId);
 
   // Robustness: if there is a downstream loop-over-stories and this run still
   // has no stories, the story-producing step's output is incomplete. For steps
@@ -1282,12 +1327,14 @@ export function completeStep(stepId: string, output: string): { status: string; 
             emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: errorDetail });
             emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Plan step never produced STORIES_JSON" });
             scheduleRunCronTeardown(step.run_id);
+            finalizeDrainingPause(step.run_id);
             return { status: "failed" };
           }
           db.prepare(
             "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
           ).run(errorDetail, newRetry, step.id);
           logger.warn(errorDetail, { runId: step.run_id, stepId: step.step_id });
+          finalizeDrainingPause(step.run_id);
           return { status: "retrying", detail: errorDetail };
         }
       } catch {
@@ -1363,6 +1410,7 @@ export function completeStep(stepId: string, output: string): { status: string; 
   logger.info(`Step completed: ${step.step_id}`, { runId: step.run_id, stepId: step.step_id });
 
   const pipelineResult = advancePipeline(step.run_id);
+  finalizeDrainingPause(step.run_id);
   return { status: pipelineResult.runCompleted ? "completed" : "advanced" };
 }
 
@@ -1402,6 +1450,7 @@ function handleVerifyEachCompletion(
         emitEvent({ ts: new Date().toISOString(), event: "story.failed", runId: verifyStep.run_id, workflowId: wfId, stepId: verifyStep.step_id });
         emitRunTerminalEvent({ event: "run.failed", runId: verifyStep.run_id, workflowId: wfId, detail: "Verification retries exhausted" });
         scheduleRunCronTeardown(verifyStep.run_id);
+        finalizeDrainingPause(verifyStep.run_id);
         return { advanced: false, runCompleted: false };
       }
 
@@ -1468,6 +1517,7 @@ function checkLoopContinuation(runId: string, loopStepId: string): { advanced: b
     emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId, workflowId: wfId, stepId: loopStepId, detail: "Loop has failed stories and no pending stories" });
     emitRunTerminalEvent({ event: "run.failed", runId, workflowId: wfId, detail: "Loop has failed stories and no pending stories" });
     scheduleRunCronTeardown(runId);
+    finalizeDrainingPause(runId);
     return { advanced: false, runCompleted: false };
   }
 
@@ -1544,6 +1594,7 @@ export function advancePipeline(runId: string): { advanced: boolean; runComplete
     logger.info("Run completed", { runId, workflowId: wfId });
     archiveRunProgress(runId);
     scheduleRunCronTeardown(runId);
+    finalizeDrainingPause(runId);
     return { advanced: false, runCompleted: true };
   }
 }
@@ -1643,6 +1694,7 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
         emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId, detail: error });
         emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Story retries exhausted" });
         scheduleRunCronTeardown(step.run_id);
+        finalizeDrainingPause(step.run_id);
 
         // Escalation: log the target if configured
         try {
@@ -1661,6 +1713,7 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
       // Retry the story
       db.prepare("UPDATE stories SET status = 'pending', retry_count = ?, updated_at = datetime('now') WHERE id = ?").run(newRetry, story.id);
       db.prepare("UPDATE steps SET status = 'pending', current_story_id = NULL, updated_at = datetime('now') WHERE id = ?").run(stepId);
+      finalizeDrainingPause(step.run_id);
       return { status: "retrying" };
     }
   }
@@ -1679,6 +1732,7 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
     emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId2, stepId, detail: error });
     emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId2, detail: "Step retries exhausted" });
     scheduleRunCronTeardown(step.run_id);
+    finalizeDrainingPause(step.run_id);
 
     // Escalation: log the target if configured
     try {
@@ -1696,6 +1750,7 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
     db.prepare(
       "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
     ).run(error, newRetryCount, stepId);
+    finalizeDrainingPause(step.run_id);
     return { status: "retrying" };
   }
 }

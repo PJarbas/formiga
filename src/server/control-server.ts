@@ -24,6 +24,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { logger } from "../lib/logger.js";
 import { getDb } from "../db.js";
+import { emitEvent } from "../installer/events.js";
 
 export const DEFAULT_CONTROL_PORT = 3339;
 const DEFAULT_MAX_ACTIVE_TIMERS = 50;
@@ -330,11 +331,26 @@ async function handleTerminateRun(runId: string): Promise<JsonResponse> {
   return ok({ terminated: true });
 }
 
-async function handlePauseRun(runId: string): Promise<JsonResponse> {
+async function handlePauseRun(runId: string, drain = false): Promise<JsonResponse> {
   const run = getRun(runId);
   if (!run) return notFound(`Run not found: ${runId}`);
   if (isTerminal(run.status)) return conflict(`Run is terminal: ${run.status}`);
   if (run.status === "paused") return ok({ state: "paused" });
+
+  if (drain) {
+    try {
+      getDb()
+        .prepare(
+          "UPDATE runs SET scheduling_status = 'draining_pause', updated_at = datetime('now') WHERE id = ?",
+        )
+        .run(runId);
+    } catch (err) {
+      logger.warn("control-server: drain pause db update failed", { runId, error: String(err) });
+      return notFound(`Run not found: ${runId}`);
+    }
+    logger.info("control-server: drain pause requested", { runId });
+    return ok({ state: "draining_pause", drained: true });
+  }
 
   try {
     const { removeRunCrons } = await import("../installer/agent-scheduler.js");
@@ -357,6 +373,14 @@ async function handlePauseRun(runId: string): Promise<JsonResponse> {
       error: String(err),
     });
   });
+
+  emitEvent({
+    ts: new Date().toISOString(),
+    event: "run.paused",
+    runId: run.id,
+    workflowId: run.workflow_id,
+  });
+
   return ok({ state: "paused" });
 }
 
@@ -376,6 +400,21 @@ async function handleResumeRun(runId: string): Promise<JsonResponse> {
   } catch {
     /* best-effort */
   }
+
+  // Determine the workflow_id for the event. When the run was previously
+  // paused, status=paused and getRun already loaded workflow_id. When
+  // resume follows a failed/canceled path (future use), include whatever
+  // workflow_id we have.
+  const wfId = run.workflow_id ||
+    (getRun(runId)?.workflow_id ?? undefined);
+
+  emitEvent({
+    ts: new Date().toISOString(),
+    event: "run.resumed",
+    runId,
+    workflowId: wfId,
+  });
+
   return handleRegisterRun(runId);
 }
 
@@ -485,7 +524,8 @@ export function createControlServer(options: ControlServerOptions = {}): http.Se
           return;
         }
         if (pathname === "/control/pause-run") {
-          const r = await handlePauseRun(runId);
+          const drain = typeof body.drain === "boolean" ? body.drain : false;
+          const r = await handlePauseRun(runId, drain);
           respond(r.status, r.body);
           return;
         }

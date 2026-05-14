@@ -1070,8 +1070,8 @@ export async function executePollingRound(
     const { getDb } = await import("../db.js");
     const db = getDb();
     const row = db
-      .prepare("SELECT status FROM runs WHERE id = ?")
-      .get(job.runId) as { status: string } | undefined;
+      .prepare("SELECT status, scheduling_status FROM runs WHERE id = ?")
+      .get(job.runId) as { status: string; scheduling_status: string | null } | undefined;
     if (!row || (row.status !== "running" && row.status !== "paused")) {
       logger.info("Polling round skipped — run no longer running; tearing down job", {
         ...context,
@@ -1083,6 +1083,10 @@ export async function executePollingRound(
     }
     if (row.status === "paused") {
       logger.debug("Polling round skipped — run paused", { ...context });
+      return;
+    }
+    if (row.scheduling_status === "draining_pause") {
+      logger.debug("Polling round skipped — run draining before pause (in-flight work can complete)", { ...context });
       return;
     }
   } catch (err) {

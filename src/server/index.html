@@ -169,6 +169,41 @@
       line-height: 1.4;
       padding: 10px;
     }
+    .action-btn {
+      padding: 3px 10px;
+      border-radius: 6px;
+      border: 1px solid #30363d;
+      background: #161b22;
+      color: #c9d1d9;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+      font-family: inherit;
+      transition: border-color 120ms ease, color 120ms ease;
+    }
+    .action-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+    .action-btn.pause-btn:hover { border-color: #d29922; color: #d29922; }
+    .action-btn.resume-btn:hover { border-color: #3fb950; color: #3fb950; }
+    .controls-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .controls-bar label.drain-label {
+      font-size: 12px;
+      color: #8b949e;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      user-select: none;
+    }
+    .controls-bar label.drain-label input[type="checkbox"] {
+      accent-color: #d29922;
+    }
   </style>
 </head>
 <body>
@@ -195,6 +230,15 @@
     <!-- Runs Section -->
     <section class="section">
       <h2>Workflow Runs</h2>
+      <div class="controls-bar">
+        <button class="action-btn pause-btn" onclick="pauseAllRuns(false)" title="Pause all running runs">⏸ Pause All</button>
+        <button class="action-btn pause-btn" onclick="pauseAllRuns(true)" title="Drain then pause all running runs">⏸ Pause All (Drain)</button>
+        <button class="action-btn resume-btn" onclick="resumeAllRuns()" title="Resume all paused runs">▶ Resume All</button>
+        <label class="drain-label" title="Wait for in-flight work to complete before pausing individual runs">
+          <input type="checkbox" id="drain-checkbox"> Drain
+        </label>
+        <span id="pause-feedback" style="font-size:11px;color:#8b949e;"></span>
+      </div>
       <div id="runs-content">
         <div class="empty-state">Loading...</div>
       </div>
@@ -336,13 +380,17 @@
           </td>
           <td class="num">${tokensSpent}</td>
           <td class="num" style="font-size:11px">${timeAgo(r.updated_at)}</td>
+          <td class="actions">
+            ${r.status === 'running' ? `<button class="action-btn pause-btn" onclick="event.preventDefault(); handlePause('${r.id}')">⏸ Pause</button>` : ''}
+            ${r.status === 'paused' ? `<button class="action-btn resume-btn" onclick="event.preventDefault(); handleResume('${r.id}')">▶ Resume</button>` : ''}
+          </td>
           <td><a class="kanban-link" href="/runs/${encodeURIComponent(r.id)}/kanban" aria-label="Open kanban for run ${esc(r.id)}">Kanban &rarr;</a></td>
         </tr>`;
       }).join("");
 
       el.innerHTML = `<table>
         <thead><tr>
-          <th>#</th><th>Run ID</th><th>Workflow</th><th>Task</th><th>Status</th><th>Progress</th><th>Tokens</th><th>Updated</th><th>View</th>
+          <th>#</th><th>Run ID</th><th>Workflow</th><th>Task</th><th>Status</th><th>Progress</th><th>Tokens</th><th>Updated</th><th>Actions</th><th>View</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>`;
@@ -424,6 +472,84 @@
       const hrs = Math.floor(mins / 60);
       if (hrs < 24) return `${hrs}h ago`;
       return `${Math.floor(hrs / 24)}d ago`;
+    }
+
+    async function pauseRun(id, drain) {
+      const qs = drain ? '?drain=true' : '';
+      const res = await fetch(`/api/runs/${encodeURIComponent(id)}/pause${qs}`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to pause (${res.status})`);
+      }
+    }
+
+    async function resumeRun(id) {
+      const res = await fetch(`/api/runs/${encodeURIComponent(id)}/resume`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to resume (${res.status})`);
+      }
+    }
+
+    function handlePause(id) {
+      const drain = document.getElementById('drain-checkbox')?.checked || false;
+      pauseRun(id, drain).then(refreshAll).catch(e => alert('Pause failed: ' + e.message));
+    }
+
+    function handleResume(id) {
+      resumeRun(id).then(refreshAll).catch(e => alert('Resume failed: ' + e.message));
+    }
+
+    async function pauseAllRuns(drain) {
+      const el = document.getElementById('pause-feedback');
+      if (!el) return;
+      try {
+        el.textContent = 'Pausing...';
+        const res = await fetch('/api/runs');
+        const data = await res.json();
+        const runningRuns = (data.runs || []).filter(r => r.status === 'running');
+        if (!runningRuns.length) {
+          el.textContent = 'No running runs to pause.';
+          return;
+        }
+        let ok = 0;
+        for (const r of runningRuns) {
+          try { await pauseRun(r.id, drain); ok++; }
+          catch (e) { console.error('Failed to pause run ' + r.id, e); }
+        }
+        el.textContent = `Paused ${ok}/${runningRuns.length} run(s).`;
+      } catch (e) {
+        el.textContent = 'Error: ' + e.message;
+      } finally {
+        setTimeout(() => { if (el) el.textContent = ''; }, 4000);
+        refreshAll();
+      }
+    }
+
+    async function resumeAllRuns() {
+      const el = document.getElementById('pause-feedback');
+      if (!el) return;
+      try {
+        el.textContent = 'Resuming...';
+        const res = await fetch('/api/runs');
+        const data = await res.json();
+        const pausedRuns = (data.runs || []).filter(r => r.status === 'paused');
+        if (!pausedRuns.length) {
+          el.textContent = 'No paused runs to resume.';
+          return;
+        }
+        let ok = 0;
+        for (const r of pausedRuns) {
+          try { await resumeRun(r.id); ok++; }
+          catch (e) { console.error('Failed to resume run ' + r.id, e); }
+        }
+        el.textContent = `Resumed ${ok}/${pausedRuns.length} run(s).`;
+      } catch (e) {
+        el.textContent = 'Error: ' + e.message;
+      } finally {
+        setTimeout(() => { if (el) el.textContent = ''; }, 4000);
+        refreshAll();
+      }
     }
 
     // Initial load

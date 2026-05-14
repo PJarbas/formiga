@@ -374,6 +374,87 @@ describe("dashboard token counters UI", () => {
   });
 });
 
+describe("dashboard pause/resume UI", () => {
+  it("renders pause/resume controls bar with buttons and drain checkbox", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      assert.match(html, /class="controls-bar"/);
+      assert.match(html, /Pause All/);
+      assert.match(html, /Pause All \(Drain\)/);
+      assert.match(html, /Resume All/);
+      assert.match(html, /id="drain-checkbox"/);
+      assert.match(html, /type="checkbox"/);
+      assert.match(html, /id="pause-feedback"/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("includes pauseRun and resumeRun JS functions", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      assert.match(html, /async function pauseRun\(/);
+      assert.match(html, /async function resumeRun\(/);
+      assert.match(html, /function handlePause\(/);
+      assert.match(html, /function handleResume\(/);
+      assert.match(html, /async function pauseAllRuns\(/);
+      assert.match(html, /async function resumeAllRuns\(/);
+      assert.match(html, /\/api\/runs\/.*\/pause/);
+      assert.match(html, /\/api\/runs\/.*\/resume/);
+      assert.match(html, /pauseRun\(id, drain\)\.then\(refreshAll\)/);
+      assert.match(html, /resumeRun\(id\)\.then\(refreshAll\)/);
+      assert.match(html, /\?drain=true/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("has badge-paused CSS class with amber color", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      assert.match(html, /\.badge-paused/);
+      assert.match(html, /#d29922/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("renders Actions column in runs table header", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      assert.match(html, /<th>Actions<\/th>/);
+      assert.match(html, /\.action-btn\.pause-btn/);
+      assert.match(html, /\.action-btn\.resume-btn/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+});
+
 describe("dashboard MCP status API", () => {
   it("GET /api/mcp-status returns { running, port, path }", async () => {
     const { server, baseUrl } = await startDashboard();

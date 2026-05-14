@@ -1,0 +1,527 @@
+/**
+ * Tests for tamandua workflow resume CLI command (US-004).
+ *
+ * Validates:
+ * 1. tamandua workflow resume <paused-run-id> resumes the run and prints confirmation
+ * 2. Resumed run status transitions from paused to running
+ * 3. tamandua workflow resume <terminal-run-id> prints clear error
+ * 4. Existing failed-run resume path still works
+ * 5. Resume with no daemon prints daemon-unreachable error
+ * 6. Resume with missing run-id prints usage error
+ */
+
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawn, type ChildProcess } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import { setTimeout as sleep } from "node:timers/promises";
+import http from "node:http";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CLI_SCRIPT = path.resolve(__dirname, "..", "dist", "cli", "cli.js");
+const DAEMON_SCRIPT = path.resolve(__dirname, "..", "dist", "server", "daemon.js");
+
+interface CliResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
+function runCli(args: string[], env?: Record<string, string>): Promise<CliResult> {
+  return new Promise<CliResult>((resolve) => {
+    let stdout = "";
+    let stderr = "";
+
+    const child = spawn("node", ["--no-warnings", CLI_SCRIPT, ...args], {
+      env: env ? { ...process.env, ...env } : process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf-8");
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf-8");
+    });
+
+    child.once("close", (exitCode) => {
+      resolve({ stdout, stderr, exitCode });
+    });
+  });
+}
+
+function cleanStderr(stderr: string): string {
+  return stderr
+    .split(/\r?\n/)
+    .filter((line) => {
+      if (line.includes("ExperimentalWarning") && line.includes("SQLite")) return false;
+      if (line.includes("node --trace-warnings")) return false;
+      return true;
+    })
+    .join("\n")
+    .trim();
+}
+
+function seedRunDb(dbPath: string, runs: Array<{
+  id: string;
+  workflowId: string;
+  task: string;
+  status: string;
+  tokensSpent?: number;
+  schedulingStatus?: string;
+}>) {
+  const db = new DatabaseSync(dbPath);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS runs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      task TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      context TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      run_number INTEGER,
+      tokens_spent INTEGER NOT NULL DEFAULT 0,
+      notify_url TEXT,
+      scheduling_status TEXT
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS steps (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      step_index INTEGER NOT NULL,
+      input_template TEXT NOT NULL DEFAULT '',
+      expects TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'waiting',
+      output TEXT,
+      retry_count INTEGER DEFAULT 0,
+      type TEXT NOT NULL DEFAULT 'single',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  for (const r of runs) {
+    db.prepare(
+      `INSERT INTO runs (id, workflow_id, task, status, tokens_spent${r.schedulingStatus !== undefined ? ", scheduling_status" : ""})
+       VALUES (?, ?, ?, ?, ?${r.schedulingStatus !== undefined ? ", ?" : ""})`,
+    ).run(
+      r.id, r.workflowId, r.task, r.status, r.tokensSpent ?? 0,
+      ...(r.schedulingStatus !== undefined ? [r.schedulingStatus] : []),
+    );
+  }
+
+  db.close();
+}
+
+async function getAvailablePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      assert.ok(addr && typeof addr === "object");
+      const port = addr.port;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function waitForControlUp(port: number, timeoutMs = 5000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/control/health`);
+      return;
+    } catch {
+      await sleep(100);
+    }
+  }
+  throw new Error(`control plane did not come up on port ${port}`);
+}
+
+// ── Tests ──────────────────────────────────────────────────────────
+
+describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
+  // AC 1 + 2: Resume a paused run with daemon running works and status transitions to running
+  it("resume paused run with daemon resumes the run and status shows running", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const dashboardPort = await getAvailablePort();
+    const controlPort = await getAvailablePort();
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-resume-test-"));
+    const homeDir = path.join(root, "home");
+    const tamanduaDir = path.join(homeDir, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+
+    const dbPath = path.join(tamanduaDir, "tamandua.db");
+
+    const pausedRunId = "cccccccc-1111-2222-3333-444455556666";
+    seedRunDb(dbPath, [
+      {
+        id: pausedRunId,
+        workflowId: "feature-dev-merge",
+        task: "Test paused run for resume",
+        status: "paused",
+      },
+    ]);
+
+    // Copy the workflow directory so the daemon can register the run on resume
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
+    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
+    fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
+
+    let daemon: ChildProcess | undefined;
+
+    try {
+      // Start daemon
+      daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          TAMANDUA_CONTROL_PORT: String(controlPort),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      daemon.stdout?.resume();
+      daemon.stderr?.resume();
+
+      await waitForControlUp(controlPort);
+
+      // Resume the run via CLI
+      const { stdout, stderr, exitCode } = await runCli(
+        ["workflow", "resume", pausedRunId],
+        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+      );
+
+      assert.equal(exitCode, 0, `Should exit with code 0, got ${exitCode}, stderr: ${cleanStderr(stderr)}`);
+      assert.ok(
+        stdout.includes("Resumed run"),
+        `Expected "Resumed run" in stdout, got: ${stdout}`,
+      );
+      assert.ok(
+        stdout.includes(pausedRunId.slice(0, 8)),
+        `Expected run id prefix in stdout, got: ${stdout}`,
+      );
+
+      // AC 2: Verify status now shows running
+      const { stdout: statusOut } = await runCli(
+        ["workflow", "status", pausedRunId.slice(0, 8)],
+        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+      );
+
+      assert.ok(
+        /Status:\s+running/i.test(statusOut),
+        `Expected status to show "running", got: ${statusOut}`,
+      );
+    } finally {
+      if (daemon && daemon.exitCode === null && daemon.pid) {
+        try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // AC 4: Resume completed run prints clear error (terminal)
+  it("resume completed run prints terminal error", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-resume-test-"));
+    const homeDir = path.join(root, "home");
+    const tamanduaDir = path.join(homeDir, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+
+    const dbPath = path.join(tamanduaDir, "tamandua.db");
+
+    const completedRunId = "dddddddd-1111-2222-3333-444455556666";
+    seedRunDb(dbPath, [
+      {
+        id: completedRunId,
+        workflowId: "feature-dev-merge",
+        task: "Test completed run",
+        status: "completed",
+      },
+    ]);
+
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        ["workflow", "resume", completedRunId.slice(0, 8)],
+        { HOME: homeDir },
+      );
+
+      assert.notEqual(exitCode, 0, "Should exit with non-zero code for terminal run");
+      assert.ok(
+        stderr.includes("Cannot resume run") || stderr.includes("cannot be resumed"),
+        `Expected terminal error in stderr, got: ${stderr}`,
+      );
+      assert.ok(
+        stderr.includes("completed"),
+        `Expected "completed" status in error, got: ${stderr}`,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // AC 4: Resume canceled run prints clear error (terminal)
+  it("resume canceled run prints terminal error", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-resume-test-"));
+    const homeDir = path.join(root, "home");
+    const tamanduaDir = path.join(homeDir, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+
+    const dbPath = path.join(tamanduaDir, "tamandua.db");
+
+    const canceledRunId = "eeeeeeee-1111-2222-3333-444455556666";
+    seedRunDb(dbPath, [
+      {
+        id: canceledRunId,
+        workflowId: "feature-dev-merge",
+        task: "Test canceled run",
+        status: "canceled",
+      },
+    ]);
+
+    try {
+      const { stderr, exitCode } = await runCli(
+        ["workflow", "resume", canceledRunId.slice(0, 8)],
+        { HOME: homeDir },
+      );
+
+      assert.notEqual(exitCode, 0, "Should exit with non-zero code for terminal run");
+      assert.ok(
+        stderr.includes("Cannot resume run") || stderr.includes("cannot be resumed"),
+        `Expected terminal error, got: ${stderr}`,
+      );
+      assert.ok(
+        stderr.includes("canceled"),
+        `Expected "canceled" status in error, got: ${stderr}`,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // AC 5: Existing failed-run resume path still works
+  it("resume failed run uses existing resumeWorkflow path", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const dashboardPort = await getAvailablePort();
+    const controlPort = await getAvailablePort();
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-resume-test-"));
+    const homeDir = path.join(root, "home");
+    const tamanduaDir = path.join(homeDir, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+
+    // Copy the workflow directory so the daemon can register the run on resume
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
+    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
+    fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
+
+    const dbPath = path.join(tamanduaDir, "tamandua.db");
+
+    const failedRunId = "ffffffff-1111-2222-3333-444455556666";
+    const stepId = "00000000-aaaa-bbbb-cccc-ddddeeee0001";
+    seedRunDb(dbPath, [
+      {
+        id: failedRunId,
+        workflowId: "feature-dev-merge",
+        task: "Test failed run for resume",
+        status: "failed",
+      },
+    ]);
+
+    // Also insert a failed step so resumeWorkflow has a step to restart from
+    const db = new DatabaseSync(dbPath);
+    const nowStr = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO steps (id, step_id, run_id, agent_id, step_index, input_template, expects, status, type, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      crypto.randomUUID(), stepId, failedRunId, 'feature-dev-merge_developer', 0,
+      'test input', 'STEPS_STATUS: done', 'failed', 'single', nowStr, nowStr,
+    );
+    db.close();
+
+    let daemon: ChildProcess | undefined;
+
+    try {
+      // Start daemon so resumeWorkflow can register with it
+      daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          TAMANDUA_CONTROL_PORT: String(controlPort),
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      daemon.stdout?.resume();
+      daemon.stderr?.resume();
+
+      await waitForControlUp(controlPort);
+
+      const { stdout, stderr, exitCode } = await runCli(
+        ["workflow", "resume", failedRunId.slice(0, 8)],
+        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+      );
+
+      assert.equal(exitCode, 0, `Should exit with code 0 for failed run resume, got ${exitCode}, stderr: ${cleanStderr(stderr)}`);
+      assert.ok(
+        stdout.includes("Resumed run"),
+        `Expected "Resumed run" in stdout, got: ${stdout}`,
+      );
+      assert.ok(
+        stdout.includes("restarting from step"),
+        `Expected "restarting from step" in stdout, got: ${stdout}`,
+      );
+    } finally {
+      if (daemon && daemon.exitCode === null && daemon.pid) {
+        try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Resume a running run should fail (only paused or failed)
+  it("resume running run prints error", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-resume-test-"));
+    const homeDir = path.join(root, "home");
+    const tamanduaDir = path.join(homeDir, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+
+    const dbPath = path.join(tamanduaDir, "tamandua.db");
+
+    const runningRunId = "99999999-aaaa-bbbb-cccc-ddddeeee0000";
+    seedRunDb(dbPath, [
+      {
+        id: runningRunId,
+        workflowId: "feature-dev-merge",
+        task: "Test running run",
+        status: "running",
+      },
+    ]);
+
+    try {
+      const { stderr, exitCode } = await runCli(
+        ["workflow", "resume", runningRunId],
+        { HOME: homeDir },
+      );
+
+      assert.notEqual(exitCode, 0, "Should exit with non-zero code for running run");
+      assert.ok(
+        stderr.includes("Cannot resume run") || stderr.includes("only paused or failed"),
+        `Expected "only paused or failed" error, got: ${stderr}`,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Resume paused run without daemon prints unreachable error
+  it("resume paused run without daemon prints unreachable error", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const unusedPort = await getAvailablePort();
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-resume-test-"));
+    const homeDir = path.join(root, "home");
+    const tamanduaDir = path.join(homeDir, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+
+    const dbPath = path.join(tamanduaDir, "tamandua.db");
+
+    const pausedRunId = "bbbbbbbb-aaaa-cccc-dddd-eeeeffff0000";
+    seedRunDb(dbPath, [
+      {
+        id: pausedRunId,
+        workflowId: "feature-dev-merge",
+        task: "Test paused run no daemon",
+        status: "paused",
+      },
+    ]);
+
+    try {
+      const { stderr, exitCode } = await runCli(
+        ["workflow", "resume", pausedRunId],
+        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(unusedPort) },
+      );
+
+      assert.notEqual(exitCode, 0, "Should exit with non-zero code");
+      assert.ok(
+        stderr.includes("Daemon is unreachable") || stderr.includes("unreachable"),
+        `Expected daemon-unreachable error, got: ${stderr}`,
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Resume nonexistent run prints not-found error
+  it("resume nonexistent run prints not-found error", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const { stdout, stderr, exitCode } = await runCli([
+      "workflow", "resume", "nonexistent-run-id",
+    ]);
+
+    assert.notEqual(exitCode, 0, "Should exit with non-zero code");
+    assert.ok(
+      stderr.includes("No run found matching") || stderr.includes("not found"),
+      `Expected not-found error in stderr, got: ${stderr}`,
+    );
+  });
+
+  // Resume with missing run-id prints usage error
+  it("resume missing run-id prints usage error", async (t) => {
+    if (!fs.existsSync(CLI_SCRIPT)) {
+      t.skip("CLI script not built — run npm run build first");
+      return;
+    }
+
+    const { stdout, stderr, exitCode } = await runCli(["workflow", "resume"]);
+
+    assert.notEqual(exitCode, 0, "Should exit with non-zero code when no run-id provided");
+    assert.ok(
+      stderr.includes("Missing run-id"),
+      `Expected "Missing run-id" error, got stderr: "${cleanStderr(stderr)}"`,
+    );
+  });
+});
