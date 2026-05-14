@@ -24,12 +24,8 @@ const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
 
 // Import daemonctl helpers for direct API-level testing
 import {
-  readMcpPort,
-  writeMcpPort,
-  isMcpRunning,
   startMcp,
   stopMcp,
-  getMcpStatus,
   MCP_PID_FILE,
   MCP_PORT_FILE,
 } from "../dist/server/daemonctl.js";
@@ -331,6 +327,11 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     } catch {
       // pgrep may fail if no processes match — that's fine
     }
+
+    // Belt: also sweep for stale mcp.pid/mcp-port in real HOME
+    // that may have been left by a SIGKILL'd parallel test.
+    try { fs.unlinkSync(MCP_PID_FILE); } catch {}
+    try { fs.unlinkSync(MCP_PORT_FILE); } catch {}
   });
 
   // ────────────────────────────────────────────────────────────────
@@ -537,7 +538,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       await waitForHttpDown(baseUrl);
 
       // Also verify the PID file in the isolated environment is cleaned up
-      const isolatedPidFile = path.join(tempEnv.stateDir, "..", "home", ".tamandua", "mcp.pid");
+      const isolatedPidFile = path.join(tempEnv.homeDir, ".tamandua", "mcp.pid");
       assert.equal(
         fs.existsSync(isolatedPidFile),
         false,
@@ -559,7 +560,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       return;
     }
 
-    const customPort = 45678;
+    const customPort = await reserveRandomPort();
 
     if (!(await canBind(customPort))) {
       assert.fail(`Port ${customPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${customPort}`);

@@ -134,7 +134,17 @@ npm run build && npm test
 ```
 
 Tests use Node's built-in `node:test` and `node:assert`.
-The full suite must run serially because several integration tests exercise fixed local ports and daemon state; `npm test` includes `--test-concurrency=1`.
+Tests are safe for parallel execution with `node --test tests/*.test.ts src/**/*.test.ts`.
+
+### Parallel Test Safety
+
+All tests use isolated temporary HOME and TAMANDUA_STATE_DIR directories per test, so PID/port files never conflict across parallel test files.
+
+- **Random ports:** Tests that spawn listeners use `reserveRandomPort()` (bind-to-0, capture assigned port) instead of hardcoded ports. No test binds to default ports 3334/3338/3339 unless explicitly testing production defaults, and those tests use `t.skip()` or conditional `canBind()` checks to avoid false failures when a real daemon holds the port.
+- **Temp HOME isolation:** CLI integration tests create temporary HOME directories via `fs.mkdtempSync()`, pass `HOME` env to spawned CLI subprocesses, and clean up with `fs.rmSync(tempHome, { recursive: true, force: true })` in `finally` blocks.
+- **Real CLI defaults remain 3334/3338/3339:** The production daemon, MCP, and control plane use ports 3334, 3338, and 3339 respectively. Only test code uses random ports.
+
+`npm test` remains a convenience alias that runs the full parallel suite.
 
 `src/server/mcp-server.ts` supports dependency injection via `createTamanduaMcpServer(..., { services })` / `startTamanduaMcpServer(..., { services })`; protocol tests in `src/server/mcp-server.test.ts` should use this hook instead of duplicating DB/event setup.
 

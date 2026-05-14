@@ -7,15 +7,14 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_MCP_PORT } from "../../dist/server/mcp-server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DAEMON_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "daemon.js");
-const DASHBOARD_PORT = 3334;
 
 function spawnDaemon(
   port: number,
   homeDir: string,
+  controlPort: number,
   extraArgs: string[] = [],
 ): {
   child: ChildProcess;
@@ -26,6 +25,7 @@ function spawnDaemon(
     env: {
       ...process.env,
       HOME: homeDir,
+      TAMANDUA_CONTROL_PORT: String(controlPort),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -148,32 +148,38 @@ async function reserveRandomPort(): Promise<number> {
 
 describe("dashboard daemon (MCP decoupled)", { concurrency: 1 }, () => {
   it("starts only dashboard by default (no --with-mcp), MCP port is NOT reachable", async (t) => {
-    if (!(await canBind(DASHBOARD_PORT))) {
-      t.skip(`Port ${DASHBOARD_PORT} is already in use in this environment`);
+    const dashboardPort = await reserveRandomPort();
+    if (!(await canBind(dashboardPort))) {
+      t.skip(`Port ${dashboardPort} is already in use`);
       return;
     }
 
+    const controlPort = await reserveRandomPort();
+
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-daemon-home-"));
-    const { child } = spawnDaemon(DASHBOARD_PORT, tempHome);
+    const { child } = spawnDaemon(dashboardPort, tempHome, controlPort);
 
     try {
-      const health = await waitForHttpUp(`http://127.0.0.1:${DASHBOARD_PORT}/api/health`);
+      const health = await waitForHttpUp(`http://127.0.0.1:${dashboardPort}/api/health`);
       assert.equal(health.status, 200);
 
-      // MCP should NOT be reachable
-      let mcpReachable = true;
-      try {
-        await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
-      } catch {
-        mcpReachable = false;
+      // MCP should NOT be reachable on the default MCP port.
+      // If 3338 is already occupied by another process, skip this check.
+      if (await canBind(3338)) {
+        let mcpReachable = true;
+        try {
+          await fetch(`http://127.0.0.1:3338/mcp`);
+        } catch {
+          mcpReachable = false;
+        }
+        assert.equal(mcpReachable, false, "MCP port should NOT be reachable without --with-mcp");
       }
-      assert.equal(mcpReachable, false, "MCP port should NOT be reachable without --with-mcp");
 
       process.kill(child.pid!, "SIGTERM");
       const exitCode = await waitForExit(child);
       assert.equal(exitCode, 0);
 
-      await waitForHttpDown(`http://127.0.0.1:${DASHBOARD_PORT}/api/health`);
+      await waitForHttpDown(`http://127.0.0.1:${dashboardPort}/api/health`);
 
       const pidFile = path.join(tempHome, ".tamandua", "tamandua.pid");
       assert.equal(fs.existsSync(pidFile), false);
@@ -184,31 +190,35 @@ describe("dashboard daemon (MCP decoupled)", { concurrency: 1 }, () => {
   });
 
   it("starts dashboard + MCP with --with-mcp flag and shuts down both on SIGTERM", async (t) => {
-    if (!(await canBind(DASHBOARD_PORT))) {
-      t.skip(`Port ${DASHBOARD_PORT} is already in use in this environment`);
+    const dashboardPort = await reserveRandomPort();
+    if (!(await canBind(dashboardPort))) {
+      t.skip(`Port ${dashboardPort} is already in use`);
       return;
     }
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use in this environment`);
+    const mcpPort = await reserveRandomPort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
       return;
     }
+
+    const controlPort = await reserveRandomPort();
 
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-daemon-home-"));
-    const { child } = spawnDaemon(DASHBOARD_PORT, tempHome, ["--with-mcp"]);
+    const { child } = spawnDaemon(dashboardPort, tempHome, controlPort, ["--with-mcp", "--mcp-port", String(mcpPort)]);
 
     try {
-      const health = await waitForHttpUp(`http://127.0.0.1:${DASHBOARD_PORT}/api/health`);
+      const health = await waitForHttpUp(`http://127.0.0.1:${dashboardPort}/api/health`);
       assert.equal(health.status, 200);
 
-      const mcp = await waitForHttpUp(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
+      const mcp = await waitForHttpUp(`http://127.0.0.1:${mcpPort}/mcp`);
       assert.equal(mcp.status, 400);
 
       process.kill(child.pid!, "SIGTERM");
       const exitCode = await waitForExit(child);
       assert.equal(exitCode, 0);
 
-      await waitForHttpDown(`http://127.0.0.1:${DASHBOARD_PORT}/api/health`);
-      await waitForHttpDown(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
+      await waitForHttpDown(`http://127.0.0.1:${dashboardPort}/api/health`);
+      await waitForHttpDown(`http://127.0.0.1:${mcpPort}/mcp`);
 
       const pidFile = path.join(tempHome, ".tamandua", "tamandua.pid");
       assert.equal(fs.existsSync(pidFile), false);
@@ -220,21 +230,24 @@ describe("dashboard daemon (MCP decoupled)", { concurrency: 1 }, () => {
 
   it("--with-mcp --mcp-port N starts MCP on custom port", async (t) => {
     const customMcpPort = await reserveRandomPort();
+    const dashboardPort = await reserveRandomPort();
 
-    if (!(await canBind(DASHBOARD_PORT))) {
-      t.skip(`Port ${DASHBOARD_PORT} is already in use in this environment`);
+    if (!(await canBind(dashboardPort))) {
+      t.skip(`Port ${dashboardPort} is already in use`);
       return;
     }
 
+    const controlPort = await reserveRandomPort();
+
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-daemon-home-"));
-    const { child } = spawnDaemon(DASHBOARD_PORT, tempHome, [
+    const { child } = spawnDaemon(dashboardPort, tempHome, controlPort, [
       "--with-mcp",
       "--mcp-port",
       String(customMcpPort),
     ]);
 
     try {
-      const health = await waitForHttpUp(`http://127.0.0.1:${DASHBOARD_PORT}/api/health`);
+      const health = await waitForHttpUp(`http://127.0.0.1:${dashboardPort}/api/health`);
       assert.equal(health.status, 200);
 
       const mcp = await waitForHttpUp(`http://127.0.0.1:${customMcpPort}/mcp`);
@@ -244,7 +257,7 @@ describe("dashboard daemon (MCP decoupled)", { concurrency: 1 }, () => {
       const exitCode = await waitForExit(child);
       assert.equal(exitCode, 0);
 
-      await waitForHttpDown(`http://127.0.0.1:${DASHBOARD_PORT}/api/health`);
+      await waitForHttpDown(`http://127.0.0.1:${dashboardPort}/api/health`);
       await waitForHttpDown(`http://127.0.0.1:${customMcpPort}/mcp`);
     } finally {
       await forceKillIfAlive(child);
@@ -253,21 +266,23 @@ describe("dashboard daemon (MCP decoupled)", { concurrency: 1 }, () => {
   });
 
   it("fails startup when MCP port is occupied and --with-mcp is used, dashboard is also stopped", async (t) => {
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use in this environment`);
+    const dashboardPort = await reserveRandomPort();
+    if (!(await canBind(dashboardPort))) {
+      t.skip(`Port ${dashboardPort} is already in use`);
       return;
     }
-
-    const dashboardPort = await reserveRandomPort();
+    const blockerPort = await reserveRandomPort();
     const blocker = http.createServer((_req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("occupied");
     });
 
-    await new Promise<void>((resolve) => blocker.listen(DEFAULT_MCP_PORT, "127.0.0.1", () => resolve()));
+    await new Promise<void>((resolve) => blocker.listen(blockerPort, "127.0.0.1", () => resolve()));
+
+    const controlPort = await reserveRandomPort();
 
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-daemon-home-"));
-    const { child, getOutput } = spawnDaemon(dashboardPort, tempHome, ["--with-mcp"]);
+    const { child, getOutput } = spawnDaemon(dashboardPort, tempHome, controlPort, ["--with-mcp", "--mcp-port", String(blockerPort)]);
 
     try {
       const exitCode = await waitForExit(child);

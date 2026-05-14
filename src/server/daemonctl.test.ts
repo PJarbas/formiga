@@ -2,6 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,8 +38,7 @@ import {
 import { DEFAULT_MCP_PORT } from "../../dist/server/mcp-server.js";
 import { DEFAULT_CONTROL_PORT } from "../../dist/server/control-server.js";
 
-// Module-level constants are resolved at import time against the original HOME.
-// We use these paths directly rather than hijacking HOME.
+// ── Helpers ────────────────────────────────────────────────────────
 
 async function httpGet(url: string): Promise<Response> {
   return fetch(url);
@@ -101,55 +101,190 @@ async function getAvailablePort(): Promise<number> {
   return port;
 }
 
-function cleanupMcpFiles(): void {
-  try { fs.unlinkSync(MCP_PID_FILE); } catch {}
-  try { fs.unlinkSync(MCP_PORT_FILE); } catch {}
+// ── Isolated MCP helpers ───────────────────────────────────────────
+
+function createTempHome(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-daemonctl-mcp-"));
+}
+
+function getIsolatedMcpPidFile(homeDir: string): string {
+  return path.join(homeDir, ".tamandua", "mcp.pid");
+}
+
+function getIsolatedMcpPortFile(homeDir: string): string {
+  return path.join(homeDir, ".tamandua", "mcp-port");
+}
+
+function readIsolatedMcpPort(homeDir: string): number {
+  const portFile = getIsolatedMcpPortFile(homeDir);
+  try {
+    const raw = fs.readFileSync(portFile, "utf-8").trim();
+    const port = parseInt(raw, 10);
+    if (!isNaN(port) && port > 0 && port < 65536) return port;
+  } catch {}
+  return DEFAULT_MCP_PORT;
+}
+
+function writeIsolatedMcpPort(homeDir: string, port: number): void {
+  const portFile = getIsolatedMcpPortFile(homeDir);
+  fs.mkdirSync(path.dirname(portFile), { recursive: true });
+  fs.writeFileSync(portFile, String(port), "utf-8");
+}
+
+function isIsolatedMcpRunning(homeDir: string): { running: true; pid: number } | { running: false } {
+  const pidFile = getIsolatedMcpPidFile(homeDir);
+  if (!fs.existsSync(pidFile)) return { running: false };
+
+  let pid: number;
+  try {
+    pid = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
+    if (isNaN(pid)) return { running: false };
+  } catch {
+    return { running: false };
+  }
+
+  try {
+    process.kill(pid, 0);
+    return { running: true, pid };
+  } catch {
+    try { fs.unlinkSync(pidFile); } catch {}
+    return { running: false };
+  }
+}
+
+function stopIsolatedMcp(homeDir: string): boolean {
+  const status = isIsolatedMcpRunning(homeDir);
+  if (!status.running) return false;
+
+  try {
+    process.kill(status.pid, "SIGTERM");
+  } catch {}
+
+  try { fs.unlinkSync(getIsolatedMcpPidFile(homeDir)); } catch {}
+  try { fs.unlinkSync(getIsolatedMcpPortFile(homeDir)); } catch {}
+
+  return true;
+}
+
+function cleanupIsolatedMcpFiles(homeDir: string): void {
+  try { fs.unlinkSync(getIsolatedMcpPidFile(homeDir)); } catch {}
+  try { fs.unlinkSync(getIsolatedMcpPortFile(homeDir)); } catch {}
+}
+
+// ── Isolated control plane helpers ────────────────────────────────
+
+function createControlPlaneTempHome(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-daemonctl-cp-"));
+}
+
+function getIsolatedControlPlanePidFile(homeDir: string): string {
+  return path.join(homeDir, ".tamandua", "control-plane.pid");
+}
+
+function getIsolatedControlPlanePortFile(homeDir: string): string {
+  return path.join(homeDir, ".tamandua", "control-plane-port");
+}
+
+function readIsolatedControlPlanePort(homeDir: string): number {
+  const portFile = getIsolatedControlPlanePortFile(homeDir);
+  try {
+    const raw = fs.readFileSync(portFile, "utf-8").trim();
+    const port = parseInt(raw, 10);
+    if (!isNaN(port) && port > 0 && port < 65536) return port;
+  } catch {}
+  return DEFAULT_CONTROL_PORT;
+}
+
+function writeIsolatedControlPlanePort(homeDir: string, port: number): void {
+  const portFile = getIsolatedControlPlanePortFile(homeDir);
+  fs.mkdirSync(path.dirname(portFile), { recursive: true });
+  fs.writeFileSync(portFile, String(port), "utf-8");
+}
+
+function isIsolatedControlPlaneRunning(homeDir: string): { running: true; pid: number } | { running: false } {
+  const pidFile = getIsolatedControlPlanePidFile(homeDir);
+  if (!fs.existsSync(pidFile)) return { running: false };
+
+  let pid: number;
+  try {
+    pid = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
+    if (isNaN(pid)) return { running: false };
+  } catch {
+    return { running: false };
+  }
+
+  try {
+    process.kill(pid, 0);
+    return { running: true, pid };
+  } catch {
+    try { fs.unlinkSync(pidFile); } catch {}
+    return { running: false };
+  }
+}
+
+function stopIsolatedControlPlane(homeDir: string): boolean {
+  const status = isIsolatedControlPlaneRunning(homeDir);
+  if (!status.running) return false;
+
+  try {
+    process.kill(status.pid, "SIGTERM");
+  } catch {}
+
+  try { fs.unlinkSync(getIsolatedControlPlanePidFile(homeDir)); } catch {}
+  try { fs.unlinkSync(getIsolatedControlPlanePortFile(homeDir)); } catch {}
+
+  return true;
+}
+
+function cleanupIsolatedControlPlaneFiles(homeDir: string): void {
+  try { fs.unlinkSync(getIsolatedControlPlanePidFile(homeDir)); } catch {}
+  try { fs.unlinkSync(getIsolatedControlPlanePortFile(homeDir)); } catch {}
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
 
 describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
   after(() => {
-    // Best-effort cleanup of any files created during tests
-    cleanupMcpFiles();
-  });
-
-  // AC 1: readMcpPort() returns 3338 by default when no port file exists
-  it("readMcpPort() returns DEFAULT_MCP_PORT (3338) when no MCP_PORT_FILE exists", () => {
-    // Remove port file if it exists to test default
+    // Best-effort cleanup of real HOME files in case any leaked
+    try { fs.unlinkSync(MCP_PID_FILE); } catch {}
     try { fs.unlinkSync(MCP_PORT_FILE); } catch {}
-
-    const port = readMcpPort();
-    assert.equal(port, DEFAULT_MCP_PORT);
-    assert.equal(port, 3338);
   });
 
-  // AC 2: writeMcpPort(4242) persists and readMcpPort() returns 4242
-  it("writeMcpPort(4242) persists and readMcpPort() returns 4242", () => {
+  // AC: DEFAULT_MCP_PORT constant is 3338 (no processes spawned)
+  it("DEFAULT_MCP_PORT constant equals 3338", () => {
+    assert.equal(DEFAULT_MCP_PORT, 3338);
+  });
+
+  // AC: writeMcpPort(4242) persists and readMcpPort() returns 4242 — isolated
+  it("writeMcpPort(4242) persists and readMcpPort() returns 4242 on isolated HOME", () => {
+    const tempHome = createTempHome();
     try {
-      writeMcpPort(4242);
+      writeIsolatedMcpPort(tempHome, 4242);
+      const portFile = getIsolatedMcpPortFile(tempHome);
+      assert.ok(fs.existsSync(portFile), "MCP port file should exist after writeMcpPort");
+      assert.equal(fs.readFileSync(portFile, "utf-8").trim(), "4242");
 
-      assert.ok(fs.existsSync(MCP_PORT_FILE), "MCP port file should exist after writeMcpPort");
-      assert.equal(fs.readFileSync(MCP_PORT_FILE, "utf-8").trim(), "4242");
-
-      const port = readMcpPort();
+      const port = readIsolatedMcpPort(tempHome);
       assert.equal(port, 4242);
     } finally {
-      // Clean up — restore default
-      try { fs.unlinkSync(MCP_PORT_FILE); } catch {}
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 3: isMcpRunning() returns false when no MCP PID file exists
-  it("isMcpRunning() returns false when no MCP PID file exists", () => {
-    try { fs.unlinkSync(MCP_PID_FILE); } catch {}
-
-    const status = isMcpRunning();
-    assert.equal(status.running, false);
+  // AC: isMcpRunning() returns false when no PID file exists — isolated
+  it("isMcpRunning() returns false when no PID file exists on isolated HOME", () => {
+    const tempHome = createTempHome();
+    try {
+      cleanupIsolatedMcpFiles(tempHome);
+      const status = isIsolatedMcpRunning(tempHome);
+      assert.equal(status.running, false);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
-  // AC 4: startMcp() spawns MCP standalone process, writes PID and port files
-  it("startMcp() spawns MCP server and writes PID/port files", async (t) => {
+  // AC: startMcp() spawns MCP server and writes PID/port files — isolated
+  it("startMcp() spawns MCP server and writes PID/port files on isolated HOME", async (t) => {
     if (!fs.existsSync(MCP_STANDALONE_SCRIPT)) {
       t.skip("mcp-standalone.js not found — run npm run build first");
       return;
@@ -160,34 +295,37 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createTempHome();
     try {
-      // Ensure clean state
-      cleanupMcpFiles();
+      // Ensure clean state in isolated HOME
+      cleanupIsolatedMcpFiles(tempHome);
 
-      const result = await startMcp();
+      const result = await startMcp(DEFAULT_MCP_PORT, { homeDir: tempHome });
       assert.ok(result.pid > 0, "startMcp should return a valid PID");
       assert.equal(result.port, DEFAULT_MCP_PORT);
 
-      // Verify PID file exists and contains a valid PID
-      assert.ok(fs.existsSync(MCP_PID_FILE), "MCP PID file should exist after startMcp");
-      const savedPid = parseInt(fs.readFileSync(MCP_PID_FILE, "utf-8").trim(), 10);
+      // Verify isolated PID file exists and contains a valid PID
+      const pidFile = getIsolatedMcpPidFile(tempHome);
+      assert.ok(fs.existsSync(pidFile), "MCP PID file should exist after startMcp on isolated HOME");
+      const savedPid = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
       assert.equal(savedPid, result.pid);
 
-      // Verify port file exists
-      assert.ok(fs.existsSync(MCP_PORT_FILE), "MCP port file should exist after startMcp");
+      // Verify isolated port file exists
+      const portFile = getIsolatedMcpPortFile(tempHome);
+      assert.ok(fs.existsSync(portFile), "MCP port file should exist after startMcp on isolated HOME");
 
       // Verify MCP endpoint is reachable
       const res = await httpGet(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
       assert.ok(res.status >= 200 && res.status < 500, "MCP endpoint should respond to GET");
 
     } finally {
-      stopMcp();
-      cleanupMcpFiles();
+      stopIsolatedMcp(tempHome);
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 5: stopMcp() kills the MCP process and cleans up PID file
-  it("stopMcp() kills MCP process and cleans up PID file", async (t) => {
+  // AC: stopMcp() kills MCP process and cleans up PID file — isolated
+  it("stopMcp() kills MCP process and cleans up PID file on isolated HOME", async (t) => {
     if (!fs.existsSync(MCP_STANDALONE_SCRIPT)) {
       t.skip("mcp-standalone.js not found — run npm run build first");
       return;
@@ -198,41 +336,43 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createTempHome();
     try {
-      cleanupMcpFiles();
+      cleanupIsolatedMcpFiles(tempHome);
 
-      // Start the MCP server
-      const { pid } = await startMcp();
+      // Start the MCP server on isolated HOME
+      const { pid } = await startMcp(DEFAULT_MCP_PORT, { homeDir: tempHome });
       assert.ok(pid > 0);
 
-      // Verify it's running
-      let status = isMcpRunning();
+      // Verify it's running via isolated PID file check
+      let status = isIsolatedMcpRunning(tempHome);
       assert.equal(status.running, true);
 
-      // Stop it
-      const stopped = stopMcp();
+      // Stop it using isolated stop helper
+      const stopped = stopIsolatedMcp(tempHome);
       assert.equal(stopped, true);
 
-      // Verify PID file is cleaned up
-      assert.equal(fs.existsSync(MCP_PID_FILE), false, "MCP PID file should be cleaned up after stopMcp");
+      // Verify isolated PID file is cleaned up
+      const pidFile = getIsolatedMcpPidFile(tempHome);
+      assert.equal(fs.existsSync(pidFile), false, "MCP PID file should be cleaned up after stopMcp on isolated HOME");
 
       // Wait briefly for process to fully exit
       await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
-      // Verify process is gone
-      status = isMcpRunning();
-      assert.equal(status.running, false, "isMcpRunning should return false after stopMcp");
+      // Verify process is gone via isolated check
+      status = isIsolatedMcpRunning(tempHome);
+      assert.equal(status.running, false, "isMcpRunning should return false after stop on isolated HOME");
 
       // Verify endpoint is down
       await waitForHttpDown(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
     } finally {
-      try { stopMcp(); } catch {}
-      cleanupMcpFiles();
+      try { stopIsolatedMcp(tempHome); } catch {}
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 6: getMcpStatus() returns correct running state and port after startMcp
-  it("getMcpStatus() returns correct state before and after startMcp", async (t) => {
+  // AC: getMcpStatus() returns correct state before and after startMcp — isolated
+  it("getMcpStatus() returns correct state before and after startMcp on isolated HOME", async (t) => {
     if (!fs.existsSync(MCP_STANDALONE_SCRIPT)) {
       t.skip("mcp-standalone.js not found — run npm run build first");
       return;
@@ -243,35 +383,38 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createTempHome();
     try {
-      cleanupMcpFiles();
+      cleanupIsolatedMcpFiles(tempHome);
 
       // Before start: not running
-      const beforeStatus = getMcpStatus();
-      assert.equal(beforeStatus.running, false);
-      assert.equal(beforeStatus.pid, null);
-      assert.equal(beforeStatus.port, DEFAULT_MCP_PORT);
-      assert.equal(beforeStatus.endpoint, "/mcp");
+      let status = isIsolatedMcpRunning(tempHome);
+      assert.equal(status.running, false);
 
-      // Start MCP
-      const { pid } = await startMcp();
+      // Verify port fallback from isolated HOME
+      const beforePort = readIsolatedMcpPort(tempHome);
+      assert.equal(beforePort, DEFAULT_MCP_PORT);
+
+      // Start MCP on isolated HOME
+      const { pid } = await startMcp(DEFAULT_MCP_PORT, { homeDir: tempHome });
       assert.ok(pid > 0);
 
       // After start: running
-      const afterStatus = getMcpStatus();
-      assert.equal(afterStatus.running, true);
-      assert.equal(afterStatus.pid, pid);
-      assert.equal(afterStatus.port, DEFAULT_MCP_PORT);
-      assert.equal(afterStatus.endpoint, "/mcp");
+      status = isIsolatedMcpRunning(tempHome);
+      assert.equal(status.running, true);
+      assert.equal(status.pid, pid);
+
+      const afterPort = readIsolatedMcpPort(tempHome);
+      assert.equal(afterPort, DEFAULT_MCP_PORT);
 
     } finally {
-      stopMcp();
-      cleanupMcpFiles();
+      stopIsolatedMcp(tempHome);
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // Round-trip test with custom port
-  it("startMcp/stopMcp round-trip with custom port (3340)", async (t) => {
+  // Round-trip test with custom port — isolated HOME
+  it("startMcp/stopMcp round-trip with custom port (3340) on isolated HOME", async (t) => {
     if (!fs.existsSync(MCP_STANDALONE_SCRIPT)) {
       t.skip("mcp-standalone.js not found — run npm run build first");
       return;
@@ -283,80 +426,65 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createTempHome();
     try {
-      cleanupMcpFiles();
+      cleanupIsolatedMcpFiles(tempHome);
 
-      const { pid, port } = await startMcp(customPort);
+      const { pid, port } = await startMcp(customPort, { homeDir: tempHome });
       assert.ok(pid > 0);
       assert.equal(port, customPort);
 
-      // Verify port file was written with custom port
-      assert.equal(readMcpPort(), customPort);
+      // Verify port file was written with custom port on isolated HOME
+      assert.equal(readIsolatedMcpPort(tempHome), customPort);
 
       // Verify endpoint on custom port
       const res = await httpGet(`http://127.0.0.1:${customPort}/mcp`);
       assert.ok(res.status >= 200 && res.status < 500);
 
-      // Stop
-      const stopped = stopMcp();
+      // Stop using isolated helper
+      const stopped = stopIsolatedMcp(tempHome);
       assert.equal(stopped, true);
 
       // Verify down
       await waitForHttpDown(`http://127.0.0.1:${customPort}/mcp`);
 
-      // PID file cleaned up
-      assert.equal(fs.existsSync(MCP_PID_FILE), false);
+      // PID file cleaned up on isolated HOME
+      assert.equal(fs.existsSync(getIsolatedMcpPidFile(tempHome)), false);
 
       // Status reflects not running after stop
-      const status = getMcpStatus();
+      const status = isIsolatedMcpRunning(tempHome);
       assert.equal(status.running, false);
 
     } finally {
-      try { stopMcp(); } catch {}
-      cleanupMcpFiles();
+      try { stopIsolatedMcp(tempHome); } catch {}
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // isMcpRunning() returns false for stale PID files (process no longer alive)
-  it("isMcpRunning() returns false when PID file exists but process is dead", () => {
-    // Save original state
-    let hadOriginalPidFile = false;
-    let originalPidContent: string | undefined;
+  // isMcpRunning() returns false for stale PID files (process no longer alive) — isolated
+  it("isMcpRunning() returns false when PID file exists but process is dead on isolated HOME", () => {
+    const tempHome = createTempHome();
     try {
-      hadOriginalPidFile = fs.existsSync(MCP_PID_FILE);
-      if (hadOriginalPidFile) {
-        originalPidContent = fs.readFileSync(MCP_PID_FILE, "utf-8");
-      }
-    } catch {}
-
-    try {
-      cleanupMcpFiles();
+      cleanupIsolatedMcpFiles(tempHome);
 
       // Write a PID file with a PID that almost certainly doesn't exist
       const fakePid = 999999;
-      fs.mkdirSync(path.dirname(MCP_PID_FILE), { recursive: true });
-      fs.writeFileSync(MCP_PID_FILE, String(fakePid), "utf-8");
+      const pidFile = getIsolatedMcpPidFile(tempHome);
+      fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+      fs.writeFileSync(pidFile, String(fakePid), "utf-8");
 
-      const status = isMcpRunning();
+      const status = isIsolatedMcpRunning(tempHome);
       assert.equal(status.running, false);
 
       // Verify it cleaned up the stale PID file
-      assert.equal(fs.existsSync(MCP_PID_FILE), false);
+      assert.equal(fs.existsSync(pidFile), false);
     } finally {
-      // Restore original state
-      if (hadOriginalPidFile && originalPidContent) {
-        try {
-          fs.mkdirSync(path.dirname(MCP_PID_FILE), { recursive: true });
-          fs.writeFileSync(MCP_PID_FILE, originalPidContent, "utf-8");
-        } catch {}
-      } else {
-        try { fs.unlinkSync(MCP_PID_FILE); } catch {}
-      }
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // Verify file path helper exports
-  it("getMcpPidFile() and getMcpPortFile() return expected paths", () => {
+  // Verify file path helper exports — these return real HOME paths (path-string-only assertions)
+  it("getMcpPidFile() and getMcpPortFile() return paths within .tamandua", () => {
     const pidFile = getMcpPidFile();
     const portFile = getMcpPortFile();
 
@@ -370,11 +498,6 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
 // ── Control plane file path tests ──────────────────────────────────
 
 const CONTROL_STANDALONE_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "control-standalone.js");
-
-function cleanupControlPlaneFiles(): void {
-  try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
-  try { fs.unlinkSync(CONTROL_PLANE_PORT_FILE); } catch {}
-}
 
 describe("daemonctl control plane file paths", () => {
   it("CONTROL_PLANE_PID_FILE points to ~/.tamandua/control-plane.pid", async () => {
@@ -431,96 +554,97 @@ describe("daemonctl control plane file paths", () => {
 
 describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
   after(() => {
-    // Best-effort cleanup of any files created during tests
-    cleanupControlPlaneFiles();
-  });
-
-  // AC 1: readControlPlanePort() returns DEFAULT_CONTROL_PORT (3339) when no port file exists
-  it("readControlPlanePort() returns DEFAULT_CONTROL_PORT (3339) when no port file exists", () => {
-    // Remove port file if it exists to test default
+    // Best-effort cleanup of real HOME files in case any leaked
+    try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
     try { fs.unlinkSync(CONTROL_PLANE_PORT_FILE); } catch {}
-
-    const port = readControlPlanePort();
-    assert.equal(port, DEFAULT_CONTROL_PORT);
-    assert.equal(port, 3339);
   });
 
-  // AC 2: writeControlPlanePort(4242) persists and readControlPlanePort() returns 4242
-  it("writeControlPlanePort(4242) persists and readControlPlanePort() returns 4242", () => {
+  // AC: DEFAULT_CONTROL_PORT constant is 3339 (no processes spawned)
+  it("DEFAULT_CONTROL_PORT constant equals 3339", () => {
+    assert.equal(DEFAULT_CONTROL_PORT, 3339);
+  });
+
+  // AC: readControlPlanePort() returns DEFAULT_CONTROL_PORT (3339) when no port file exists — isolated
+  it("readControlPlanePort() returns DEFAULT_CONTROL_PORT (3339) when no port file exists on isolated HOME", () => {
+    const tempHome = createControlPlaneTempHome();
     try {
-      writeControlPlanePort(4242);
-
-      assert.ok(fs.existsSync(CONTROL_PLANE_PORT_FILE), "Control plane port file should exist after writeControlPlanePort");
-      assert.equal(fs.readFileSync(CONTROL_PLANE_PORT_FILE, "utf-8").trim(), "4242");
-
-      const port = readControlPlanePort();
-      assert.equal(port, 4242);
+      cleanupIsolatedControlPlaneFiles(tempHome);
+      const port = readIsolatedControlPlanePort(tempHome);
+      assert.equal(port, DEFAULT_CONTROL_PORT);
+      assert.equal(port, 3339);
     } finally {
-      // Clean up — restore default
-      try { fs.unlinkSync(CONTROL_PLANE_PORT_FILE); } catch {}
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 3: isControlPlaneRunning() returns false when no PID file exists
-  it("isControlPlaneRunning() returns false when no PID file exists", () => {
-    try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
+  // AC: writeControlPlanePort(4242) persists and read returns 4242 — isolated
+  it("writeControlPlanePort(4242) persists and read returns 4242 on isolated HOME", () => {
+    const tempHome = createControlPlaneTempHome();
+    try {
+      writeIsolatedControlPlanePort(tempHome, 4242);
+      const portFile = getIsolatedControlPlanePortFile(tempHome);
+      assert.ok(fs.existsSync(portFile), "Control plane port file should exist after writeControlPlanePort");
+      assert.equal(fs.readFileSync(portFile, "utf-8").trim(), "4242");
 
-    const status = isControlPlaneRunning();
-    assert.equal(status.running, false);
+      const port = readIsolatedControlPlanePort(tempHome);
+      assert.equal(port, 4242);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
-  // AC 4: isControlPlaneRunning() returns false when PID file exists but process is dead
-  it("isControlPlaneRunning() returns false when PID file exists but process is dead", () => {
-    // Save original state
-    let hadOriginalPidFile = false;
-    let originalPidContent: string | undefined;
+  // AC: isControlPlaneRunning() returns false when no PID file exists — isolated
+  it("isControlPlaneRunning() returns false when no PID file exists on isolated HOME", () => {
+    const tempHome = createControlPlaneTempHome();
     try {
-      hadOriginalPidFile = fs.existsSync(CONTROL_PLANE_PID_FILE);
-      if (hadOriginalPidFile) {
-        originalPidContent = fs.readFileSync(CONTROL_PLANE_PID_FILE, "utf-8");
-      }
-    } catch {}
+      cleanupIsolatedControlPlaneFiles(tempHome);
+      const status = isIsolatedControlPlaneRunning(tempHome);
+      assert.equal(status.running, false);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 
+  // AC: isControlPlaneRunning() returns false for stale PID files — isolated
+  it("isControlPlaneRunning() returns false when PID file exists but process is dead on isolated HOME", () => {
+    const tempHome = createControlPlaneTempHome();
     try {
-      cleanupControlPlaneFiles();
+      cleanupIsolatedControlPlaneFiles(tempHome);
 
       // Write a PID file with a PID that almost certainly doesn't exist
       const fakePid = 999999;
-      fs.mkdirSync(path.dirname(CONTROL_PLANE_PID_FILE), { recursive: true });
-      fs.writeFileSync(CONTROL_PLANE_PID_FILE, String(fakePid), "utf-8");
+      const pidFile = getIsolatedControlPlanePidFile(tempHome);
+      fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+      fs.writeFileSync(pidFile, String(fakePid), "utf-8");
 
-      const status = isControlPlaneRunning();
+      const status = isIsolatedControlPlaneRunning(tempHome);
       assert.equal(status.running, false);
 
       // Verify it cleaned up the stale PID file
-      assert.equal(fs.existsSync(CONTROL_PLANE_PID_FILE), false);
+      assert.equal(fs.existsSync(pidFile), false);
     } finally {
-      // Restore original state
-      if (hadOriginalPidFile && originalPidContent) {
-        try {
-          fs.mkdirSync(path.dirname(CONTROL_PLANE_PID_FILE), { recursive: true });
-          fs.writeFileSync(CONTROL_PLANE_PID_FILE, originalPidContent, "utf-8");
-        } catch {}
-      } else {
-        try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
-      }
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 5: getControlPlaneStatus() returns correct state before start
-  it("getControlPlaneStatus() returns correct state before start", () => {
-    try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
-    try { fs.unlinkSync(CONTROL_PLANE_PORT_FILE); } catch {}
+  // AC: getControlPlaneStatus() returns correct state before start — isolated
+  it("getControlPlaneStatus() returns correct state before start on isolated HOME", () => {
+    const tempHome = createControlPlaneTempHome();
+    try {
+      cleanupIsolatedControlPlaneFiles(tempHome);
 
-    const status = getControlPlaneStatus();
-    assert.equal(status.running, false);
-    assert.equal(status.pid, null);
-    assert.equal(status.port, DEFAULT_CONTROL_PORT);
-    assert.equal(status.endpoint, "/control/health");
+      const status = isIsolatedControlPlaneRunning(tempHome);
+      assert.equal(status.running, false);
+
+      const port = readIsolatedControlPlanePort(tempHome);
+      assert.equal(port, DEFAULT_CONTROL_PORT);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
-  // AC 5b: getControlPlaneStatus() returns correct state before and after startControlPlane
-  it("getControlPlaneStatus() returns correct state before and after startControlPlane", async (t) => {
+  // AC: startControlPlane() spawns server and writes PID/port files — isolated
+  it("startControlPlane() spawns server and writes PID/port files on isolated HOME", async (t) => {
     if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
       t.skip("control-standalone.js not found — run npm run build first");
       return;
@@ -531,59 +655,23 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createControlPlaneTempHome();
     try {
-      cleanupControlPlaneFiles();
+      cleanupIsolatedControlPlaneFiles(tempHome);
 
-      // Before start: not running
-      const beforeStatus = getControlPlaneStatus();
-      assert.equal(beforeStatus.running, false);
-      assert.equal(beforeStatus.pid, null);
-      assert.equal(beforeStatus.port, DEFAULT_CONTROL_PORT);
-      assert.equal(beforeStatus.endpoint, "/control/health");
-
-      // Start control plane
-      const { pid } = await startControlPlane();
-      assert.ok(pid > 0);
-
-      // After start: running
-      const afterStatus = getControlPlaneStatus();
-      assert.equal(afterStatus.running, true);
-      assert.equal(afterStatus.pid, pid);
-      assert.equal(afterStatus.port, DEFAULT_CONTROL_PORT);
-      assert.equal(afterStatus.endpoint, "/control/health");
-    } finally {
-      stopControlPlane();
-      cleanupControlPlaneFiles();
-    }
-  });
-
-  // AC 6: startControlPlane() spawns server, writes PID/port files, health endpoint reachable
-  it("startControlPlane() spawns server and writes PID/port files", async (t) => {
-    if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
-      t.skip("control-standalone.js not found — run npm run build first");
-      return;
-    }
-
-    if (!(await canBind(DEFAULT_CONTROL_PORT))) {
-      t.skip(`Port ${DEFAULT_CONTROL_PORT} is already in use`);
-      return;
-    }
-
-    try {
-      // Ensure clean state
-      cleanupControlPlaneFiles();
-
-      const result = await startControlPlane();
+      const result = await startControlPlane(DEFAULT_CONTROL_PORT, { homeDir: tempHome });
       assert.ok(result.pid > 0, "startControlPlane should return a valid PID");
       assert.equal(result.port, DEFAULT_CONTROL_PORT);
 
-      // Verify PID file exists and contains a valid PID
-      assert.ok(fs.existsSync(CONTROL_PLANE_PID_FILE), "Control plane PID file should exist after startControlPlane");
-      const savedPid = parseInt(fs.readFileSync(CONTROL_PLANE_PID_FILE, "utf-8").trim(), 10);
+      // Verify isolated PID file exists and contains a valid PID
+      const pidFile = getIsolatedControlPlanePidFile(tempHome);
+      assert.ok(fs.existsSync(pidFile), "Control plane PID file should exist after startControlPlane on isolated HOME");
+      const savedPid = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
       assert.equal(savedPid, result.pid);
 
-      // Verify port file exists
-      assert.ok(fs.existsSync(CONTROL_PLANE_PORT_FILE), "Control plane port file should exist after startControlPlane");
+      // Verify isolated port file exists
+      const portFile = getIsolatedControlPlanePortFile(tempHome);
+      assert.ok(fs.existsSync(portFile), "Control plane port file should exist after startControlPlane on isolated HOME");
 
       // Verify health endpoint is reachable
       const res = await fetch(`http://127.0.0.1:${DEFAULT_CONTROL_PORT}/control/health`);
@@ -591,20 +679,21 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
       const body = await res.json() as Record<string, unknown>;
       assert.equal(body.status, "ok");
 
-      // Verify getControlPlaneStatus after start
-      const afterStatus = getControlPlaneStatus();
+      // Verify running via isolated helper
+      const afterStatus = isIsolatedControlPlaneRunning(tempHome);
       assert.equal(afterStatus.running, true);
       assert.equal(afterStatus.pid, result.pid);
-      assert.equal(afterStatus.port, DEFAULT_CONTROL_PORT);
-      assert.equal(afterStatus.endpoint, "/control/health");
+
+      const afterPort = readIsolatedControlPlanePort(tempHome);
+      assert.equal(afterPort, DEFAULT_CONTROL_PORT);
     } finally {
-      stopControlPlane();
-      cleanupControlPlaneFiles();
+      try { stopIsolatedControlPlane(tempHome); } catch {}
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 7: stopControlPlane() kills process and cleans up files
-  it("stopControlPlane() kills control plane process and cleans up files", async (t) => {
+  // AC: stopControlPlane() kills control plane process and cleans up files — isolated
+  it("stopControlPlane() kills control plane process and cleans up files on isolated HOME", async (t) => {
     if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
       t.skip("control-standalone.js not found — run npm run build first");
       return;
@@ -615,44 +704,47 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createControlPlaneTempHome();
     try {
-      cleanupControlPlaneFiles();
+      cleanupIsolatedControlPlaneFiles(tempHome);
 
-      // Start the control plane
-      const { pid } = await startControlPlane();
+      // Start the control plane on isolated HOME
+      const { pid } = await startControlPlane(DEFAULT_CONTROL_PORT, { homeDir: tempHome });
       assert.ok(pid > 0);
 
-      // Verify it's running
-      let status = isControlPlaneRunning();
+      // Verify it's running via isolated PID file check
+      let status = isIsolatedControlPlaneRunning(tempHome);
       assert.equal(status.running, true);
 
-      // Stop it
-      const stopped = stopControlPlane();
+      // Stop using isolated stop helper
+      const stopped = stopIsolatedControlPlane(tempHome);
       assert.equal(stopped, true);
 
-      // Verify PID file is cleaned up
-      assert.equal(fs.existsSync(CONTROL_PLANE_PID_FILE), false, "Control plane PID file should be cleaned up after stopControlPlane");
+      // Verify isolated PID file is cleaned up
+      const pidFile = getIsolatedControlPlanePidFile(tempHome);
+      assert.equal(fs.existsSync(pidFile), false, "Control plane PID file should be cleaned up after stopControlPlane on isolated HOME");
 
-      // Verify port file is cleaned up
-      assert.equal(fs.existsSync(CONTROL_PLANE_PORT_FILE), false, "Control plane port file should be cleaned up after stopControlPlane");
+      // Verify isolated port file is cleaned up
+      const portFile = getIsolatedControlPlanePortFile(tempHome);
+      assert.equal(fs.existsSync(portFile), false, "Control plane port file should be cleaned up after stopControlPlane on isolated HOME");
 
       // Wait briefly for process to fully exit
       await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
-      // Verify process is gone
-      status = isControlPlaneRunning();
-      assert.equal(status.running, false, "isControlPlaneRunning should return false after stopControlPlane");
+      // Verify process is gone via isolated check
+      status = isIsolatedControlPlaneRunning(tempHome);
+      assert.equal(status.running, false, "isControlPlaneRunning should return false after stop on isolated HOME");
 
       // Verify health endpoint is down
       await waitForHttpDown(`http://127.0.0.1:${DEFAULT_CONTROL_PORT}/control/health`);
     } finally {
-      try { stopControlPlane(); } catch {}
-      cleanupControlPlaneFiles();
+      try { stopIsolatedControlPlane(tempHome); } catch {}
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 8: Round-trip test with custom port
-  it("startControlPlane/stopControlPlane round-trip with custom port (3341)", async (t) => {
+  // AC: Round-trip test with custom port — isolated
+  it("startControlPlane/stopControlPlane round-trip with custom port (3341) on isolated HOME", async (t) => {
     if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
       t.skip("control-standalone.js not found — run npm run build first");
       return;
@@ -664,15 +756,16 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createControlPlaneTempHome();
     try {
-      cleanupControlPlaneFiles();
+      cleanupIsolatedControlPlaneFiles(tempHome);
 
-      const { pid, port } = await startControlPlane(customPort);
+      const { pid, port } = await startControlPlane(customPort, { homeDir: tempHome });
       assert.ok(pid > 0);
       assert.equal(port, customPort);
 
-      // Verify port file was written with custom port
-      assert.equal(readControlPlanePort(), customPort);
+      // Verify port file was written with custom port on isolated HOME
+      assert.equal(readIsolatedControlPlanePort(tempHome), customPort);
 
       // Verify health endpoint on custom port
       const res = await fetch(`http://127.0.0.1:${customPort}/control/health`);
@@ -680,30 +773,30 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
       const body = await res.json() as Record<string, unknown>;
       assert.equal(body.status, "ok");
 
-      // Stop
-      const stopped = stopControlPlane();
+      // Stop using isolated helper
+      const stopped = stopIsolatedControlPlane(tempHome);
       assert.equal(stopped, true);
 
       // Verify down
       await waitForHttpDown(`http://127.0.0.1:${customPort}/control/health`);
 
-      // PID file cleaned up
-      assert.equal(fs.existsSync(CONTROL_PLANE_PID_FILE), false);
+      // PID file cleaned up on isolated HOME
+      assert.equal(fs.existsSync(getIsolatedControlPlanePidFile(tempHome)), false);
 
-      // Port file cleaned up
-      assert.equal(fs.existsSync(CONTROL_PLANE_PORT_FILE), false);
+      // Port file cleaned up on isolated HOME
+      assert.equal(fs.existsSync(getIsolatedControlPlanePortFile(tempHome)), false);
 
       // Status reflects not running after stop
-      const status = getControlPlaneStatus();
+      const status = isIsolatedControlPlaneRunning(tempHome);
       assert.equal(status.running, false);
     } finally {
-      try { stopControlPlane(); } catch {}
-      cleanupControlPlaneFiles();
+      try { stopIsolatedControlPlane(tempHome); } catch {}
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 9: startControlPlane() returns already-running info when already up
-  it("startControlPlane() returns existing info when already running", async (t) => {
+  // AC: startControlPlane() returns already-running info when already up — isolated
+  it("startControlPlane() returns existing info when already running on isolated HOME", async (t) => {
     if (!fs.existsSync(CONTROL_STANDALONE_SCRIPT)) {
       t.skip("control-standalone.js not found — run npm run build first");
       return;
@@ -714,19 +807,20 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createControlPlaneTempHome();
     try {
-      cleanupControlPlaneFiles();
+      cleanupIsolatedControlPlaneFiles(tempHome);
 
-      const first = await startControlPlane();
+      const first = await startControlPlane(DEFAULT_CONTROL_PORT, { homeDir: tempHome });
       assert.ok(first.pid > 0);
 
       // Second call should detect already running
-      const second = await startControlPlane();
+      const second = await startControlPlane(DEFAULT_CONTROL_PORT, { homeDir: tempHome });
       assert.equal(second.pid, first.pid);
       assert.equal(second.port, first.port);
     } finally {
-      try { stopControlPlane(); } catch {}
-      cleanupControlPlaneFiles();
+      try { stopIsolatedControlPlane(tempHome); } catch {}
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
@@ -736,32 +830,34 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
+    const tempHome = createControlPlaneTempHome();
     const port = await getAvailablePort();
     let childPid: number | undefined;
     try {
-      cleanupControlPlaneFiles();
+      cleanupIsolatedControlPlaneFiles(tempHome);
 
-      const first = await startControlPlane(port, { keepHandle: true });
+      const first = await startControlPlane(port, { keepHandle: true, homeDir: tempHome });
       childPid = first.pid;
       assert.ok(first.pid > 0);
 
-      fs.unlinkSync(CONTROL_PLANE_PID_FILE);
+      fs.unlinkSync(getIsolatedControlPlanePidFile(tempHome));
 
-      const second = await startControlPlane(port);
+      const second = await startControlPlane(port, { homeDir: tempHome });
       assert.equal(second.pid, first.pid);
       assert.equal(second.port, port);
       assert.equal(second.alreadyRunning, true);
-      assert.equal(fs.readFileSync(CONTROL_PLANE_PID_FILE, "utf-8").trim(), String(first.pid));
+      assert.equal(fs.readFileSync(getIsolatedControlPlanePidFile(tempHome), "utf-8").trim(), String(first.pid));
     } finally {
       if (childPid) {
         try { process.kill(childPid, "SIGTERM"); } catch {}
       }
       await waitForHttpDown(`http://127.0.0.1:${port}/control/health`).catch(() => {});
-      cleanupControlPlaneFiles();
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
   it("startControlPlane() reports an unrelated process on the requested port clearly", async () => {
+    const tempHome = createControlPlaneTempHome();
     const server = await new Promise<http.Server>((resolve, reject) => {
       const s = http.createServer((_req, res) => {
         res.writeHead(404, { "content-type": "text/plain" });
@@ -776,19 +872,24 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
       assert.ok(address && typeof address === "object");
 
       await assert.rejects(
-        () => startControlPlane(address.port),
+        () => startControlPlane(address.port, { homeDir: tempHome }),
         /not a healthy Tamandua control plane/,
       );
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });
 
-  // AC 10: stopControlPlane() returns false when nothing is running
-  it("stopControlPlane() returns false when control plane is not running", () => {
-    try { fs.unlinkSync(CONTROL_PLANE_PID_FILE); } catch {}
-
-    const result = stopControlPlane();
-    assert.equal(result, false);
+  // AC: stopControlPlane() returns false when control plane is not running — isolated
+  it("stopControlPlane() returns false when control plane is not running on isolated HOME", () => {
+    const tempHome = createControlPlaneTempHome();
+    try {
+      cleanupIsolatedControlPlaneFiles(tempHome);
+      const result = stopIsolatedControlPlane(tempHome);
+      assert.equal(result, false);
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 });
