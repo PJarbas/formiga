@@ -122,13 +122,22 @@ describe("workflow structure", () => {
     assert.match(content, /## Examples/);
     assert.match(content, /tamandua workflow list/);
     assert.match(content, /tamandua workflow run <workflow-id>/);
-    assert.match(content, /tamandua workflow status <run-id-or-query>/);
+    assert.match(content, /tamandua workflow status <query>/);
     assert.match(content, /tamandua step peek <agent-id> --run-id <run-id>/);
     assert.match(content, /tamandua step claim <agent-id> --run-id <run-id>/);
     assert.match(content, /tamandua step complete <stepId>/);
     assert.match(content, /tamandua step fail <stepId>/);
     assert.match(content, /SAVE `stepId` immediately/i);
     assert.match(content, /Never call `step complete` or `step fail` with an agent ID/i);
+    assert.match(content, /tamandua workflow pause/);
+    assert.match(content, /tamandua workflow pause-all/);
+    assert.match(content, /--drain/);
+    assert.match(content, /tamandua workflow resume-all/);
+    assert.match(content, /tamandua logs/);
+    assert.match(content, /tamandua logs-tail/);
+    assert.match(content, /tamandua dashboard/);
+    assert.match(content, /tamandua dashboard status/);
+    assert.match(content, /tamandua step stories/);
   });
 
   it("bundled workflow agents declare tamandua-agents skill", async () => {

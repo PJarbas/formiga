@@ -31,14 +31,23 @@ Use these when managing workflow runs (outside individual step execution):
 ```bash
 tamandua workflow list
 tamandua workflow run <workflow-id> "<task>" [--working-directory-for-harness <dir>]
-tamandua workflow status <run-id-or-query>
+tamandua workflow status <query>
 tamandua workflow runs
+tamandua workflow pause <run-id>
+tamandua workflow pause-all [--drain]
 tamandua workflow resume <run-id>
+tamandua workflow resume-all
 tamandua workflow stop <run-id>
 ```
 
+`resume` works for both paused runs (restarted via the daemon) and failed
+runs (resumed directly). `pause-all --drain` lets in-progress steps finish
+before pausing.
+
 Use `tamandua update [--force]` only for local Tamandua maintenance. Without
-`--force`, update stops after rebuilding if active runs are present.
+`--force`, update blocks after rebuilding if active runs are present — it
+leaves services and installed workflows unchanged. Use `--force` to proceed
+despite active runs (services are stopped and restarted, workflows reinstalled).
 Remote MCP clients can discover the same maintenance command via
 `tamandua.update.command`; run the actual update through the local CLI because
 it may restart dashboard, MCP, and the control plane.
@@ -64,6 +73,10 @@ Use the run ID supplied by your scheduler prompt or workflow context. `step peek
 
 Never call `step complete` or `step fail` with an agent ID. They require the claimed step UUID.
 
+For diagnostics, use `tamandua step stories <run-id>` to list all stories
+for a run and their statuses. This is useful when diagnosing blocked
+pipelines or understanding story progress.
+
 ### 4) Completion contract
 
 On success, provide structured output that includes:
@@ -79,7 +92,7 @@ On failure, call `tamandua step fail <stepId> "<clear reason>"` with actionable 
 ### 2.1) MCP run start (remote)
 
 When using MCP, `tamandua.run.start` requires a harness working directory.
-Always provide `workingDirectoryForHarness`.
+`workingDirectoryForHarness` is mandatory (not optional) for MCP runs.
 
 Required MCP args:
 
@@ -91,6 +104,55 @@ Recovery pattern for tool-calling models:
 
 - If MCP returns: `Argument "workingDirectoryForHarness" must be a non-empty string`
 - Retry the same tool call with an explicit absolute path (for example `/home/user/repo`).
+
+### 2.2) Inspect activity with logs and logs-tail
+
+Use logs to inspect recent run activity or follow events as they happen.
+
+The selector can be:
+- A number — shows that many most recent entries globally
+- A run ID prefix — shows entries for that run
+- `#<run-number>` — shows entries for the Nth run
+
+```bash
+# Show recent entries
+tamandua logs                        # default: last 20 entries
+tamandua logs 50                     # last 50 entries
+tamandua logs <run-id>               # entries for a specific run
+tamandua logs #3                     # entries for run number 3
+
+# Follow activity as new events arrive
+tamandua logs-tail                   # tail recent activity (live)
+tamandua logs-tail 50                # tail, starting with last 50 entries
+tamandua logs-tail <run-id>          # tail events for a specific run
+tamandua logs-tail #3                # tail events for run number 3
+```
+
+Example: after starting a workflow, follow its progress:
+
+```bash
+tamandua workflow run feature-dev "Add login page"
+# -> Run started: 8a3b2c1d-...
+tamandua logs-tail 8a3b2c1d          # follow events as they arrive
+```
+
+### 2.3) Dashboard lifecycle and source path
+
+Start, stop, and check the web dashboard:
+
+```bash
+tamandua dashboard [start] [--port N]  # Start dashboard (default: 3334)
+tamandua dashboard stop                # Stop dashboard
+tamandua dashboard status              # Check dashboard + MCP status
+```
+
+`dashboard status` reports both dashboard and MCP server status in a single
+output. The remote MCP server can be managed independently with
+`tamandua mcp start [--port N]`, `tamandua mcp stop`, and `tamandua mcp status`
+(standalone on port 3338 by default).
+
+`tamandua source-path` prints the source checkout path that `tamandua update`
+uses to pull, rebuild, and reinstall.
 
 ## Examples
 
