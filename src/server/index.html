@@ -29,6 +29,15 @@
       font-size: 13px;
       color: #8b949e;
     }
+    header .token-counters {
+      margin: 0 auto;
+      font-size: 13px;
+      color: #8b949e;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    header .token-sep { color: #30363d; }
     header .status-dot {
       width: 8px; height: 8px;
       border-radius: 50%;
@@ -166,6 +175,11 @@
   <header>
     <h1>&#x1F9FE; Tamandua</h1>
     <span class="subtitle">Workflow Dashboard</span>
+    <div class="token-counters" id="token-counters">
+      <span>System: <span class="mono" id="system-tokens">0</span></span>
+      <span class="token-sep">|</span>
+      <span>Total: <span class="mono" id="total-tokens">0</span></span>
+    </div>
     <span class="status-dot" id="status-dot" title="Connected"></span>
   </header>
 
@@ -365,11 +379,32 @@
       output.scrollTop = output.scrollHeight;
     }
 
+    async function fetchStats() {
+      try {
+        const res = await fetch("/api/stats");
+        const data = await res.json();
+        const systemEl = document.getElementById("system-tokens");
+        const totalEl = document.getElementById("total-tokens");
+        if (systemEl) systemEl.textContent = fmtNum(data.systemTokensSpent ?? 0);
+        if (totalEl) totalEl.textContent = fmtNum(data.totalTokensSpent ?? 0);
+        document.getElementById("status-dot").classList.remove("error");
+      } catch (err) {
+        document.getElementById("status-dot").classList.add("error");
+        console.error("Failed to fetch stats:", err);
+      }
+    }
+
+    function fmtNum(n) {
+      if (!Number.isFinite(n)) return "0";
+      return n.toLocaleString();
+    }
+
     function refreshAll() {
       fetchMcpStatus();
       fetchRuns();
       fetchEvents();
       fetchLogsTail();
+      fetchStats();
       document.getElementById("last-update").textContent = new Date().toLocaleTimeString();
     }
 

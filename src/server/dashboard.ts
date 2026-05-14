@@ -16,7 +16,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getDb } from "../db.js";
+import { getDb, getSystemTokenSpend } from "../db.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { getMcpStatus } from "./daemonctl.js";
@@ -177,6 +177,29 @@ function handleLogsTail(req: http.IncomingMessage, res: http.ServerResponse): vo
   }
 }
 
+function handleStats(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const db = getDb();
+    const systemTokensSpent = getSystemTokenSpend();
+
+    let runTokensSpent = 0;
+    try {
+      const row = db.prepare("SELECT COALESCE(SUM(tokens_spent), 0) AS total FROM runs").get() as { total: number } | undefined;
+      runTokensSpent = row?.total ?? 0;
+    } catch {
+      // runs table may not exist yet
+      runTokensSpent = 0;
+    }
+
+    jsonResponse(res, {
+      systemTokensSpent,
+      totalTokensSpent: systemTokensSpent + runTokensSpent,
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to get stats: ${(err as Error).message}`);
+  }
+}
+
 function handleHealth(_req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
     const db = getDb();
@@ -261,6 +284,12 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   const kanbanApiMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/kanban$/);
   if (method === "GET" && kanbanApiMatch) {
     handleRunKanban(req, res, kanbanApiMatch[1]);
+    return;
+  }
+
+  // GET /api/stats
+  if (method === "GET" && pathname === "/api/stats") {
+    handleStats(req, res);
     return;
   }
 

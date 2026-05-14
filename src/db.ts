@@ -155,6 +155,20 @@ function migrate(db: DatabaseSync): void {
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_runs_sched_queue ON runs(scheduling_status, scheduling_requested_at, created_at)",
   );
+
+  // ── Global stats ──
+  const statsTableExists = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='tamandua_stats'",
+  ).get();
+  if (!statsTableExists) {
+    db.exec(`
+      CREATE TABLE tamandua_stats (
+        id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        system_tokens_spent INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    db.exec("INSERT OR IGNORE INTO tamandua_stats (id, system_tokens_spent) VALUES (1, 0)");
+  }
 }
 
 export function nextRunNumber(): number {
@@ -165,4 +179,23 @@ export function nextRunNumber(): number {
 
 export function getDbPath(): string {
   return resolveDbPath();
+}
+
+export function getSystemTokenSpend(): number {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT system_tokens_spent FROM tamandua_stats WHERE id = 1",
+  ).get() as { system_tokens_spent: number } | undefined;
+  return row?.system_tokens_spent ?? 0;
+}
+
+export function incrementSystemTokenSpend(amount: number): number {
+  const db = getDb();
+  const row = db.prepare(`
+    UPDATE tamandua_stats
+    SET system_tokens_spent = system_tokens_spent + ?
+    WHERE id = 1
+    RETURNING system_tokens_spent
+  `).get(amount) as { system_tokens_spent: number } | undefined;
+  return row?.system_tokens_spent ?? 0;
 }

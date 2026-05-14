@@ -8,6 +8,7 @@ import http from "node:http";
 import { createDashboardServer } from "../../dist/server/dashboard.js";
 import { type TamanduaEvent } from "../../dist/installer/events.js";
 import { DEFAULT_MCP_PORT } from "../../dist/server/mcp-server.js";
+import { getDb, incrementSystemTokenSpend, getSystemTokenSpend } from "../../dist/db.js";
 
 interface LogsTailResponse {
   lines: string[];
@@ -151,6 +152,222 @@ describe("dashboard logs-tail UI", () => {
       assert.match(html, /appendLogsTailLines\(data\.lines \|\| \[\]\)/);
       assert.match(html, /logsTailOffset = data\.nextOffset/);
       assert.match(html, /output\.scrollTop = output\.scrollHeight/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+});
+
+describe("dashboard stats API", () => {
+  it("GET /api/stats returns systemTokensSpent and totalTokensSpent on fresh DB", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-stats-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      // Open DB to trigger migration (creates tamandua_stats with default 0)
+      getDb();
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/stats`);
+        assert.equal(response.status, 200);
+
+        const body = await response.json() as { systemTokensSpent: number; totalTokensSpent: number };
+        assert.equal(typeof body.systemTokensSpent, "number");
+        assert.equal(typeof body.totalTokensSpent, "number");
+        assert.equal(body.systemTokensSpent, 0);
+        assert.equal(body.totalTokensSpent, 0);
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/stats totalTokensSpent equals system + run tokens", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-stats-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      const db = getDb();
+
+      // Add some run token data
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, tokens_spent, created_at, updated_at)
+        VALUES ('run-1', 1, 'wf-1', 'task 1', 'running', 500, '2026-01-01', '2026-01-01')
+      `).run();
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, tokens_spent, created_at, updated_at)
+        VALUES ('run-2', 2, 'wf-2', 'task 2', 'done', 300, '2026-01-01', '2026-01-01')
+      `).run();
+
+      // Add system token spend
+      incrementSystemTokenSpend(150);
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/stats`);
+        assert.equal(response.status, 200);
+
+        const body = await response.json() as { systemTokensSpent: number; totalTokensSpent: number };
+        assert.equal(body.systemTokensSpent, 150);
+        assert.equal(body.totalTokensSpent, 950); // 500 + 300 + 150
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/stats handles DB without tamandua_stats gracefully", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-stats-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      // Create a DB with runs table but WITHOUT tamandua_stats (legacy DB)
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      const { DatabaseSync } = await import("node:sqlite");
+      const legacyDb = new DatabaseSync(dbPath);
+      legacyDb.exec(`
+        CREATE TABLE IF NOT EXISTS runs (
+          id TEXT PRIMARY KEY,
+          workflow_id TEXT NOT NULL,
+          task TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          context TEXT NOT NULL DEFAULT '{}',
+          tokens_spent INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+      legacyDb.exec(`
+        INSERT INTO runs (id, workflow_id, task, status, tokens_spent, created_at, updated_at)
+        VALUES ('legacy-run', 'wf-legacy', 'legacy task', 'done', 200, '2025-01-01', '2025-01-01')
+      `);
+      legacyDb.close();
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/stats`);
+        assert.equal(response.status, 200);
+
+        const body = await response.json() as { systemTokensSpent: number; totalTokensSpent: number };
+        // getSystemTokenSpend returns 0 when the table doesn't exist
+        assert.equal(body.systemTokensSpent, 0);
+        // total = system(0) + sum of run tokens(200)
+        assert.equal(body.totalTokensSpent, 200);
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("dashboard token counters UI", () => {
+  it("renders system and total token spend counters in dashboard HTML", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+      // Token counter container
+      assert.match(html, /<div class="token-counters" id="token-counters">/);
+      // System token span
+      assert.match(html, /<span class="mono" id="system-tokens">/);
+      // Total token span
+      assert.match(html, /<span class="mono" id="total-tokens">/);
+      // Default value is 0
+      assert.match(html, /<span class="mono" id="system-tokens">0<\/span>/);
+      assert.match(html, /<span class="mono" id="total-tokens">0<\/span>/);
+      // Separator
+      assert.match(html, /<span class="token-sep">\|<\/span>/);
+      // System: and Total: labels
+      assert.match(html, /System:/);
+      assert.match(html, /Total:/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("dashboard HTML includes fetchStats call in refreshAll", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+      // fetchStats function exists
+      assert.match(html, /async function fetchStats/);
+      // fetchStats is called in refreshAll
+      assert.match(html, /fetchStats\(\)/);
+      // fetch is called with /api/stats
+      assert.match(html, /fetch\(["']\/api\/stats["']\)/);
+      // comma format function
+      assert.match(html, /function fmtNum/);
+      // toLocaleString for number formatting
+      assert.match(html, /\.toLocaleString\(\)/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("token counters are positioned near top in header area", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+      // Token counters should be inside the header
+      const headerIndex = html.indexOf("<header>");
+      const headerCloseIndex = html.indexOf("</header>");
+      assert.ok(headerIndex >= 0, "header tag not found");
+      assert.ok(headerCloseIndex > headerIndex, "header close tag not found");
+
+      const tokenCountersIndex = html.indexOf('class="token-counters"');
+      assert.ok(tokenCountersIndex > headerIndex, "token counters not inside header");
+      assert.ok(tokenCountersIndex < headerCloseIndex, "token counters not inside header");
     } finally {
       await stopDashboard(server);
     }

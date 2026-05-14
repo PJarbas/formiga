@@ -9,7 +9,7 @@ import { describe, it } from "node:test";
 const repoRoot = process.cwd();
 
 function createTempHome() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-token-attribution-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-system-token-attribution-"));
   const homeDir = path.join(root, "home");
   fs.mkdirSync(homeDir, { recursive: true });
   return { root, homeDir };
@@ -53,8 +53,82 @@ function runNodeScript(script: string, env: Record<string, string>) {
   return JSON.parse(lastLine) as Record<string, unknown>;
 }
 
-describe("polling-round token attribution", () => {
-  it("adds polling-round usage to runs.tokens_spent when a run id is present", () => {
+describe("system token attribution (US-002)", () => {
+  it("records tokens from polling rounds with unresolvable run ID in tamandua_stats.system_tokens_spent", () => {
+    const temp = createTempHome();
+
+    try {
+      // No run ID or step ID in the output — unresolvable run
+      const piOutput = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "STATUS: done\nCHANGES: n/a\nTESTS: n/a" }],
+          usage: { totalTokens: 55 },
+          stopReason: "stop",
+        },
+      });
+
+      const fakePi = createFakePi(temp.root, piOutput);
+
+      const result = runNodeScript(
+        `
+          import fs from "node:fs";
+          import path from "node:path";
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb, getSystemTokenSpend } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 13, ?, ?)"
+          ).run(runId, now, now);
+
+          const job = {
+            id: "job-system-attribution",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const systemTokens = getSystemTokenSpend();
+
+          console.log(JSON.stringify({
+            runTokensSpent: runRow.tokens_spent,
+            systemTokensSpent: systemTokens,
+          }));
+        `,
+        {
+          HOME: temp.homeDir,
+          TAMANDUA_PI_BINARY: fakePi,
+        },
+      );
+
+      // Run tokens should be unchanged (13 from initial insert)
+      assert.equal(result.runTokensSpent, 13, "run tokens_spent should not change for unresolvable run ID");
+      // System tokens should now be 55 (the 55 tokens from the polling round)
+      assert.equal(result.systemTokensSpent, 55, "system_tokens_spent should record the 55 tokens");
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
+
+  it("existing run-attributed token increments are unaffected (regression guard)", () => {
     const temp = createTempHome();
     const runId = crypto.randomUUID();
     const stepId = crypto.randomUUID();
@@ -92,7 +166,7 @@ describe("polling-round token attribution", () => {
           import fs from "node:fs";
           import path from "node:path";
           import { executePollingRound } from "./dist/installer/agent-scheduler.js";
-          import { getDb } from "./dist/db.js";
+          import { getDb, getSystemTokenSpend } from "./dist/db.js";
 
           const db = getDb();
           const runId = ${JSON.stringify(runId)};
@@ -108,7 +182,7 @@ describe("polling-round token attribution", () => {
           ).run(stepId, runId, now, now);
 
           const job = {
-            id: "job-token-attribution",
+            id: "job-run-attribution-regression",
             name: "wf/dev",
             workflowId: "wf",
             agentId: "wf_dev",
@@ -126,18 +200,12 @@ describe("polling-round token attribution", () => {
 
           await executePollingRound(job, agent);
 
-          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const eventsPath = path.join(process.env.HOME, ".tamandua", "events", runId + ".jsonl");
-          const events = fs.existsSync(eventsPath)
-            ? fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
-            : [];
-          const tokenEvent = events.find((evt) => evt.event === "run.tokens.updated");
+          const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const systemTokens = getSystemTokenSpend();
 
           console.log(JSON.stringify({
-            tokensSpent: row.tokens_spent,
-            tokenEventRunId: tokenEvent?.runId ?? null,
-            tokenEventDelta: tokenEvent?.tokenDelta ?? null,
-            tokenEventTotal: tokenEvent?.tokensSpent ?? null,
+            runTokensSpent: runRow.tokens_spent,
+            systemTokensSpent: systemTokens,
           }));
         `,
         {
@@ -146,94 +214,16 @@ describe("polling-round token attribution", () => {
         },
       );
 
-      assert.equal(result.tokensSpent, 107);
-      assert.equal(result.tokenEventRunId, runId);
-      assert.equal(result.tokenEventDelta, 100);
-      assert.equal(result.tokenEventTotal, 107);
+      // Run tokens should have increased by 100 (7 + 100 = 107)
+      assert.equal(result.runTokensSpent, 107, "run tokens_spent should be 107 (7 + 100)");
+      // System tokens should remain 0 — attribution went to the run, not system
+      assert.equal(result.systemTokensSpent, 0, "system_tokens_spent should remain 0 when run ID is resolvable");
     } finally {
       fs.rmSync(temp.root, { recursive: true, force: true });
     }
   });
 
-  it("attributes tokens to system spend when run id is unresolvable, leaving run tokens unchanged", () => {
-    const temp = createTempHome();
-
-    try {
-      const piOutput = JSON.stringify({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "STATUS: done\nCHANGES: n/a\nTESTS: n/a" }],
-          usage: { totalTokens: 55 },
-          stopReason: "stop",
-        },
-      });
-
-      const fakePi = createFakePi(temp.root, piOutput);
-
-      const result = runNodeScript(
-        `
-          import fs from "node:fs";
-          import path from "node:path";
-          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
-          import { getDb } from "./dist/db.js";
-
-          const db = getDb();
-          const runId = "${crypto.randomUUID()}";
-          const now = new Date().toISOString();
-
-          db.prepare(
-            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 13, ?, ?)"
-          ).run(runId, now, now);
-
-          const job = {
-            id: "job-token-no-run",
-            name: "wf/dev",
-            workflowId: "wf",
-            agentId: "wf_dev",
-            intervalMinutes: 5,
-            timeoutSeconds: 5,
-            workdir: process.cwd(),
-            createdAt: now,
-          };
-
-          const agent = {
-            id: "dev",
-            role: "coding",
-            workspace: { baseDir: process.cwd(), files: {} },
-          };
-
-          await executePollingRound(job, agent);
-
-          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const systemRow = db.prepare("SELECT system_tokens_spent FROM tamandua_stats WHERE id = 1").get()
-            ?? { system_tokens_spent: 0 };
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
-          const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
-
-          console.log(JSON.stringify({
-            tokensSpent: row.tokens_spent,
-            systemTokensSpent: systemRow.system_tokens_spent,
-            unresolvedWarningSeen: logContent.includes("not attributed to run — run id unresolved"),
-            systemAttributionSeen: logContent.includes("attributed to system spend"),
-          }));
-        `,
-        {
-          HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
-        },
-      );
-
-      assert.equal(result.tokensSpent, 13, "run tokens_spent should be unchanged");
-      assert.equal(result.systemTokensSpent, 55, "system_tokens_spent should record the 55 tokens");
-      assert.equal(result.unresolvedWarningSeen, true, "WARN should still fire for unresolved run ID");
-      assert.equal(result.systemAttributionSeen, true, "INFO should fire for system attribution");
-    } finally {
-      fs.rmSync(temp.root, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps heartbeat rounds non-attributing even when usage metadata is present", () => {
+  it("heartbeat rounds still skip token attribution entirely — neither run nor system", () => {
     const temp = createTempHome();
 
     try {
@@ -254,7 +244,7 @@ describe("polling-round token attribution", () => {
           import fs from "node:fs";
           import path from "node:path";
           import { executePollingRound } from "./dist/installer/agent-scheduler.js";
-          import { getDb } from "./dist/db.js";
+          import { getDb, getSystemTokenSpend } from "./dist/db.js";
 
           const db = getDb();
           const runId = "${crypto.randomUUID()}";
@@ -265,7 +255,7 @@ describe("polling-round token attribution", () => {
           ).run(runId, now, now);
 
           const job = {
-            id: "job-token-heartbeat",
+            id: "job-heartbeat-system",
             name: "wf/dev",
             workflowId: "wf",
             agentId: "wf_dev",
@@ -283,13 +273,16 @@ describe("polling-round token attribution", () => {
 
           await executePollingRound(job, agent);
 
-          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const systemTokens = getSystemTokenSpend();
           const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
 
           console.log(JSON.stringify({
-            tokensSpent: row.tokens_spent,
+            runTokensSpent: runRow.tokens_spent,
+            systemTokensSpent: systemTokens,
             heartbeatSkipSeen: logContent.includes('"reason":"heartbeat_round"'),
+            systemAttributionSeen: logContent.includes("attributed to system spend"),
           }));
         `,
         {
@@ -298,19 +291,32 @@ describe("polling-round token attribution", () => {
         },
       );
 
-      assert.equal(result.tokensSpent, 3);
-      assert.equal(result.heartbeatSkipSeen, true);
+      // Run tokens unchanged
+      assert.equal(result.runTokensSpent, 3, "run tokens_spent should remain 3 for heartbeat");
+      // System tokens unchanged
+      assert.equal(result.systemTokensSpent, 0, "system_tokens_spent should remain 0 for heartbeat");
+      // Heartbeat skip log should be present
+      assert.equal(result.heartbeatSkipSeen, true, "heartbeat_round skip should be logged");
+      // No system attribution log line for heartbeats
+      assert.equal(result.systemAttributionSeen, false, "system attribution should NOT happen for heartbeat rounds");
     } finally {
       fs.rmSync(temp.root, { recursive: true, force: true });
     }
   });
 
-  it("emits a single warning when pi output contains zero JSON events (--mode json may be off)", () => {
+  it("system.tokens.updated event is emitted with tokenDelta and tokensSpent", () => {
     const temp = createTempHome();
 
     try {
-      // Plain text output — no JSON events at all, simulating --mode json not being used
-      const piOutput = "STATUS: done\nCHANGES: fixed something\nTESTS: passed";
+      const piOutput = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "STATUS: done\nCHANGES: n/a\nTESTS: n/a" }],
+          usage: { totalTokens: 42 },
+          stopReason: "stop",
+        },
+      });
 
       const fakePi = createFakePi(temp.root, piOutput);
 
@@ -330,7 +336,7 @@ describe("polling-round token attribution", () => {
           ).run(runId, now, now);
 
           const job = {
-            id: "job-zero-json-warn",
+            id: "job-system-event",
             name: "wf/dev",
             workflowId: "wf",
             agentId: "wf_dev",
@@ -348,20 +354,17 @@ describe("polling-round token attribution", () => {
 
           await executePollingRound(job, agent);
 
-          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
-          const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
-          const logLines = logContent.split(/\\r?\\n/).filter(Boolean);
-
-          // WARN-level lines containing "--mode json may be off"
-          const warningLines = logLines.filter(
-            (line) => line.includes("WARN") && line.includes("--mode json may be off")
-          );
+          const eventsPath = path.join(process.env.HOME, ".tamandua", "events", "system.jsonl");
+          const events = fs.existsSync(eventsPath)
+            ? fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
+            : [];
+          const systemEvent = events.find((evt) => evt.event === "system.tokens.updated");
 
           console.log(JSON.stringify({
-            tokensSpent: row.tokens_spent,
-            zeroJsonWarningCount: warningLines.length,
-            zeroJsonWarningSeen: warningLines.length > 0,
+            eventFound: !!systemEvent,
+            runId: systemEvent?.runId ?? null,
+            tokenDelta: systemEvent?.tokenDelta ?? null,
+            tokensSpent: systemEvent?.tokensSpent ?? null,
           }));
         `,
         {
@@ -370,33 +373,144 @@ describe("polling-round token attribution", () => {
         },
       );
 
-      // Warning must be emitted
-      assert.equal(result.zeroJsonWarningSeen, true, "expected zero-JSON warning in logs");
-      // Exactly one warning per polling round (no duplicates)
-      assert.equal(result.zeroJsonWarningCount, 1, "expected exactly one zero-JSON warning per round");
-      // tokens_spent must remain 0 (no token attribution from non-JSON output)
-      assert.equal(result.tokensSpent, 0);
+      assert.equal(result.eventFound, true, "system.tokens.updated event should be emitted");
+      assert.equal(result.runId, "system", "runId should be 'system' sentinel");
+      assert.equal(result.tokenDelta, 42, "tokenDelta should be 42");
+      assert.equal(result.tokensSpent, 42, "tokensSpent should be 42 (total system spend)");
     } finally {
       fs.rmSync(temp.root, { recursive: true, force: true });
     }
   });
 
-  it("does not emit zero-JSON warning when jsonMetadataDetected is true but usage is missing", () => {
+  it("accumulates system tokens across multiple polling rounds", () => {
     const temp = createTempHome();
 
     try {
-      // JSON output with a tool_execution_end event but NO message_end (so no usage).
-      // Must NOT contain HEARTBEAT_OK so the round is classified as work_done.
-      const piOutput = [
-        JSON.stringify({
-          type: "tool_execution_end",
-          toolName: "bash",
-          result: {
-            content: [{ type: "text", text: "STATUS: done\nCHANGES: implemented\nTESTS: passed" }],
-          },
-          isError: false,
-        }),
-      ].join("\n");
+      // Round 1: 30 tokens
+      const piOutput1 = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "STATUS: done" }],
+          usage: { totalTokens: 30 },
+          stopReason: "stop",
+        },
+      });
+
+      const fakePi = createFakePi(temp.root, piOutput1);
+
+      runNodeScript(
+        `
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 0, ?, ?)"
+          ).run(runId, now, now);
+
+          const job = {
+            id: "job-accum-1",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+          console.log(JSON.stringify({ done: true }));
+        `,
+        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+      );
+
+      // Round 2: 20 tokens (same fake Pi, same unresolvable output)
+      const result = runNodeScript(
+        `
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb, getSystemTokenSpend } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 0, ?, ?)"
+          ).run(runId, now, now);
+
+          // Write a different pi payload with 20 tokens for this round
+          const fs = await import("node:fs");
+          const piPath = process.env.TAMANDUA_PI_BINARY;
+          fs.writeFileSync(
+            piPath,
+            "#!/usr/bin/env node\\nprocess.stdout.write(" + JSON.stringify(JSON.stringify({
+              type: "message_end",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "STATUS: done" }],
+                usage: { totalTokens: 20 },
+                stopReason: "stop",
+              },
+            })) + ");\\n"
+          );
+
+          const job = {
+            id: "job-accum-2",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          const systemTokens = getSystemTokenSpend();
+
+          console.log(JSON.stringify({ systemTokensSpent: systemTokens }));
+        `,
+        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+      );
+
+      // 30 + 20 = 50
+      assert.equal(result.systemTokensSpent, 50, "system_tokens_spent should be 50 (30 + 20)");
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
+
+  it("WARN log still fires for unresolved run IDs and INFO log fires for successful system attribution", () => {
+    const temp = createTempHome();
+
+    try {
+      const piOutput = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "STATUS: done" }],
+          usage: { totalTokens: 33 },
+          stopReason: "stop",
+        },
+      });
 
       const fakePi = createFakePi(temp.root, piOutput);
 
@@ -416,7 +530,7 @@ describe("polling-round token attribution", () => {
           ).run(runId, now, now);
 
           const job = {
-            id: "job-json-no-usage",
+            id: "job-logs-check",
             name: "wf/dev",
             workflowId: "wf",
             agentId: "wf_dev",
@@ -434,22 +548,15 @@ describe("polling-round token attribution", () => {
 
           await executePollingRound(job, agent);
 
-          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
           const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
-          const logLines = logContent.split(/\\r?\\n/).filter(Boolean);
 
-          const zeroJsonWarnings = logLines.filter(
-            (line) => line.includes("WARN") && line.includes("--mode json may be off")
-          );
-          const usageMissingLogs = logLines.filter(
-            (line) => line.includes("usage metadata missing")
-          );
+          const warnLinePresent = logContent.includes("not attributed to run — run id unresolved");
+          const infoLinePresent = logContent.includes("attributed to system spend");
 
           console.log(JSON.stringify({
-            tokensSpent: row.tokens_spent,
-            zeroJsonWarningCount: zeroJsonWarnings.length,
-            usageMissingLogCount: usageMissingLogs.length,
+            warnLinePresent,
+            infoLinePresent,
           }));
         `,
         {
@@ -458,10 +565,8 @@ describe("polling-round token attribution", () => {
         },
       );
 
-      // No zero-JSON warning when jsonMetadataDetected is true
-      assert.equal(result.zeroJsonWarningCount, 0, "should not warn about --mode json when JSON events are detected");
-      // The usage_metadata_missing log should still be present (debug writes at info level)
-      assert.ok(result.usageMissingLogCount >= 1, "expected log entry for usage_metadata_missing");
+      assert.equal(result.warnLinePresent, true, "WARN log should still fire for unresolved run IDs");
+      assert.equal(result.infoLinePresent, true, "INFO log should fire for successful system attribution");
     } finally {
       fs.rmSync(temp.root, { recursive: true, force: true });
     }

@@ -5,6 +5,7 @@ const EVENT_LABELS: Record<string, string> = {
   "run.completed": "Run completed",
   "run.failed": "Run failed",
   "run.tokens.updated": "Token spend updated",
+  "system.tokens.updated": "System token spend updated",
   "step.pending": "Step pending",
   "step.running": "Claimed step",
   "step.done": "Step completed",

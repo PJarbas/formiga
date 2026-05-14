@@ -951,13 +951,41 @@ async function attributePollingRoundTokenUsage(
 
   const resolved = await resolveRunIdForAttribution(metadata);
   if (!resolved.runId) {
-    logger.warn("Polling round token usage not attributed — run id unresolved", {
+    logger.warn("Polling round token usage not attributed to run — run id unresolved", {
       ...context,
       outcome: outputSummary.outcome,
       tokenUsage: metadata.tokenUsage,
       outputPreview: outputSummary.preview,
       outputTruncated: outputSummary.truncated,
     });
+
+    // Attribute to system spend instead of silently discarding
+    try {
+      const { incrementSystemTokenSpend } = await import("../db.js");
+      const newSystemTotal = incrementSystemTokenSpend(metadata.tokenUsage);
+
+      emitEvent({
+        ts: new Date().toISOString(),
+        event: "system.tokens.updated",
+        runId: "system",
+        tokenDelta: metadata.tokenUsage,
+        tokensSpent: newSystemTotal,
+      });
+
+      logger.info("Polling round token usage attributed to system spend", {
+        ...context,
+        outcome: outputSummary.outcome,
+        tokenUsage: metadata.tokenUsage,
+        systemTokensSpent: newSystemTotal,
+      });
+    } catch (err) {
+      logger.warn("Polling round system token attribution failed", {
+        ...context,
+        outcome: outputSummary.outcome,
+        tokenUsage: metadata.tokenUsage,
+        error: String(err),
+      });
+    }
     return;
   }
 
