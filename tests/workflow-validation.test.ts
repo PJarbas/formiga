@@ -334,6 +334,69 @@ describe("workflow structure", () => {
     assert.match(content, /Do not include JSON comments/);
   });
 
+  it("planner AGENTS.md output format rules section does not present multi-line JSON as correct", () => {
+    const plannerAgentsMdPath = resolve(wfDir("feature-dev-merge"), "agents/planner/AGENTS.md");
+    const content = readFileSync(plannerAgentsMdPath, "utf-8");
+
+    // Extract the rules section (between ## Output Format and ### Examples).
+    // The rules section describes what to do; the examples section shows WRONG
+    // formats (which naturally contain multi-line JSON). Only the rules section
+    // must be free of multi-line patterns that could mislead the LLM.
+    const rulesSection = content.split("### Examples")[0].split("## Output Format")[1];
+    assert.ok(rulesSection, "Should extract rules section after ## Output Format");
+
+    // No STORIES_JSON: followed by a newline and opening bracket/brace in the rules section
+    assert.doesNotMatch(rulesSection, /STORIES_JSON:\s*\n\s*[\[{]/);
+  });
+
+  it("feature-dev-merge workflow.yml plan step input contains single-line minified STORIES_JSON example", () => {
+    const workflowYmlPath = resolve(wfDir("feature-dev-merge"), "workflow.yml");
+    const content = readFileSync(workflowYmlPath, "utf-8");
+
+    // Must contain a single-line minified STORIES_JSON example
+    assert.match(content, /STORIES_JSON: \[\{"id":"US-001"/);
+
+    // Must state the line must be a single line with no line breaks
+    assert.match(content, /single line/);
+    assert.match(content, /no line breaks/);
+  });
+
+  it("feature-dev-merge workflow.yml plan step input contains anti-pattern warnings", () => {
+    const workflowYmlPath = resolve(wfDir("feature-dev-merge"), "workflow.yml");
+    const content = readFileSync(workflowYmlPath, "utf-8");
+
+    // Must contain anti-pattern section header
+    assert.match(content, /ANTI-PATTERNS/);
+    assert.match(content, /DO NOT DO/);
+
+    // Must warn against triple backticks
+    assert.match(content, /Do NOT use triple backticks/);
+
+    // Must warn against comments inside JSON
+    assert.match(content, /Do NOT add comments inside the JSON/);
+
+    // Must warn against text after closing bracket
+    assert.match(content, /Do NOT put any text after the closing \]/);
+  });
+
+  it("feature-dev-merge workflow.yml plan step input does not present multi-line JSON outside anti-pattern context", () => {
+    const workflowYmlPath = resolve(wfDir("feature-dev-merge"), "workflow.yml");
+    const content = readFileSync(workflowYmlPath, "utf-8");
+
+    // Extract the plan step input block: everything from "- id: plan" in the
+    // steps array to the start of the next step ("  - id: setup"). Use precise
+    // boundaries to avoid matching "- id: planner" in the agents section.
+    const afterPlan = content.split("\n  - id: plan\n    agent: planner")[1];
+    assert.ok(afterPlan, "Should find plan step after '- id: plan' in steps");
+    const planStepInput = afterPlan.split("\n  - id: setup")[0];
+    assert.ok(planStepInput, "Should extract plan step input section");
+
+    // No multi-line pretty-printed JSON in the plan step example (e.g., no
+    // lines like '  "id":' indented under a STORIES_JSON or bracket line in
+    // the example area). The example must be a single compact line.
+    assert.match(planStepInput, /STORIES_JSON: \[\{"id":"US-001"/);
+  });
+
   it("bug-fix has 5 agents, 5 steps, no merger, no finalize_merge, no ORIGINAL_BRANCH capture", async () => {
     const spec = await loadWorkflowSpec(wfDir("bug-fix"));
 
