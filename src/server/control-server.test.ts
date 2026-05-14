@@ -373,7 +373,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
 
   // ── Drain-before-pause tests ───────────────────────────────────────
 
-  it("POST /control/pause-run with drain=true sets draining_pause and does not pause immediately", async (t) => {
+  it("POST /control/pause-run with drain=true waits for in-flight steps", async (t) => {
     if (!daemon) {
       t.skip("daemon not started");
       return;
@@ -384,12 +384,16 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
     const workflowId = "wf-drain-test";
+    const stepId = crypto.randomUUID();
     const now = new Date().toISOString();
 
     // Insert a running run.
     db.prepare(
       "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, created_at, updated_at) VALUES (?, ?, 'drain-test', 'running', '{}', 0, 'active', ?, ?)",
     ).run(runId, workflowId, now, now);
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, step_index, agent_id, type, status, input_template, expects, retry_count, max_retries, created_at, updated_at) VALUES (?, ?, 'impl', 0, 'wf-drain-test_developer', 'single', 'running', 'implement', '', 0, 3, ?, ?)",
+    ).run(stepId, runId, now, now);
     db.close();
 
     const r = await jsonRequest(
@@ -410,6 +414,44 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     assert.equal(row.scheduling_status, "draining_pause", "scheduling_status should be draining_pause");
 
     // Cleanup
+    db2.prepare("DELETE FROM steps WHERE id = ?").run(stepId);
+    db2.prepare("DELETE FROM runs WHERE id = ?").run(runId);
+    db2.close();
+  });
+
+  it("POST /control/pause-run with drain=true pauses immediately when nothing is in flight", async (t) => {
+    if (!daemon) {
+      t.skip("daemon not started");
+      return;
+    }
+
+    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(dbPath);
+    const runId = crypto.randomUUID();
+    const workflowId = "wf-drain-empty";
+    const now = new Date().toISOString();
+
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, created_at, updated_at) VALUES (?, ?, 'drain-empty', 'running', '{}', 0, 'active', ?, ?)",
+    ).run(runId, workflowId, now, now);
+    db.close();
+
+    const r = await jsonRequest(
+      "POST",
+      "/control/pause-run",
+      { runId, drain: true },
+      secret,
+    );
+    assert.equal(r.status, 200);
+    assert.equal(r.body.state, "paused");
+
+    const db2 = new DatabaseSync(dbPath);
+    const row = db2.prepare("SELECT status, scheduling_status FROM runs WHERE id = ?").get(runId) as { status: string; scheduling_status: string } | undefined;
+    assert.ok(row, "run should exist");
+    assert.equal(row.status, "paused", "status should transition to paused when no steps are in flight");
+    assert.equal(row.scheduling_status, "paused", "scheduling_status should be paused");
+
     db2.prepare("DELETE FROM runs WHERE id = ?").run(runId);
     db2.close();
   });

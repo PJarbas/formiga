@@ -290,8 +290,9 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use`);
+    const mcpPort = await getAvailablePort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
       return;
     }
 
@@ -300,9 +301,9 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       // Ensure clean state in isolated HOME
       cleanupIsolatedMcpFiles(tempHome);
 
-      const result = await startMcp(DEFAULT_MCP_PORT, { homeDir: tempHome });
+      const result = await startMcp(mcpPort, { homeDir: tempHome });
       assert.ok(result.pid > 0, "startMcp should return a valid PID");
-      assert.equal(result.port, DEFAULT_MCP_PORT);
+      assert.equal(result.port, mcpPort);
 
       // Verify isolated PID file exists and contains a valid PID
       const pidFile = getIsolatedMcpPidFile(tempHome);
@@ -315,7 +316,7 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       assert.ok(fs.existsSync(portFile), "MCP port file should exist after startMcp on isolated HOME");
 
       // Verify MCP endpoint is reachable
-      const res = await httpGet(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
+      const res = await httpGet(`http://127.0.0.1:${mcpPort}/mcp`);
       assert.ok(res.status >= 200 && res.status < 500, "MCP endpoint should respond to GET");
 
     } finally {
@@ -331,8 +332,9 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use`);
+    const mcpPort = await getAvailablePort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
       return;
     }
 
@@ -341,7 +343,7 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       cleanupIsolatedMcpFiles(tempHome);
 
       // Start the MCP server on isolated HOME
-      const { pid } = await startMcp(DEFAULT_MCP_PORT, { homeDir: tempHome });
+      const { pid } = await startMcp(mcpPort, { homeDir: tempHome });
       assert.ok(pid > 0);
 
       // Verify it's running via isolated PID file check
@@ -364,7 +366,7 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       assert.equal(status.running, false, "isMcpRunning should return false after stop on isolated HOME");
 
       // Verify endpoint is down
-      await waitForHttpDown(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
+      await waitForHttpDown(`http://127.0.0.1:${mcpPort}/mcp`);
     } finally {
       try { stopIsolatedMcp(tempHome); } catch {}
       fs.rmSync(tempHome, { recursive: true, force: true });
@@ -378,8 +380,9 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       return;
     }
 
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use`);
+    const mcpPort = await getAvailablePort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
       return;
     }
 
@@ -396,7 +399,7 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       assert.equal(beforePort, DEFAULT_MCP_PORT);
 
       // Start MCP on isolated HOME
-      const { pid } = await startMcp(DEFAULT_MCP_PORT, { homeDir: tempHome });
+      const { pid } = await startMcp(mcpPort, { homeDir: tempHome });
       assert.ok(pid > 0);
 
       // After start: running
@@ -405,7 +408,7 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
       assert.equal(status.pid, pid);
 
       const afterPort = readIsolatedMcpPort(tempHome);
-      assert.equal(afterPort, DEFAULT_MCP_PORT);
+      assert.equal(afterPort, mcpPort);
 
     } finally {
       stopIsolatedMcp(tempHome);
@@ -414,13 +417,13 @@ describe("daemonctl MCP lifecycle", { concurrency: 1 }, () => {
   });
 
   // Round-trip test with custom port — isolated HOME
-  it("startMcp/stopMcp round-trip with custom port (3340) on isolated HOME", async (t) => {
+  it("startMcp/stopMcp round-trip with custom port on isolated HOME", async (t) => {
     if (!fs.existsSync(MCP_STANDALONE_SCRIPT)) {
       t.skip("mcp-standalone.js not found — run npm run build first");
       return;
     }
 
-    const customPort = 3340;
+    const customPort = await getAvailablePort();
     if (!(await canBind(customPort))) {
       t.skip(`Port ${customPort} is already in use`);
       return;

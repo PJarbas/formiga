@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
+import http from "node:http";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
@@ -40,6 +41,19 @@ function runNodeScript(script: string, env: Record<string, string>) {
   }
 
   return JSON.parse(lastLine) as Record<string, unknown>;
+}
+
+function reserveRandomPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      assert.ok(address && typeof address !== "string");
+      const port = address.port;
+      server.close(() => resolve(port));
+    });
+  });
 }
 
 describe("run token spend persistence", () => {
@@ -96,10 +110,12 @@ describe("run token spend persistence", () => {
     }
   });
 
-  it("runWorkflow persists new runs with tokens_spent=0", () => {
+  it("runWorkflow persists new runs with tokens_spent=0", async () => {
     const temp = createTempHome();
 
     try {
+      const dashboardPort = await reserveRandomPort();
+      const controlPort = await reserveRandomPort();
       const workflowDir = path.join(temp.homeDir, ".tamandua", "workflows", "token-workflow");
       fs.mkdirSync(workflowDir, { recursive: true });
       fs.writeFileSync(
@@ -126,17 +142,24 @@ describe("run token spend persistence", () => {
           import { runWorkflow } from "./dist/installer/run.js";
           import { getDb } from "./dist/db.js";
           import { shutdownAllCrons } from "./dist/installer/agent-scheduler.js";
+          import { startDaemon, stopDaemon } from "./dist/server/daemonctl.js";
 
           try {
+            await startDaemon(Number(process.env.TEST_DASHBOARD_PORT));
             const started = await runWorkflow({ workflowId: "token-workflow", taskTitle: "Track token spend" });
             const db = getDb();
             const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(started.runId);
             console.log(JSON.stringify({ tokensSpent: row.tokens_spent }));
           } finally {
+            try { await stopDaemon(); } catch {}
             shutdownAllCrons();
           }
         `,
-        { HOME: temp.homeDir },
+        {
+          HOME: temp.homeDir,
+          TAMANDUA_CONTROL_PORT: String(controlPort),
+          TEST_DASHBOARD_PORT: String(dashboardPort),
+        },
       );
 
       assert.equal(result.tokensSpent, 0, "new runs should start with tokens_spent=0");

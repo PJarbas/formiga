@@ -104,7 +104,7 @@ describe("tamandua dashboard status MCP visibility", () => {
             `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^HOME='`,
             { encoding: "utf8" },
           );
-          if (env.includes("tamandua-mcp-lifecycle") || env.includes("tamandua-dashboard-status")) {
+          if (env.includes("tamandua-dashboard-status")) {
             process.kill(Number(pid), "SIGKILL");
           }
         } catch {
@@ -150,8 +150,9 @@ describe("tamandua dashboard status MCP visibility", () => {
 
   // AC 1: Dashboard status shows MCP running independently when started via mcp start
   it("shows MCP as independently running after tamandua mcp start", async (t) => {
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use — another test may be using it`);
+    const mcpPort = await reserveRandomPort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use — another test may be using it`);
       return;
     }
 
@@ -175,7 +176,7 @@ describe("tamandua dashboard status MCP visibility", () => {
       assert.match(beforeMcp.stdout, /MCP server is not running/);
 
       // Start MCP independently
-      const mcpStart = await runCliOnce(["mcp", "start"], cliEnv);
+      const mcpStart = await runCliOnce(["mcp", "start", "--port", String(mcpPort)], cliEnv);
       assert.equal(mcpStart.code, 0, mcpStart.stderr || mcpStart.stdout);
       assert.match(mcpStart.stdout, /MCP server started/);
 
@@ -184,7 +185,7 @@ describe("tamandua dashboard status MCP visibility", () => {
       assert.equal(afterMcp.code, 0, afterMcp.stderr || afterMcp.stdout);
       assert.match(afterMcp.stdout, /Dashboard running \(PID \d+\)/);
       assert.match(afterMcp.stdout, /MCP server running \(PID \d+\)/);
-      assert.match(afterMcp.stdout, new RegExp(`MCP endpoint: http://localhost:${DEFAULT_MCP_PORT}/mcp`));
+      assert.match(afterMcp.stdout, new RegExp(`MCP endpoint: http://localhost:${mcpPort}/mcp`));
 
       // MCP should still be running after dashboard stop
       const dashStop = await runCliOnce(["dashboard", "stop"], cliEnv);
@@ -244,17 +245,21 @@ describe("tamandua dashboard status MCP visibility", () => {
       assert.equal(apiBody.path, "/mcp");
 
       // Start MCP and verify endpoint updates
-      if (await canBind(DEFAULT_MCP_PORT)) {
-        const mcpStart = await runCliOnce(["mcp", "start"], cliEnv);
-        assert.equal(mcpStart.code, 0, mcpStart.stderr || mcpStart.stdout);
-
-        const apiResRunning = await fetch(`http://localhost:${dashboardPort}/api/mcp-status`);
-        assert.equal(apiResRunning.status, 200);
-        const apiBodyRunning = await apiResRunning.json() as { running: boolean; port: number; path: string };
-        assert.equal(apiBodyRunning.running, true);
-        assert.equal(apiBodyRunning.port, DEFAULT_MCP_PORT);
-        assert.equal(apiBodyRunning.path, "/mcp");
+      const mcpPort = await reserveRandomPort();
+      if (!(await canBind(mcpPort))) {
+        t.skip(`Port ${mcpPort} is already in use — another test may be using it`);
+        return;
       }
+
+      const mcpStart = await runCliOnce(["mcp", "start", "--port", String(mcpPort)], cliEnv);
+      assert.equal(mcpStart.code, 0, mcpStart.stderr || mcpStart.stdout);
+
+      const apiResRunning = await fetch(`http://localhost:${dashboardPort}/api/mcp-status`);
+      assert.equal(apiResRunning.status, 200);
+      const apiBodyRunning = await apiResRunning.json() as { running: boolean; port: number; path: string };
+      assert.equal(apiBodyRunning.running, true);
+      assert.equal(apiBodyRunning.port, mcpPort);
+      assert.equal(apiBodyRunning.path, "/mcp");
 
     } finally {
       await runCliOnce(["dashboard", "stop"], cliEnv);
@@ -285,8 +290,9 @@ describe("tamandua dashboard status MCP visibility", () => {
 
   // AC 5: uninstall stops MCP if running
   it("tamandua uninstall stops MCP if it was running", async (t) => {
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use — another test may be using it`);
+    const mcpPort = await reserveRandomPort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use — another test may be using it`);
       return;
     }
 
@@ -300,7 +306,7 @@ describe("tamandua dashboard status MCP visibility", () => {
 
     try {
       // Start MCP
-      const mcpStart = await runCliOnce(["mcp", "start"], cliEnv);
+      const mcpStart = await runCliOnce(["mcp", "start", "--port", String(mcpPort)], cliEnv);
       assert.equal(mcpStart.code, 0, mcpStart.stderr || mcpStart.stdout);
 
       // Verify MCP is running

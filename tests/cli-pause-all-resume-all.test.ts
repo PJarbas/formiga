@@ -332,6 +332,17 @@ describe("tamandua workflow pause-all CLI", { concurrency: 1 }, () => {
       { id: running1, workflowId: "feature-dev-merge", task: "Drainable 1", status: "running" },
       { id: running2, workflowId: "feature-dev-merge", task: "Drainable 2", status: "running" },
     ]);
+    {
+      const db = new DatabaseSync(dbPath);
+      const now = new Date().toISOString();
+      const insertRunningStep = db.prepare(
+        `INSERT INTO steps (step_id, run_id, agent_id, step_index, status, type, retry_count, created_at, updated_at)
+         VALUES ('impl', ?, 'feature-dev-merge_developer', 0, 'running', 'single', 0, ?, ?)`,
+      );
+      insertRunningStep.run(running1, now, now);
+      insertRunningStep.run(running2, now, now);
+      db.close();
+    }
 
     let daemon: ChildProcess | undefined;
 

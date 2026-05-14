@@ -491,6 +491,12 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
       assert.ok(jobsBefore.has(run1), "Expected scheduler job for run1 before drain");
       assert.ok(jobsBefore.has(run2), "Expected scheduler job for run2 before drain");
 
+      {
+        const db = new DatabaseSync(dbPath);
+        db.prepare("UPDATE steps SET status = 'running' WHERE run_id IN (?, ?)").run(run1, run2);
+        db.close();
+      }
+
       // pause-all --drain via CLI
       const result = await runCli(
         ["workflow", "pause-all", "--drain"],

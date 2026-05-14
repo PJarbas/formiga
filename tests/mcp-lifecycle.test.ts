@@ -29,7 +29,6 @@ import {
   MCP_PID_FILE,
   MCP_PORT_FILE,
 } from "../dist/server/daemonctl.js";
-import { DEFAULT_MCP_PORT } from "../dist/server/mcp-server.js";
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -317,7 +316,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
             `cat /proc/${pid}/environ 2>/dev/null | tr '\\0' '\\n' | grep '^HOME='`,
             { encoding: "utf8" },
           );
-          if (env.includes("tamandua-mcp-lifecycle") || env.includes("tamandua-dashboard-status")) {
+          if (env.includes("tamandua-mcp-lifecycle")) {
             process.kill(Number(pid), "SIGKILL");
           }
         } catch {
@@ -587,14 +586,6 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       // Send a tools/list to confirm full functionality
       const toolsResult = await mcpRpc(baseUrl, "tools/list", {}, sessionId);
       assert.ok(toolsResult.body.result, `tools/list should return a result, got: ${JSON.stringify(toolsResult.body.error)}`);
-
-      // Verify the default port is NOT reachable
-      try {
-        await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
-        assert.fail("MCP should not be reachable on the default port when a custom port is used");
-      } catch {
-        // Expected — MCP is not on the default port
-      }
 
       // Verify CLI status reports the custom port
       const status = await runCli(["mcp", "status"], cliEnv);

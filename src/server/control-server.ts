@@ -348,8 +348,15 @@ async function handlePauseRun(runId: string, drain = false): Promise<JsonRespons
       logger.warn("control-server: drain pause db update failed", { runId, error: String(err) });
       return notFound(`Run not found: ${runId}`);
     }
+    try {
+      const { finalizeDrainingPause } = await import("../installer/step-ops.js");
+      finalizeDrainingPause(runId);
+    } catch (err) {
+      logger.warn("control-server: drain pause finalization check failed", { runId, error: String(err) });
+    }
     logger.info("control-server: drain pause requested", { runId });
-    return ok({ state: "draining_pause", drained: true });
+    const updated = getRun(runId);
+    return ok({ state: updated?.scheduling_status ?? "draining_pause", drained: true });
   }
 
   try {

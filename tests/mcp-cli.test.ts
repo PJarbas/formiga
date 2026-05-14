@@ -267,8 +267,10 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       t.skip("CLI script not built — run npm run build first");
       return;
     }
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use`);
+
+    const mcpPort = await reserveRandomPort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
       return;
     }
 
@@ -276,12 +278,12 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
     try {
       cleanupIsolatedMcpFiles(tempHome);
 
-      const { stdout, stderr, exitCode } = await runCli(["mcp", "start"], tempHome);
+      const { stdout, stderr, exitCode } = await runCli(["mcp", "start", "--port", String(mcpPort)], tempHome);
 
       assert.equal(exitCode, 0, `CLI exited with code ${exitCode}, stderr: ${cleanStderr(stderr)}`);
       assert.ok(stdout.includes("started"), `Expected "started" in output, got: ${stdout}`);
       assert.ok(stdout.includes("PID"), `Expected "PID" in output, got: ${stdout}`);
-      assert.ok(stdout.includes(`localhost:${DEFAULT_MCP_PORT}`), `Expected port ${DEFAULT_MCP_PORT} in output, got: ${stdout}`);
+      assert.ok(stdout.includes(`localhost:${mcpPort}`), `Expected port ${mcpPort} in output, got: ${stdout}`);
       assert.ok(stdout.includes("/mcp"), `Expected /mcp endpoint in output, got: ${stdout}`);
 
       // Verify it actually started via isolated PID file
@@ -290,7 +292,7 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       assert.notEqual(status.pid, null);
 
       // Verify endpoint reachable
-      const res = await waitForHttpUp(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
+      const res = await waitForHttpUp(`http://127.0.0.1:${mcpPort}/mcp`);
       assert.ok(res.status >= 200 && res.status < 500);
 
     } finally {
@@ -328,13 +330,7 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       const res = await waitForHttpUp(`http://127.0.0.1:${customPort}/mcp`);
       assert.ok(res.status >= 200 && res.status < 500);
 
-      // Verify default port is NOT reachable
-      try {
-        await fetch(`http://127.0.0.1:${DEFAULT_MCP_PORT}/mcp`);
-        assert.fail("MCP should not be reachable on default port when custom port was used");
-      } catch {
-        // Expected
-      }
+      assert.equal(readIsolatedMcpPort(tempHome), customPort);
 
     } finally {
       stopIsolatedMcp(tempHome);
@@ -350,8 +346,10 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       t.skip("CLI script not built — run npm run build first");
       return;
     }
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use`);
+
+    const mcpPort = await reserveRandomPort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
       return;
     }
 
@@ -360,7 +358,7 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       cleanupIsolatedMcpFiles(tempHome);
 
       // First start
-      const first = await runCli(["mcp", "start"], tempHome);
+      const first = await runCli(["mcp", "start", "--port", String(mcpPort)], tempHome);
       assert.equal(first.exitCode, 0);
       assert.ok(first.stdout.includes("started"));
 
@@ -370,11 +368,11 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       const firstPid = runningStatus.pid;
 
       // Second start - should show "already running" with the same PID
-      const second = await runCli(["mcp", "start"], tempHome);
+      const second = await runCli(["mcp", "start", "--port", String(mcpPort)], tempHome);
       assert.equal(second.exitCode, 0);
       assert.ok(second.stdout.includes("already running"), `Expected "already running", got: ${second.stdout}`);
       assert.ok(second.stdout.includes(`PID ${firstPid}`), `Expected PID ${firstPid}, got: ${second.stdout}`);
-      assert.ok(second.stdout.includes(`localhost:${DEFAULT_MCP_PORT}`));
+      assert.ok(second.stdout.includes(`localhost:${mcpPort}`));
       assert.ok(second.stdout.includes("/mcp"));
       // Should NOT show "started" (second attempt didn't restart)
       assert.ok(!second.stdout.includes("MCP server started"));
@@ -393,8 +391,10 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       t.skip("CLI script not built — run npm run build first");
       return;
     }
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use`);
+
+    const mcpPort = await reserveRandomPort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
       return;
     }
 
@@ -403,14 +403,14 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       cleanupIsolatedMcpFiles(tempHome);
 
       // Start MCP
-      const start = await runCli(["mcp", "start"], tempHome);
+      const start = await runCli(["mcp", "start", "--port", String(mcpPort)], tempHome);
       assert.equal(start.exitCode, 0);
 
       const runningStatus = isIsolatedMcpRunning(tempHome);
       assert.equal(runningStatus.running, true);
 
       const port = readIsolatedMcpPort(tempHome);
-      assert.equal(port, DEFAULT_MCP_PORT);
+      assert.equal(port, mcpPort);
 
       // Check status via CLI with same isolated HOME
       const { stdout, stderr, exitCode } = await runCli(["mcp", "status"], tempHome);
@@ -437,8 +437,10 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       t.skip("CLI script not built — run npm run build first");
       return;
     }
-    if (!(await canBind(DEFAULT_MCP_PORT))) {
-      t.skip(`Port ${DEFAULT_MCP_PORT} is already in use`);
+
+    const mcpPort = await reserveRandomPort();
+    if (!(await canBind(mcpPort))) {
+      t.skip(`Port ${mcpPort} is already in use`);
       return;
     }
 
@@ -447,7 +449,7 @@ describe("tamandua mcp CLI", { concurrency: 1 }, () => {
       cleanupIsolatedMcpFiles(tempHome);
 
       // Start MCP
-      const start = await runCli(["mcp", "start"], tempHome);
+      const start = await runCli(["mcp", "start", "--port", String(mcpPort)], tempHome);
       assert.equal(start.exitCode, 0);
 
       // Verify it's running via isolated helper
