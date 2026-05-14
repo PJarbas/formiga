@@ -5,7 +5,7 @@
  * endpoints directly over HTTP. The reconciler tick interval is unref'd so
  * it doesn't keep the test process alive.
  */
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -759,5 +759,121 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     const db2 = new DatabaseSync(dbPath);
     db2.prepare("DELETE FROM runs WHERE id = ?").run(runId);
     db2.close();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Unit tests for exported utility functions
+// ══════════════════════════════════════════════════════════════════════
+
+import {
+  getControlPort,
+  getMaxActiveTimers,
+  ensureDaemonSecret,
+  readDaemonSecret,
+} from "../../dist/server/control-server.js";
+
+describe("control-server unit exports", () => {
+  let originalHome: string | undefined;
+  let origControlPort: string | undefined;
+  let origMaxTimers: string | undefined;
+
+  beforeEach(() => {
+    originalHome = process.env.HOME;
+    origControlPort = process.env.TAMANDUA_CONTROL_PORT;
+    origMaxTimers = process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+  });
+
+  afterEach(() => {
+    if (originalHome) process.env.HOME = originalHome;
+    else delete process.env.HOME;
+    if (origControlPort) process.env.TAMANDUA_CONTROL_PORT = origControlPort;
+    else delete process.env.TAMANDUA_CONTROL_PORT;
+    if (origMaxTimers) process.env.TAMANDUA_MAX_ACTIVE_TIMERS = origMaxTimers;
+    else delete process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+  });
+
+  describe("getControlPort", () => {
+    it("returns DEFAULT_CONTROL_PORT (3339) by default", () => {
+      delete process.env.TAMANDUA_CONTROL_PORT;
+      assert.equal(getControlPort(), 3339);
+    });
+
+    it("returns env var value when set", () => {
+      process.env.TAMANDUA_CONTROL_PORT = "4242";
+      assert.equal(getControlPort(), 4242);
+    });
+
+    it("returns default for invalid port values", () => {
+      process.env.TAMANDUA_CONTROL_PORT = "notanumber";
+      assert.equal(getControlPort(), 3339);
+    });
+
+    it("returns default for out-of-range port values", () => {
+      process.env.TAMANDUA_CONTROL_PORT = "99999";
+      assert.equal(getControlPort(), 3339);
+    });
+  });
+
+  describe("getMaxActiveTimers", () => {
+    it("returns default 50", () => {
+      delete process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+      assert.equal(getMaxActiveTimers(), 50);
+    });
+
+    it("returns env var value when set", () => {
+      process.env.TAMANDUA_MAX_ACTIVE_TIMERS = "25";
+      assert.equal(getMaxActiveTimers(), 25);
+    });
+
+    it("returns default for invalid values", () => {
+      process.env.TAMANDUA_MAX_ACTIVE_TIMERS = "notanumber";
+      assert.equal(getMaxActiveTimers(), 50);
+    });
+
+    it("returns default for zero or negative", () => {
+      process.env.TAMANDUA_MAX_ACTIVE_TIMERS = "0";
+      assert.equal(getMaxActiveTimers(), 50);
+    });
+  });
+
+  describe("ensureDaemonSecret / readDaemonSecret", () => {
+    let tempHome: string;
+
+    beforeEach(() => {
+      tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-secret-unit-"));
+      process.env.HOME = tempHome;
+    });
+
+    afterEach(() => {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    });
+
+    it("creates a secret file and returns the token", () => {
+      const secretPath = path.join(tempHome, ".tamandua", "daemon-secret");
+      const token = ensureDaemonSecret(secretPath);
+      assert.ok(token.length > 0);
+      const saved = readDaemonSecret(secretPath);
+      assert.equal(saved, token);
+    });
+
+    it("returns existing secret when called again (idempotent)", () => {
+      const secretPath = path.join(tempHome, ".tamandua", "daemon-secret");
+      const token1 = ensureDaemonSecret(secretPath);
+      const token2 = ensureDaemonSecret(secretPath);
+      assert.equal(token1, token2);
+    });
+
+    it("readDaemonSecret returns null when file does not exist", () => {
+      const secretPath = path.join(tempHome, ".tamandua", "nonexistent.json");
+      assert.equal(readDaemonSecret(secretPath), null);
+    });
+
+    it("readDaemonSecret returns null for empty file", () => {
+      const secretPath = path.join(tempHome, ".tamandua", "daemon-secret");
+      fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+      fs.writeFileSync(secretPath, "", "utf-8");
+      assert.equal(readDaemonSecret(secretPath), null);
+    });
   });
 });
