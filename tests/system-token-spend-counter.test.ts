@@ -449,4 +449,103 @@ describe("system token spend counter — e2e integration", () => {
       fs.rmSync(temp.root, { recursive: true, force: true });
     }
   });
+
+  // ── Test 6: Dashboard /api/stats includes heartbeat-attributed system spend ──
+
+  it("GET /api/stats includes heartbeat-attributed system spend in total", () => {
+    const temp = createTempHome();
+
+    try {
+      // Heartbeat polling round with JSON usage (21 tokens)
+      const piOutput = JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "HEARTBEAT_OK" }],
+          usage: { totalTokens: 21 },
+          stopReason: "stop",
+        },
+      });
+
+      const fakePi = createFakePi(temp.root, piOutput);
+
+      const result = runNodeScript(
+        `
+          import { once } from "node:events";
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb, getSystemTokenSpend } from "./dist/db.js";
+          import { createDashboardServer } from "./dist/server/dashboard.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          // Seed a run with known tokens (50)
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 50, ?, ?)"
+          ).run(runId, now, now);
+
+          // Execute heartbeat polling round (attributes 21 tokens to system)
+          const job = {
+            id: "job-dashboard-heartbeat",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          // Also add another run so we get realistic multi-run sum
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf-b', 'task b', 'done', '{}', 75, ?, ?)"
+          ).run("${crypto.randomUUID()}", now, now);
+
+          // Start dashboard server on random port
+          const server = createDashboardServer(0);
+          if (!server.listening) {
+            await once(server, "listening");
+          }
+
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("Unexpected server address");
+          }
+
+          const baseUrl = "http://127.0.0.1:" + address.port;
+
+          try {
+            const res = await fetch(baseUrl + "/api/stats");
+            const body = await res.json();
+
+            console.log(JSON.stringify({
+              status: res.status,
+              systemTokensSpent: body.systemTokensSpent,
+              totalTokensSpent: body.totalTokensSpent,
+            }));
+          } finally {
+            await new Promise((resolve) => server.close(() => resolve()));
+          }
+        `,
+        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+      );
+
+      assert.equal(result.status, 200);
+      // Heartbeat attributed 21 tokens to system spend
+      assert.equal(result.systemTokensSpent, 21, "systemTokensSpent should include heartbeat-attributed 21 tokens");
+      // Total = sum(runs: 50+75=125) + system(21) = 146
+      assert.equal(result.totalTokensSpent, 146, "totalTokensSpent should be runs sum (125) + system (21) = 146");
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
 });

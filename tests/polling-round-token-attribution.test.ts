@@ -395,6 +395,77 @@ describe("polling-round token attribution", () => {
     }
   });
 
+  it("plain-text HEARTBEAT_OK with no JSON does not change any token counters", () => {
+    const temp = createTempHome();
+
+    try {
+      // Plain-text HEARTBEAT_OK — no JSON events at all
+      const piOutput = "HEARTBEAT_OK";
+
+      const fakePi = createFakePi(temp.root, piOutput);
+
+      const result = runNodeScript(
+        `
+          import fs from "node:fs";
+          import path from "node:path";
+          import { executePollingRound } from "./dist/installer/agent-scheduler.js";
+          import { getDb, getSystemTokenSpend } from "./dist/db.js";
+
+          const db = getDb();
+          const runId = "${crypto.randomUUID()}";
+          const now = new Date().toISOString();
+
+          db.prepare(
+            "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 7, ?, ?)"
+          ).run(runId, now, now);
+
+          const job = {
+            id: "job-plaintext-heartbeat",
+            name: "wf/dev",
+            workflowId: "wf",
+            agentId: "wf_dev",
+            intervalMinutes: 5,
+            timeoutSeconds: 5,
+            workdir: process.cwd(),
+            createdAt: now,
+          };
+
+          const agent = {
+            id: "dev",
+            role: "coding",
+            workspace: { baseDir: process.cwd(), files: {} },
+          };
+
+          await executePollingRound(job, agent);
+
+          const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
+          const systemTokens = getSystemTokenSpend();
+          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+
+          console.log(JSON.stringify({
+            tokensSpent: row.tokens_spent,
+            systemTokensSpent: systemTokens,
+            nonJsonWarningSeen: logContent.includes("--mode json may be off"),
+          }));
+        `,
+        {
+          HOME: temp.homeDir,
+          TAMANDUA_PI_BINARY: fakePi,
+        },
+      );
+
+      // Run tokens should remain at the seeded value (7)
+      assert.equal(result.tokensSpent, 7, "run tokens_spent must not change for plain-text heartbeat");
+      // System tokens must remain 0 — no JSON metadata, so no tokenUsage to count
+      assert.equal(result.systemTokensSpent, 0, "system_tokens_spent must remain 0 for plain-text heartbeat");
+      // The non-JSON warning should be logged
+      assert.equal(result.nonJsonWarningSeen, true, "non-JSON warning should be logged for plain-text output");
+    } finally {
+      fs.rmSync(temp.root, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit zero-JSON warning when jsonMetadataDetected is true but usage is missing", () => {
     const temp = createTempHome();
 
