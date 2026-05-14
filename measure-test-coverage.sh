@@ -16,22 +16,31 @@
 #   3. Extract the line coverage percentage, strip whitespace and "%", normalize
 #      any locale decimal comma to ".", then divide by 100.
 #   4. Run awk with LC_ALL=C so printf always emits "." as the decimal separator.
+#
+# Handles test failures gracefully — coverage report is produced even if some
+# tests fail (e.g. port conflicts in parallel integration tests).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-node --test --experimental-test-coverage tests/*.test.ts src/**/*.test.ts 2>&1 \
-  | LC_ALL=C awk -F'|' '
-      /all files/ {
-        gsub(/[[:space:]%]/, "", $2)
-        gsub(/,/, ".", $2)
-        printf "%.6f\n", $2 / 100
-        found = 1
+# Run tests with coverage, ignoring test exit code.
+# Coverage report is printed regardless of test pass/fail.
+set +e
+node --test --experimental-test-coverage tests/*.test.ts src/**/*.test.ts > /tmp/tamandua-coverage-output.txt 2>&1
+NODE_EXIT=$?
+set -e
+
+LC_ALL=C awk -F'|' '
+    /all files/ {
+      gsub(/[[:space:]%]/, "", $2)
+      gsub(/,/, ".", $2)
+      printf "%.6f\n", $2 / 100
+      found = 1
+    }
+    END {
+      if (!found) {
+        print 0
       }
-      END {
-        if (!found) {
-          print 0
-        }
-      }
-    '
+    }
+  ' /tmp/tamandua-coverage-output.txt
