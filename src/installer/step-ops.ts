@@ -1172,9 +1172,18 @@ export function finalizeDrainingPause(runId: string): void {
   if (!run || run.scheduling_status !== "draining_pause") return;
 
   const runningSteps = db
-    .prepare("SELECT COUNT(*) as cnt FROM steps WHERE run_id = ? AND status = 'running'")
-    .get(runId) as { cnt: number };
-  if (runningSteps.cnt > 0) return;
+    .prepare("SELECT type, current_story_id, loop_config FROM steps WHERE run_id = ? AND status = 'running'")
+    .all(runId) as Array<{ type: string; current_story_id: string | null; loop_config: string | null }>;
+  const hasInFlightStep = runningSteps.some((step) => {
+    if (step.type !== "loop" || step.current_story_id || !step.loop_config) return true;
+    try {
+      const loopConfig = JSON.parse(step.loop_config) as LoopConfig;
+      return !(loopConfig.verifyEach ?? loopConfig.verify_each);
+    } catch {
+      return true;
+    }
+  });
+  if (hasInFlightStep) return;
 
   // Finalize the pause: clear timers and set status to paused.
   import("./agent-scheduler.js")

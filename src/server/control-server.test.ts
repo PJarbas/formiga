@@ -601,6 +601,52 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     db2.close();
   });
 
+  it("finalizeDrainingPause pauses verify_each loops waiting for verifier work", async (t) => {
+    if (!daemon) {
+      t.skip("daemon not started");
+      return;
+    }
+
+    const stateDir = path.join(tempHome, ".tamandua");
+    const dbPath = path.join(stateDir, "tamandua.db");
+    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.TAMANDUA_STATE_DIR = stateDir;
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(dbPath);
+    const runId = crypto.randomUUID();
+    const workflowId = "wf-drain-verify-each";
+    const loopStepId = crypto.randomUUID();
+    const verifyStepId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, created_at, updated_at) VALUES (?, ?, 'drain-verify-each', 'running', '{}', 0, 'draining_pause', ?, ?)",
+    ).run(runId, workflowId, now, now);
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, step_index, agent_id, type, status, loop_config, current_story_id, input_template, expects, retry_count, max_retries, created_at, updated_at) VALUES (?, ?, 'implement', 0, 'wf-drain-verify-each_developer', 'loop', 'running', ?, NULL, 'implement', '', 0, 3, ?, ?)",
+    ).run(loopStepId, runId, JSON.stringify({ over: "stories", verify_each: true, verify_step: "verify" }), now, now);
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, step_index, agent_id, type, status, input_template, expects, retry_count, max_retries, created_at, updated_at) VALUES (?, ?, 'verify', 1, 'wf-drain-verify-each_verifier', 'single', 'pending', 'verify', '', 0, 3, ?, ?)",
+    ).run(verifyStepId, runId, now, now);
+    db.close();
+
+    const { finalizeDrainingPause } = await import("../../dist/installer/step-ops.js");
+    finalizeDrainingPause(runId);
+
+    const db2 = new DatabaseSync(dbPath);
+    const row = db2.prepare("SELECT status, scheduling_status FROM runs WHERE id = ?").get(runId) as { status: string; scheduling_status: string } | undefined;
+    assert.ok(row, "run should exist");
+    assert.equal(row.status, "paused", "loop placeholder waiting for verifier should not block drain finalization");
+    assert.equal(row.scheduling_status, "paused");
+
+    delete process.env.TAMANDUA_DB_PATH;
+    delete process.env.TAMANDUA_STATE_DIR;
+    db2.prepare("DELETE FROM steps WHERE id IN (?, ?)").run(loopStepId, verifyStepId);
+    db2.prepare("DELETE FROM runs WHERE id = ?").run(runId);
+    db2.close();
+  });
+
   it("POST /control/pause-run with drain=true on already paused run returns paused state", async (t) => {
     if (!daemon) {
       t.skip("daemon not started");
