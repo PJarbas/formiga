@@ -66,30 +66,6 @@ steps:
     expects: "CHANGES"
 `;
 
-const WORKFLOW_INVALID_POLLING_TIMEOUT = `
-id: test-bad-polling
-name: Test Bad Polling
-version: 1
-
-polling:
-  model: anthropic/claude-sonnet-4-20250514
-  timeoutSeconds: -5
-
-agents:
-  - id: developer
-    name: Developer Agent
-    workspace:
-      baseDir: agents/developer
-      files:
-        AGENTS.md: agents/developer/AGENTS.md
-
-steps:
-  - id: implement
-    agent: developer
-    input: "Do the work"
-    expects: "CHANGES"
-`;
-
 describe("polling config", () => {
   let tmpDir: string;
 
@@ -137,14 +113,4 @@ describe("polling config", () => {
     assert.equal(spec.agents[0].pollingModel, undefined);
   });
 
-  it.skip("rejects invalid polling.timeoutSeconds", async () => {
-    const dir = path.join(tmpDir, "bad-polling");
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "workflow.yml"), WORKFLOW_INVALID_POLLING_TIMEOUT);
-
-    await assert.rejects(
-      () => loadWorkflowSpec(dir),
-      /polling\.timeoutSeconds must be positive/
-    );
-  });
 });

@@ -51,12 +51,6 @@ describe("computeHasFrontendChanges", () => {
     assert.equal(computeHasFrontendChanges(tmpDir, "feat-styles"), "true");
   });
 
-  it.skip("ignores test files with frontend extensions", () => {
-    execSync("git checkout -b feat-tests", { cwd: tmpDir });
-    fs.writeFileSync(path.join(tmpDir, "button.test.tsx"), "test('x', () => {})");
-    execSync("git add . && git commit -m 'add test'", { cwd: tmpDir });
-    assert.equal(computeHasFrontendChanges(tmpDir, "feat-tests"), "false");
-  });
 });
 
 describe("claimStep has_frontend_changes integration", () => {
