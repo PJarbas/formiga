@@ -126,8 +126,914 @@ async function streamEventSource(source: EventCursorSource, initialLimit: number
   }
 }
 
-function printUsage() {
-  process.stdout.write([
+function hasHelpFlag(args: string[]): boolean {
+  return args.includes("--help") || args.includes("-h");
+}
+
+function printHelp(text: string): void {
+  process.stdout.write(text + "\n");
+  process.exit(0);
+}
+
+function printHelpSubcommand(subcommands: Record<string, string>): void {
+  const maxLen = Math.max(...Object.keys(subcommands).map((k) => k.length));
+  const lines: string[] = [];
+  for (const [name, desc] of Object.entries(subcommands)) {
+    lines.push(`  ${name.padEnd(maxLen + 2)}${desc}`);
+  }
+  lines.push("");
+  process.stdout.write(lines.join("\n"));
+}
+
+function getTamanduaHelp(): string {
+  return `tamandua — ASCII art easter egg
+
+Usage: tamandua tamandua
+
+Prints a large ASCII art representation of a tamandua (anteater) along with
+a randomly selected tamandua-themed quote. This is a fun easter egg with no
+functional purpose beyond entertainment.
+
+Examples:
+  tamandua tamandua          # Print the tamandua ASCII art and a random quote`;
+}
+
+function getVersionHelp(): string {
+  return `tamandua version — Display installed version
+
+Usage: tamandua version
+   or: tamandua --version
+   or: tamandua -v
+
+Prints the currently installed version of Tamandua. The version is read from
+the built package.json bundled in the dist directory.
+
+Examples:
+  tamandua version           # Prints e.g. "tamandua v1.2.3"
+  tamandua --version         # Same output
+  tamandua -v                # Same output`;
+}
+
+function getSkillPathHelp(): string {
+  return `tamandua skill-path — Print path to bundled tamandua-agents skill
+
+Usage: tamandua skill-path
+
+Prints the absolute filesystem path to the bundled tamandua-agents skill
+directory. This is the directory containing the AGENTS.md, IDENTITY.md,
+and SOUL.md files that are provisioned to workflow agents.
+
+Examples:
+  tamandua skill-path        # Prints the skill directory path`;
+}
+
+function getSourcePathHelp(): string {
+  return `tamandua source-path — Print Tamandua source checkout path
+
+Usage: tamandua source-path
+
+Prints the absolute filesystem path to the resolved Tamandua source checkout.
+This is the directory containing the built dist/, package.json, and
+build-and-install script.
+
+Examples:
+  tamandua source-path       # Prints the source checkout path`;
+}
+
+function getUpdateHelp(): string {
+  return `tamandua update — Pull latest source, rebuild, and reinstall
+
+Usage: tamandua update [--force]
+
+tamandua update is local source maintenance, not a package-manager update.
+
+In order, it does this:
+
+  1. Resolves the installed Tamandua source checkout and verifies it has
+     package.json and build-and-install.
+  2. Reads current git HEAD.
+  3. Runs git pull in that checkout, using the checkout's current
+     branch/remote config.
+  4. Reads git HEAD again.
+  5. If HEAD did not change, it stops there: no build, no workflow
+     install, no service restart.
+  6. If HEAD changed, it runs ./build-and-install.
+  7. Takes a snapshot of currently running Tamandua services: dashboard
+     daemon, standalone MCP, and control plane.
+  8. Checks for active runs with status running or paused.
+  9. If active runs exist and --force is not set, it exits with code 1
+     and leaves services/workflows unchanged.
+  10. Otherwise, it stops the services that were running before the
+      update.
+  11. Installs every bundled workflow.
+  12. Restarts only the services that were running before, on their
+      previous ports.
+
+Options:
+  --force    Continue update despite active runs (step 9).
+
+Examples:
+  tamandua update             # Pull, rebuild, reinstall (blocks if active runs exist)
+  tamandua update --force     # Force update even with active runs`;
+}
+
+function getInstallHelp(): string {
+  return `tamandua install — Install all bundled workflows from the source checkout
+
+Usage: tamandua install
+
+tamandua install sets up Tamandua by installing every bundled workflow and
+establishing the CLI symlink so tamandua is available on your PATH.
+
+In order, it does this:
+
+  1. Lists all bundled workflows available in the source checkout.
+  2. Installs each workflow: fetches workflow files, loads the YAML spec,
+     provisions agent workspaces (AGENTS.md, IDENTITY.md, SOUL.md), and
+     registers agents in ~/.tamandua/agents.json.
+  3. Creates the CLI symlink at ~/.local/bin/tamandua (or updates it if
+     it already exists).
+  4. Reports whether the dashboard daemon is already running.
+  5. If the dashboard is not running, starts it on the default port
+     (3334) so you can monitor workflow runs.
+  6. Reports whether the MCP server is running.
+
+Examples:
+  tamandua install            # Install all bundled workflows and start dashboard
+  tamandua workflow install <name>  # Install a single workflow by name`;
+}
+
+function getUninstallHelp(): string {
+  return `tamandua uninstall — Fully remove Tamandua workflows, agents, and services
+
+Usage: tamandua uninstall [--force]
+
+tamandua uninstall stops all Tamandua services and removes every installed
+workflow, including agent workspaces, agent registrations, and cron jobs.
+
+In order, it does this:
+
+  1. Checks for active runs with status running or paused.
+  2. If active runs exist and --force is not set, lists them and exits
+     with code 1.
+  3. Stops the dashboard daemon if it is running.
+  4. Stops the standalone MCP server if it is running.
+  5. Uninstalls every workflow: removes workflow directories, agent
+     workspaces, agent entries from ~/.tamandua/agents.json, and cron
+     jobs. Stops and removes any managed git worktrees associated with
+     completed runs.
+
+Options:
+  --force    Skip the active-runs check and uninstall anyway.
+
+Examples:
+  tamandua uninstall          # Full uninstall (refuses if active runs exist)
+  tamandua uninstall --force  # Force uninstall despite active runs
+  tamandua workflow uninstall <name>  # Uninstall a single workflow by name
+  tamandua workflow uninstall --all   # Uninstall all workflows only (no service stops)`;
+}
+
+function getStepPeekHelp(): string {
+  return `tamandua step peek — Check for pending work for an agent
+
+Usage: tamandua step peek <agent-id> --run-id <run-id>
+
+step peek checks whether an agent has pending (waiting or pending) work in the
+specified run. It is used by the agent scheduler polling loop to decide whether
+to spawn a work session.
+
+Output:
+  HAS_WORK    — There is pending work; the scheduler will spawn a work session.
+  NO_WORK     — No pending work; the scheduler will poll again later.
+
+The --run-id flag is required so concurrent runs of the same workflow/agent
+cannot cross-claim each other's steps.
+
+Examples:
+  tamandua step peek feature-dev-merge_developer --run-id abc12345`;
+}
+
+function getStepClaimHelp(): string {
+  return `tamandua step claim — Atomically claim a pending step
+
+Usage: tamandua step claim <agent-id> --run-id <run-id>
+
+step claim claims the next pending step for the given agent within a run.
+The claim is atomic — if two agents claim simultaneously, only one will
+receive the step.
+
+Output (JSON):
+  On success: {"stepId":"<UUID>", "runId":"<UUID>", "input":"<task description>"}
+  No pending steps: NO_WORK
+
+The --run-id flag is required so concurrent runs of the same workflow/agent
+cannot cross-claim each other's steps.
+
+Examples:
+  tamandua step claim feature-dev-merge_developer --run-id abc12345`;
+}
+
+function getStepCompleteHelp(): string {
+  return `tamandua step complete — Mark a step as done
+
+Usage: tamandua step complete <step-id>
+   or: echo "STATUS: done
+  CHANGES: what changed
+  TESTS: what was tested" | tamandua step complete <step-id>
+
+step complete marks a claimed step as completed. It reads the agent's output
+from either stdin or positional arguments.
+
+Expected input format (newline-delimited key:value blocks):
+  STATUS: done
+  CHANGES: <what was implemented>
+  TESTS: <what tests were run>
+  REPO: <repo path>          (optional)
+  BRANCH: <branch name>      (optional)
+  COMMITS: <commit list>     (optional)
+
+When using positional arguments, the entire output is passed as a single
+string. When using stdin, the output is read until EOF.
+
+Examples:
+  tamandua step complete 123e4567-e89b-12d3-a456-426614174000
+  echo "STATUS: done\nCHANGES: Added feature X\nTESTS: Wrote unit tests" | \\
+    tamandua step complete 123e4567-e89b-12d3-a456-426614174000`;
+}
+
+function getStepFailHelp(): string {
+  return `tamandua step fail — Mark a step as failed
+
+Usage: tamandua step fail <step-id> [<error message>]
+
+step fail marks a step as failed with a reason. When a step fails, Tamandua
+automatically triggers retry logic — the step is reset to pending and will
+be re-claimed by the agent on the next polling cycle. The error message
+is logged for diagnostics.
+
+If no error message is provided, "Unknown error" is used.
+
+Retry behavior: Steps that exceed the maximum retry count (configured in
+the workflow spec) are escalated rather than retried.
+
+Examples:
+  tamandua step fail 123e4567-e89b-12d3-a456-426614174000
+  tamandua step fail 123e4567-e89b-12d3-a456-426614174000 "Network timeout"`;
+}
+
+function getStepStoriesHelp(): string {
+  return `tamandua step stories — List all stories and their status for a run
+
+Usage: tamandua step stories <run-id>
+
+step stories displays every story in the current story plan for a run,
+showing their status (pending, running, done, failed), title, and any
+retry counts.
+
+Output format:
+  US-001   [done   ] Story title here
+  US-002   [running] Another story
+  US-003   [pending] Upcoming story (retry 1)
+
+Examples:
+  tamandua step stories abc12345`;
+}
+
+function getMcpHelp(): string {
+  return `tamandua mcp — Manage the standalone MCP HTTP server
+
+Usage: tamandua mcp <start|stop|status>
+
+The MCP (Model Context Protocol) server provides a remote MCP endpoint for
+agent tool access. It runs as a standalone HTTP server, independent of the
+dashboard daemon.
+
+Default port: 3338
+Default endpoint: http://localhost:3338/mcp
+
+Subcommands:
+  start  [--port N]   Start the MCP server on the given port
+  stop                Stop the MCP server
+  status              Show whether the MCP server is running (PID, port, endpoint)
+
+Start will refuse if the MCP server is already running, printing its current
+status instead.
+
+Examples:
+  tamandua mcp start                   # Start on default port 3338
+  tamandua mcp start --port 5555       # Start on a custom port
+  tamandua mcp stop                    # Stop the MCP server
+  tamandua mcp status                  # Check if the MCP server is running`;
+}
+
+function getMcpStartHelp(): string {
+  return `tamandua mcp start — Start the standalone MCP HTTP server
+
+Usage: tamandua mcp start [--port N]
+
+Starts the MCP server on the specified port (default: 3338). The server
+provides a remote MCP endpoint at http://localhost:<port>/mcp.
+
+If the MCP server is already running, the command prints the current
+PID, port, and endpoint instead of starting a duplicate.
+
+Options:
+  --port N    Port to listen on (default: 3338)
+
+Examples:
+  tamandua mcp start                   # Start on default port 3338
+  tamandua mcp start --port 5555       # Start on port 5555`;
+}
+
+function getMcpStopHelp(): string {
+  return `tamandua mcp stop — Stop the standalone MCP HTTP server
+
+Usage: tamandua mcp stop
+
+Stops the MCP server if it is running. If the server is not running, the
+command prints a message and exits successfully — it is safe to run even
+when no MCP server is active.
+
+Examples:
+  tamandua mcp stop`;
+}
+
+function getMcpStatusHelp(): string {
+  return `tamandua mcp status — Show MCP server status
+
+Usage: tamandua mcp status
+
+Reports whether the MCP server is running. When running, it prints the
+PID, port, and full endpoint URL. When not running, it prints the default
+endpoint that would be used on start.
+
+Examples:
+  tamandua mcp status`;
+}
+
+function getDashboardHelp(): string {
+  return `tamandua dashboard — Manage the web dashboard daemon
+
+Usage: tamandua dashboard <start|stop|status>
+
+The dashboard daemon runs the Tamandua web dashboard, a local HTTP server
+for monitoring workflow runs, logs, and agent activity. It also shows the
+status of the standalone MCP server.
+
+Default port: 3334
+
+Subcommands:
+  start  [--port N]   Start the dashboard daemon on the given port
+  stop                Stop the dashboard daemon
+  status              Show dashboard status and MCP server status
+
+Dashboard status output includes both dashboard and MCP server information
+(PID, port, endpoint for each).
+
+Start will refuse if the dashboard is already running.
+
+Examples:
+  tamandua dashboard start             # Start on default port 3334
+  tamandua dashboard start --port 8080 # Start on port 8080
+  tamandua dashboard stop              # Stop the dashboard
+  tamandua dashboard status            # Check dashboard and MCP status`;
+}
+
+function getDashboardStartHelp(): string {
+  return `tamandua dashboard start — Start the web dashboard daemon
+
+Usage: tamandua dashboard start [--port N]
+
+Starts the dashboard daemon on the specified port (default: 3334). The
+dashboard provides an HTTP interface at http://localhost:<port> for
+monitoring workflow runs, logs, and agent activity.
+
+The daemon also co-manages the standalone MCP server; the dashboard
+status command will report both services.
+
+If the dashboard is already running, the command prints the current
+status instead of starting a duplicate.
+
+Options:
+  --port N    Port to listen on (default: 3334)
+
+Examples:
+  tamandua dashboard start             # Start on default port 3334
+  tamandua dashboard start --port 8080 # Start on port 8080`;
+}
+
+function getDashboardStopHelp(): string {
+  return `tamandua dashboard stop — Stop the web dashboard daemon
+
+Usage: tamandua dashboard stop
+
+Stops the dashboard daemon if it is running. If the daemon is not running,
+the command prints a message and exits successfully.
+
+Examples:
+  tamandua dashboard stop`;
+}
+
+function getDashboardStatusHelp(): string {
+  return `tamandua dashboard status — Show dashboard and MCP server status
+
+Usage: tamandua dashboard status
+
+Reports whether the dashboard daemon is running (PID, port) and also
+shows the status of the MCP server. When either service is running, it
+prints PID, port, and endpoint URL. When not running, it prints the
+default endpoint that would be used on start.
+
+Examples:
+  tamandua dashboard status`;
+}
+
+function getControlPlaneHelp(): string {
+  return `tamandua control-plane — Manage the control plane server
+
+Usage: tamandua control-plane <start|stop|status>
+
+The control plane server provides a scheduling API for run-scoped agent
+polling. The dashboard daemon communicates with the control plane to manage
+which agents are actively polling and to dispatch work sessions.
+
+Default port: 3339
+
+Subcommands:
+  start  [--port N]   Start the control plane server on the given port
+  stop                Stop the control plane server
+  status              Show whether the control plane is running (PID, port, endpoint)
+
+Start will refuse if the control plane is already running, printing its
+current status instead.
+
+Examples:
+  tamandua control-plane start               # Start on default port 3339
+  tamandua control-plane start --port 4444   # Start on port 4444
+  tamandua control-plane stop                # Stop the control plane
+  tamandua control-plane status              # Check control plane status`;
+}
+
+function getControlPlaneStartHelp(): string {
+  return `tamandua control-plane start — Start the control plane server
+
+Usage: tamandua control-plane start [--port N]
+
+Starts the control plane server on the specified port (default: 3339).
+The control plane provides run-scoped scheduling endpoints that the
+dashboard daemon uses to manage agent polling and work dispatch.
+
+If the control plane is already running, the command prints the current
+PID, port, and endpoint instead of starting a duplicate.
+
+Options:
+  --port N    Port to listen on (default: 3339)
+
+Examples:
+  tamandua control-plane start              # Start on default port 3339
+  tamandua control-plane start --port 4444  # Start on port 4444`;
+}
+
+function getControlPlaneStopHelp(): string {
+  return `tamandua control-plane stop — Stop the control plane server
+
+Usage: tamandua control-plane stop
+
+Stops the control plane server if it is running. If the server is not
+running, the command prints a message and exits successfully.
+
+Examples:
+  tamandua control-plane stop`;
+}
+
+function getLogsHelp(): string {
+  return `tamandua logs — Show recent activity events
+
+Usage: tamandua logs [<selector>]
+
+Shows the most recent Tamandua activity events (runs, steps, agent activity).
+The optional selector determines which events to show.
+
+Selector syntax:
+  <run-id>      Show events for a specific run (prefix match supported)
+  #<N>          Show events for run number N
+  <N>           Show the last N events globally (e.g. 20 for last 20)
+  (no arg)      Show the last 50 events globally
+
+If a run-id prefix matches no run in the database but has an events file on
+disk (events can be written before the run row is committed), the logs output
+will still show those events.
+
+Examples:
+  tamandua logs                   # Show last 50 global events
+  tamandua logs 20                # Show last 20 global events
+  tamandua logs abc123            # Show events for run starting with abc123
+  tamandua logs #3                # Show events for run #3`;
+}
+
+function getLogsTailHelp(): string {
+  return `tamandua logs-tail — Follow activity events in real-time
+
+Usage: tamandua logs-tail [<selector>]
+
+Follows Tamandua activity events in real-time, polling for new events and
+printing them as they arrive. Press Ctrl-C (SIGINT) to stop following.
+
+The selector uses the same syntax as tamandua logs:
+  <run-id>      Follow events for a specific run (prefix match supported)
+  #<N>          Follow events for run number N
+  <N>           Follow global events, showing the last N first
+  (no arg)      Follow global events, showing the last 50 first
+
+The polling interval defaults to 1000ms and can be configured via the
+TAMANDUA_LOGS_TAIL_POLL_MS environment variable (minimum 10ms).
+
+Examples:
+  tamandua logs-tail              # Follow global events in real-time
+  tamandua logs-tail 20           # Follow global events, starting with last 20
+  tamandua logs-tail abc123       # Follow events for run starting with abc123
+  tamandua logs-tail #3           # Follow events for run #3`;
+}
+
+function getControlPlaneStatusHelp(): string {
+  return `tamandua control-plane status — Show control plane server status
+
+Usage: tamandua control-plane status
+
+Reports whether the control plane server is running. When running, it
+prints the PID, port, and full endpoint URL. When not running, it prints
+the default endpoint that would be used on start.
+
+Examples:
+  tamandua control-plane status`;
+}
+
+function getWorktreeListHelp(): string {
+  return `tamandua worktree list — List all managed worktrees
+
+Usage: tamandua worktree list
+
+Lists every managed git worktree created by Tamandua workflow runs.
+Each entry shows the run ID, status, cleanup policy, and filesystem path.
+
+Output columns:
+  Status    Worktree status (ready, removed, etc.)
+  Run ID    8-char run identifier prefix
+  Cleanup   When the worktree will be cleaned up (e.g. on-completion)
+  Path      Absolute filesystem path to the worktree
+  Origin    Source repository and ref (below the main line)
+
+Examples:
+  tamandua worktree list`;
+}
+
+function getWorktreeStatusHelp(): string {
+  return `tamandua worktree status — Show detailed worktree info for a run
+
+Usage: tamandua worktree status <run-id>
+
+Shows detailed information about the managed git worktree associated with
+a specific workflow run. Accepts a run-id prefix.
+
+Output includes:
+  Run          Run ID prefix
+  Status       Worktree status (ready, removed, etc.)
+  Origin repo  Source repository the worktree was cloned from
+  Origin ref   Git ref used to create the worktree (branch, tag, SHA)
+  Origin SHA   Full commit SHA the worktree is at
+  Orig branch  Original branch the run was started from
+  Worktree     Absolute filesystem path to the worktree
+  Cleanup      When the worktree will be cleaned up
+
+Examples:
+  tamandua worktree status abc12345`;
+}
+
+function getWorktreeRemoveHelp(): string {
+  return `tamandua worktree remove — Remove a managed worktree
+
+Usage: tamandua worktree remove <run-id> [--force]
+
+Removes a managed git worktree and its associated tracking entry.
+Accepts a run-id prefix to identify the worktree.
+
+By default, removal is only allowed for worktrees with a non-ready status
+(e.g. removed or after cleanup). To remove a worktree that is still active
+or in ready status, use --force.
+
+Options:
+  --force    Allow removal of worktrees in any status (not just non-ready).
+
+Examples:
+  tamandua worktree remove abc12345
+  tamandua worktree remove abc12345 --force`;
+}
+
+function getWorktreePruneHelp(): string {
+  return `tamandua worktree prune — Remove old completed worktrees
+
+Usage: tamandua worktree prune --completed --older-than <duration>
+
+Prunes (removes) managed git worktrees that are associated with completed
+or canceled workflow runs and are older than the specified duration.
+This is a cleanup command that helps reclaim disk space from old worktrees.
+
+Options (both required):
+  --completed        Only prune worktrees for completed or canceled runs.
+  --older-than <d>   Only prune worktrees older than the given duration.
+
+Duration format:
+  Duration is specified as a number followed by a unit letter:
+    d — days   (e.g. 7d  = 7 days)
+    h — hours  (e.g. 24h = 24 hours)
+    m — minutes(e.g. 30m = 30 minutes)
+
+Examples:
+  tamandua worktree prune --completed --older-than 7d
+  tamandua worktree prune --completed --older-than 24h
+  tamandua worktree prune --completed --older-than 30m`;
+}
+
+function getWorkflowListHelp(): string {
+  return `tamandua workflow list — List available bundled workflows
+
+Usage: tamandua workflow list
+
+Lists all bundled workflows that are available for installation from the
+source checkout. These are the workflows defined in the workflows/ directory
+of the Tamandua source tree.
+
+Examples:
+  tamandua workflow list`;
+}
+
+function getWorkflowRunsHelp(): string {
+  return `tamandua workflow runs — List all workflow runs
+
+Usage: tamandua workflow runs
+
+Lists every workflow run in the database with status, workflow ID, token
+usage, and a preview of the task description.
+
+Output columns:
+  Status    Run status (running, paused, done, failed, canceled)
+  Run ID    8-character run identifier prefix
+  Workflow  The workflow ID (e.g. feature-dev-merge)
+  Tokens    Total tokens spent so far
+  Task      Task description preview (truncated at 50 characters)
+
+Examples:
+  tamandua workflow runs`;
+}
+
+function getWorkflowInstallHelp(): string {
+  return `tamandua workflow install — Install a specific workflow by name
+
+Usage: tamandua workflow install <name>
+
+Installs a single bundled workflow by its directory name. This fetches
+the workflow YAML spec, provisions agent workspaces (AGENTS.md, IDENTITY.md,
+SOUL.md, and any bundled skills), and registers agents in the agent config.
+
+After installation, the workflow is ready to run with:
+  tamandua workflow run <name> "task description"
+
+Examples:
+  tamandua workflow install feature-dev-merge`;
+}
+
+function getWorkflowUninstallHelp(): string {
+  return `tamandua workflow uninstall — Uninstall one or all workflows
+
+Usage: tamandua workflow uninstall <name> [--force]
+       tamandua workflow uninstall --all [--force]
+
+Uninstalls a workflow by name, or all workflows when --all is used.
+
+By default, uninstall checks for active runs (running or paused) belonging
+to the workflow and refuses if any exist. Use --force to skip this check.
+
+Options:
+  --all      Uninstall every installed workflow
+  --force    Skip the active-runs check and uninstall anyway
+
+Examples:
+  tamandua workflow uninstall feature-dev-merge
+  tamandua workflow uninstall feature-dev-merge --force
+  tamandua workflow uninstall --all
+  tamandua workflow uninstall --all --force`;
+}
+
+function getWorkflowRunHelp(): string {
+  return `tamandua workflow run — Start a new workflow run
+
+Usage: tamandua workflow run <name> <task> [options]
+
+Starts a new run of the given workflow with the specified task description.
+The task is passed to the workflow's agents as their objective.
+
+Options:
+  --no-hurry-please-save-tokens-mode
+      Run in a token-saving mode where agents poll less frequently.
+      Reduces token consumption at the cost of slower progress.
+  --working-directory-for-harness <dir>
+      Set the working directory for the agent harness during this run.
+      Agents will operate within this directory.
+  --worktree-origin-repository <dir>
+      Repository to clone when creating a worktree for this run.
+      Defaults to the current repository.
+  --worktree-origin-ref <ref>
+      Git ref (branch, tag, or SHA) to check out in the worktree.
+      Defaults to the current branch.
+
+Examples:
+  tamandua workflow run feature-dev-merge "Add dark mode toggle"
+  tamandua workflow run feature-dev-merge "Refactor DB layer" \\
+      --no-hurry-please-save-tokens-mode
+  tamandua workflow run feature-dev-merge "Build login page" \\
+      --working-directory-for-harness /path/to/project
+  tamandua workflow run feature-dev-merge "Fix bug #42" \\
+      --worktree-origin-repository /repos/myapp --worktree-origin-ref develop`;
+}
+
+function getWorkflowStatusHelp(): string {
+  return `tamandua workflow status — Show detailed run status with step listing
+
+Usage: tamandua workflow status <query>
+
+Shows detailed information about a workflow run, including status, token
+usage, workspace mode (for worktree runs), and a list of every step with
+its current status and assigned agent role.
+
+The query accepts a run-id prefix for matching.
+
+Output includes:
+  Run          Run ID (8-char prefix)
+  Workflow     Workflow ID
+  Task         Full task description
+  Status       Current run status
+  Tokens       Total tokens spent
+  Workspace    Workspace mode (only shown for worktree runs)
+  Steps        Per-step listing with step ID, status icon, and agent role
+
+Step status indicators:
+  [done   ]    Step completed successfully
+  [running]    Step currently being executed
+  [failed ]    Step failed (may be retried)
+  [pending]    Step waiting to be claimed
+
+Examples:
+  tamandua workflow status abc12345`;
+}
+
+function getWorkflowStopHelp(): string {
+  return `tamandua workflow stop — Cancel a running workflow
+
+Usage: tamandua workflow stop <run-id>
+
+Cancels a running workflow by setting its status to canceled. The run-id
+accepts prefix matching.
+
+Active agents associated with the run will see the cancellation on their
+next polling cycle.
+
+Examples:
+  tamandua workflow stop abc12345`;
+}
+
+function getWorkflowPauseHelp(): string {
+  return `tamandua workflow pause — Pause a running workflow
+
+Usage: tamandua workflow pause <run-id> [--drain]
+
+Pauses a running workflow via the dashboard daemon. Only runs with status
+"running" can be paused. The daemon must be running for this command to work
+(start it with \`tamandua dashboard start\`).
+
+When paused, agents stop polling and active work sessions are interrupted.
+Paused runs can be resumed later with \`tamandua workflow resume\`.
+
+Options:
+  --drain    Let in-flight agent sessions complete before pausing, rather
+             than interrupting them immediately.
+
+Examples:
+  tamandua workflow pause abc12345
+  tamandua workflow pause abc12345 --drain`;
+}
+
+function getWorkflowResumeHelp(): string {
+  return `tamandua workflow resume — Resume a paused or failed workflow run
+
+Usage: tamandua workflow resume <run-id>
+
+Resumes a workflow run that is paused or has failed. The run-id accepts
+prefix matching.
+
+Behavior by status:
+  paused    Connects to the dashboard daemon and resumes agent polling.
+            The daemon must be running for this to work.
+  failed    Restarts the run from the failed step, creating a new run
+            entry. The daemon is notified of the new run automatically.
+  Other     Terminal runs (completed, canceled) cannot be resumed.
+            Runs with status "running" are already active and do not
+            need to be resumed.
+
+Examples:
+  tamandua workflow resume abc12345       # Resume a paused run
+  tamandua workflow resume abc12345       # Re-start a failed run`;
+}
+
+function getWorkflowPauseAllHelp(): string {
+  return `tamandua workflow pause-all — Pause all running workflows
+
+Usage: tamandua workflow pause-all [--drain]
+
+Pauses every workflow run currently in "running" status. Uses the dashboard
+daemon to pause each run. If the daemon is unreachable for a specific run,
+a warning is printed and that run is skipped.
+
+Options:
+  --drain    Let in-flight agent sessions complete before pausing, rather
+             than interrupting them immediately. Applies to all runs.
+
+Examples:
+  tamandua workflow pause-all
+  tamandua workflow pause-all --drain`;
+}
+
+function getWorkflowResumeAllHelp(): string {
+  return `tamandua workflow resume-all — Resume all paused workflows
+
+Usage: tamandua workflow resume-all
+
+Resumes every workflow run currently in "paused" status. Uses the dashboard
+daemon to resume agent polling for each run. If the daemon is unreachable
+for a specific run, a warning is printed and that run is skipped.
+
+Only paused runs are resumed; failed runs are not resumed by this command
+(use \`tamandua workflow resume <run-id>\` for individual failed runs).
+
+Examples:
+  tamandua workflow resume-all`;
+}
+
+function getWorkflowGroupHelp(): string {
+  return `tamandua workflow — Manage workflows and runs
+
+Usage: tamandua workflow <list|runs|install|uninstall|run|status|stop|pause|resume|pause-all|resume-all>
+
+Commands for managing Tamandua workflows and their runs.
+
+Subcommands:
+  list        List available bundled workflows
+  runs        List all workflow runs with status, tokens, task preview
+  install     Install a specific workflow by name
+  uninstall   Uninstall a workflow (--all for all workflows, --force to skip
+              active-runs check)
+  run         Start a new workflow run with the given task
+  status      Show detailed run status with step listing
+  stop        Cancel a running workflow
+  pause       Pause a running workflow via the daemon
+  resume      Resume a paused or failed workflow run
+  pause-all   Pause all running workflows
+  resume-all  Resume all paused workflows
+
+Examples:
+  tamandua workflow list
+  tamandua workflow runs
+  tamandua workflow install feature-dev-merge
+  tamandua workflow run feature-dev-merge "Add a new feature"
+  tamandua workflow status abc12345
+  tamandua workflow pause abc12345 --drain`;
+}
+
+function getWorktreeGroupHelp(): string {
+  return `tamandua worktree — Manage git worktrees for workflow runs
+
+Usage: tamandua worktree <list|status|remove|prune>
+
+Commands for managing git worktrees that Tamandua creates for workflow
+runs. Worktrees provide isolated working directories so concurrent runs
+never interfere with each other.
+
+Subcommands:
+  list      List all managed worktrees with status, cleanup policy, and paths
+  status    Show detailed info for a specific run's worktree
+  remove    Remove a managed worktree (--force for non-ready statuses)
+  prune     Remove old completed worktrees (requires --completed and --older-than)
+
+Examples:
+  tamandua worktree list
+  tamandua worktree status abc12345
+  tamandua worktree remove abc12345 --force
+  tamandua worktree prune --completed --older-than 7d`;
+}
+
+function getUsageText(): string {
+  return [
+    "Run tamandua <command> --help for detailed command help.",
+    "",
     "tamandua install                      Install all bundled workflows",
     "tamandua uninstall [--force]          Full uninstall",
     "", "tamandua workflow list                List available workflows",
@@ -168,7 +1074,11 @@ function printUsage() {
     "tamandua skill-path                  Print path to the bundled tamandua-agents skill",
     "tamandua source-path                  Print source checkout path",
     "tamandua update [--force]             Pull latest, rebuild, reinstall",
-  ].join("\n") + "\n");
+  ].join("\n") + "\n";
+}
+
+function printUsage() {
+  process.stdout.write(getUsageText());
 }
 
 function shouldSkipUpdateWarning(group: string, action: string): boolean {
@@ -181,6 +1091,85 @@ function shouldSkipUpdateWarning(group: string, action: string): boolean {
 async function main() {
   const args = process.argv.slice(2);
   const [group, action, target] = args;
+
+  // Check for --help before anything else: display command-specific help
+  // if recognized, otherwise show global usage.
+  if (hasHelpFlag(args)) {
+    if (group === "tamandua") {
+      printHelp(getTamanduaHelp());
+    }
+    if (group === "version" || group === "--version" || group === "-v") {
+      printHelp(getVersionHelp());
+    }
+    if (group === "skill-path") {
+      printHelp(getSkillPathHelp());
+    }
+    if (group === "source-path") {
+      printHelp(getSourcePathHelp());
+    }
+    if (group === "update") {
+      printHelp(getUpdateHelp());
+    }
+    if (group === "install") {
+      printHelp(getInstallHelp());
+    }
+    if (group === "uninstall") {
+      printHelp(getUninstallHelp());
+    }
+    if (group === "mcp") {
+      if (action === "start") { printHelp(getMcpStartHelp()); }
+      if (action === "stop") { printHelp(getMcpStopHelp()); }
+      if (action === "status") { printHelp(getMcpStatusHelp()); }
+      printHelp(getMcpHelp());
+    }
+    if (group === "dashboard") {
+      if (action === "start") { printHelp(getDashboardStartHelp()); }
+      if (action === "stop") { printHelp(getDashboardStopHelp()); }
+      if (action === "status") { printHelp(getDashboardStatusHelp()); }
+      printHelp(getDashboardHelp());
+    }
+    if (group === "control-plane") {
+      if (action === "start") { printHelp(getControlPlaneStartHelp()); }
+      if (action === "stop") { printHelp(getControlPlaneStopHelp()); }
+      if (action === "status") { printHelp(getControlPlaneStatusHelp()); }
+      printHelp(getControlPlaneHelp());
+    }
+    if (group === "step") {
+      if (action === "peek") { printHelp(getStepPeekHelp()); }
+      if (action === "claim") { printHelp(getStepClaimHelp()); }
+      if (action === "complete") { printHelp(getStepCompleteHelp()); }
+      if (action === "fail") { printHelp(getStepFailHelp()); }
+      if (action === "stories") { printHelp(getStepStoriesHelp()); }
+    }
+    if (group === "logs") {
+      printHelp(getLogsHelp());
+    }
+    if (group === "logs-tail") {
+      printHelp(getLogsTailHelp());
+    }
+    if (group === "workflow") {
+      if (action === "list") { printHelp(getWorkflowListHelp()); }
+      if (action === "runs") { printHelp(getWorkflowRunsHelp()); }
+      if (action === "install") { printHelp(getWorkflowInstallHelp()); }
+      if (action === "uninstall") { printHelp(getWorkflowUninstallHelp()); }
+      if (action === "run") { printHelp(getWorkflowRunHelp()); }
+      if (action === "status") { printHelp(getWorkflowStatusHelp()); }
+      if (action === "stop") { printHelp(getWorkflowStopHelp()); }
+      if (action === "pause") { printHelp(getWorkflowPauseHelp()); }
+      if (action === "resume") { printHelp(getWorkflowResumeHelp()); }
+      if (action === "pause-all") { printHelp(getWorkflowPauseAllHelp()); }
+      if (action === "resume-all") { printHelp(getWorkflowResumeAllHelp()); }
+      printHelp(getWorkflowGroupHelp());
+    }
+    if (group === "worktree") {
+      if (action === "list") { printHelp(getWorktreeListHelp()); }
+      if (action === "status") { printHelp(getWorktreeStatusHelp()); }
+      if (action === "remove") { printHelp(getWorktreeRemoveHelp()); }
+      if (action === "prune") { printHelp(getWorktreePruneHelp()); }
+      printHelp(getWorktreeGroupHelp());
+    }
+    printHelp(getUsageText());
+  }
 
   // Display update warning before command output, but suppress for
   // update/version commands (user is already acting on versions) and
