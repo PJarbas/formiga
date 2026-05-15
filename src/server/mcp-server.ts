@@ -43,6 +43,7 @@ export interface TamanduaMcpToolServices {
     workingDirectoryForHarness?: string;
     worktreeOriginRepository?: string;
     worktreeOriginRef?: string;
+    noHurrySaveTokensMode?: boolean;
   }) => Promise<RunWorkflowResult>;
   getRecentEvents: (limit?: number) => TamanduaEvent[];
   getSourcePath: () => string;
@@ -189,6 +190,10 @@ const mcpTools: Array<Record<string, unknown>> = [
         worktreeOriginRef: {
           type: "string",
           description: "Git ref (branch, tag, SHA) for the worktree. Optional. Only valid for worktree workflows.",
+        },
+        noHurrySaveTokensMode: {
+          type: "boolean",
+          description: "When true, reduces polling frequency to save tokens (15-min floor, 15-min default instead of 1-min floor, 5-min default). Optional, defaults to false.",
         },
       },
     },
@@ -475,6 +480,8 @@ function createProtocolServer(services: TamanduaMcpToolServices): Server {
         typeof args.worktreeOriginRef === "string" && args.worktreeOriginRef.trim().length > 0
           ? args.worktreeOriginRef.trim()
           : undefined;
+      const noHurrySaveTokensMode: boolean | undefined =
+        typeof args.noHurrySaveTokensMode === "boolean" ? args.noHurrySaveTokensMode : undefined;
 
       try {
         const workspaceMode = await services.resolveWorkspaceMode(workflowId);
@@ -509,6 +516,7 @@ function createProtocolServer(services: TamanduaMcpToolServices): Server {
           workingDirectoryForHarness,
           worktreeOriginRepository,
           worktreeOriginRef,
+          noHurrySaveTokensMode,
         });
         return createToolResult({ run });
       } catch (err) {

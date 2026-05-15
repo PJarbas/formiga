@@ -136,7 +136,7 @@ describe("mcp-server bootstrap", () => {
   it("supports initialize, tools/list, and tools/call over HTTP", async () => {
     const runListCalls: number[] = [];
     const runStatusCalls: string[] = [];
-    const runStartCalls: Array<{ workflowId: string; taskTitle: string; workingDirectoryForHarness: string }> = [];
+    const runStartCalls: Array<{ workflowId: string; taskTitle: string; workingDirectoryForHarness: string; noHurrySaveTokensMode?: boolean }> = [];
     const eventCalls: number[] = [];
     const sourcePathCalls: string[] = [];
 
@@ -184,8 +184,8 @@ describe("mcp-server bootstrap", () => {
           runStatusCalls.push(query);
           return expectedRunDetail;
         },
-        runWorkflow: async ({ workflowId, taskTitle, workingDirectoryForHarness }) => {
-          runStartCalls.push({ workflowId, taskTitle, workingDirectoryForHarness: workingDirectoryForHarness ?? "" });
+        runWorkflow: async ({ workflowId, taskTitle, workingDirectoryForHarness, noHurrySaveTokensMode }) => {
+          runStartCalls.push({ workflowId, taskTitle, workingDirectoryForHarness: workingDirectoryForHarness ?? "", noHurrySaveTokensMode });
           return {
             runId: "run-new",
             runNumber: 9,
@@ -289,12 +289,17 @@ describe("mcp-server bootstrap", () => {
         workflowId: "feature-dev",
         taskTitle: "Implement MCP start",
         workingDirectoryForHarness: "/tmp/remote-harness",
+        noHurrySaveTokensMode: undefined,
       }]);
 
-      // Verify inputSchema properties include worktree fields
+      // Verify inputSchema properties include worktree fields and noHurrySaveTokensMode
       const runStartSchema = tools[2]?.inputSchema as { properties?: Record<string, unknown> };
       assert.ok(runStartSchema.properties?.worktreeOriginRepository, "should have worktreeOriginRepository property");
       assert.ok(runStartSchema.properties?.worktreeOriginRef, "should have worktreeOriginRef property");
+      assert.deepEqual(runStartSchema.properties?.noHurrySaveTokensMode, {
+        type: "boolean",
+        description: "When true, reduces polling frequency to save tokens (15-min floor, 15-min default instead of 1-min floor, 5-min default). Optional, defaults to false.",
+      });
 
       const eventsRecent = await callTool(server.port, sessionId, 6, "tamandua.events.recent", { limit: 7 });
       assert.equal(eventsRecent.status, 200);
@@ -668,7 +673,76 @@ describe("mcp-server bootstrap", () => {
         workingDirectoryForHarness: undefined,
         worktreeOriginRepository: "/tmp/origin-repo",
         worktreeOriginRef: "feature/my-branch",
+        noHurrySaveTokensMode: undefined,
       }]);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("MCP run-start accepts and forwards noHurrySaveTokensMode argument", async () => {
+    const runStartCalls: Array<{ noHurrySaveTokensMode?: boolean }> = [];
+
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async (params) => {
+          runStartCalls.push({ noHurrySaveTokensMode: params.noHurrySaveTokensMode });
+          return {
+            runId: "run-hurry",
+            runNumber: 11,
+            workflowId: params.workflowId,
+            taskTitle: params.taskTitle,
+            status: "running",
+            stepCount: 2,
+            workingDirectoryForHarness: params.workingDirectoryForHarness ?? "",
+          };
+        },
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => ({ runId: "x", status: "paused" }),
+        resumeRun: async () => ({ runId: "x", status: "running" }),
+        resolveWorkspaceMode: async () => "direct",
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      // Test with noHurrySaveTokensMode: true
+      const resultTrue = await callTool(server.port, sessionId, 95, "tamandua.run.start", {
+        workflowId: "feature-dev",
+        taskTitle: "save tokens run",
+        workingDirectoryForHarness: "/tmp/harness",
+        noHurrySaveTokensMode: true,
+      });
+      assert.equal(resultTrue.status, 200);
+      assert.equal(resultTrue.body?.error, undefined);
+      assert.deepEqual(runStartCalls, [{ noHurrySaveTokensMode: true }]);
+
+      // Test with noHurrySaveTokensMode: false
+      runStartCalls.length = 0;
+      const resultFalse = await callTool(server.port, sessionId, 96, "tamandua.run.start", {
+        workflowId: "feature-dev",
+        taskTitle: "normal run",
+        workingDirectoryForHarness: "/tmp/harness",
+        noHurrySaveTokensMode: false,
+      });
+      assert.equal(resultFalse.status, 200);
+      assert.equal(resultFalse.body?.error, undefined);
+      assert.deepEqual(runStartCalls, [{ noHurrySaveTokensMode: false }]);
+
+      // Test without noHurrySaveTokensMode (should pass undefined)
+      runStartCalls.length = 0;
+      const resultMissing = await callTool(server.port, sessionId, 97, "tamandua.run.start", {
+        workflowId: "feature-dev",
+        taskTitle: "default run",
+        workingDirectoryForHarness: "/tmp/harness",
+      });
+      assert.equal(resultMissing.status, 200);
+      assert.equal(resultMissing.body?.error, undefined);
+      assert.deepEqual(runStartCalls, [{ noHurrySaveTokensMode: undefined }]);
     } finally {
       await stopTamanduaMcpServer(server);
     }
