@@ -16,6 +16,9 @@ Started: 2026-05-15
 - control-server integration tests that need a real workflow must create a minimal workflow.yml in `<stateDir>/workflows/<id>/` on disk; `loadWorkflowSpec` validates agents have id + workspace.baseDir, and steps have id + agent
 - `shutdownAllCrons()` must be called in afterEach to clean up in-memory jobMetadata between tests that use `_admitOrQueueRun`
 - cli.ts is the main CLI entry point with top-level `main()`; guard it with `import.meta.url` check (`process.argv[1] === fileURLToPath(import.meta.url)`) so tests can import and call exported helpers without triggering the full CLI
+- MCP server tests use `startTamanduaMcpServer` with dependency-injected mock services via `createTamanduaMcpServer(port, { services })`; the `services` partial overrides `defaultToolServices`
+- `mcpTools` array in mcp-server.ts defines all tool schemas; `inputSchema.properties` for each tool is asserted in the bootstrap test to prevent schema drift
+- When adding a new field to the MCP `runWorkflow` service signature, update both `TamanduaMcpToolServices.runWorkflow` interface AND all mock implementations in tests
 
 ---
 
@@ -24,12 +27,6 @@ Started: 2026-05-15
 ### US-001: Revert commit 620e6e41 — restore 1-min polling floor and 5-min default in setupAgentCrons
 
 **Description:** Revert the two-line change in src/installer/agent-scheduler.ts that raised the minimum polling interval from 1 minute to 15 minutes and the default from 5 minutes to 15 minutes.
-
-Implementation notes:
-- In setupAgentCrons(), change Math.max(15, ...) back to Math.max(1, ...)
-- Change the fallback default from 15 back to 5
-- This restores aggressive polling as the default behavior
-- The save-tokens mode will be added separately as an opt-in override
 
 **Acceptance Criteria:**
 - setupAgentCrons() uses Math.max(1, ...) and default 5 for intervalMinutes when workflow.polling?.timeoutSeconds is set
@@ -117,7 +114,7 @@ Implementation notes:
   - Save-tokens mode (true): `Math.max(15, ...)` floor, `15` default
   - Default mode (false/absent): `Math.max(1, ...)` floor, `5` default
 - Added 7 tests: save-tokens default (15), save-tokens floor (15 with 33s), save-tokens above-floor (20 with 1200s), explicit false default (5), explicit false floor (1), absent/undefined default (5), save-tokens multi-agent
-- **Learnings:** The SetupAgentCronsOptions bag is the right place for this flag; it flows naturally into the intervalMinutes ternary without touching createAgentCronJob's signature. The 4 pre-existing test failures in cli-worktree.test.ts are unrelated (SQLite migration issue).
+- **Learnings:** The SetupAgentCronsOptions bag is the right place for this flag; it flows naturally into the intervalMinutes ternary without touching createAgentCronJob's signature.
 - Files changed: `src/installer/agent-scheduler.ts`, `src/installer/agent-scheduler.test.ts`
 
 ## 2026-05-15 - US-003: Add noHurrySaveTokensMode to RunWorkflowParams and store in run context
@@ -145,7 +142,27 @@ Implementation notes:
 - Exported `RunRow` interface for test type usage
 - Added 3 integration tests creating temp workflows, inserting runs with context flags, and verifying job intervals:
   - `no_hurry_save_tokens_mode: 'true'` → 15-min intervals
-  - `no_hurry_save_tokens_mode: 'false'` → 5-min intervals  
+  - `no_hurry_save_tokens_mode: 'false'` → 5-min intervals
   - missing flag → 5-min intervals (default)
 - **Learnings:** Integration tests that need a real workflow must create a minimal `workflow.yml` in `<stateDir>/workflows/<id>/`. `loadWorkflowSpec` validates agents have `id` + `workspace.baseDir`, steps have `id` + `agent`. `shutdownAllCrons()` must be called in `afterEach` to clean up in-memory `jobMetadata` between tests.
 - Files changed: `src/server/control-server.ts`, `src/server/control-server.test.ts`
+
+## 2026-05-15 - US-006: Update MCP server to accept and pass noHurrySaveTokensMode argument for run-start
+- Added `noHurrySaveTokensMode?: boolean` to `TamanduaMcpToolServices.runWorkflow` params type
+- Added `noHurrySaveTokensMode` to `MCP_TOOL_RUN_START` inputSchema properties as optional boolean
+- Parsed `noHurrySaveTokensMode` from tool args: `typeof args.noHurrySaveTokensMode === 'boolean' ? args.noHurrySaveTokensMode : undefined`
+- Passed `noHurrySaveTokensMode` to `services.runWorkflow()` params
+- Updated existing bootstrap test to verify schema property and argument forwarding (captures `noHurrySaveTokensMode` in `runStartCalls`)
+- Added dedicated test "MCP run-start accepts and forwards noHurrySaveTokensMode argument" with 3 sub-cases: true, false, undefined (not provided)
+- Updated worktree dispatch test to expect `noHurrySaveTokensMode: undefined` in captured calls
+- **Learnings:** When adding a new field to the MCP runWorkflow service signature, must update both the interface AND all mock implementations in tests. The `mcpTools` array defines tool schemas; properties are asserted in the bootstrap test. `startTamanduaMcpServer(0)` uses port 0 for random OS-assigned port, avoiding conflicts.
+- Files changed: `src/server/mcp-server.ts`, `src/server/mcp-server.test.ts`
+
+## 2026-05-15 - US-007: Update SKILL.md to document --no-hurry-please-save-tokens-mode
+- Added `[--no-hurry-please-save-tokens-mode]` to the CLI `tamandua workflow run` command example
+- Added description paragraph explaining the flag reduces polling frequency to save tokens (15-min floor/default vs 1-min floor/5-min default)
+- Added `noHurrySaveTokensMode` as optional MCP arg under "Optional MCP args" with description matching the CLI flag
+- All workflow validation tests pass (146/146)
+- Build and typecheck pass (914/918 total tests; 4 pre-existing failures in unrelated cli-worktree.test.ts)
+- **Learnings:** SKILL.md is validated by `tests/workflow-validation.test.ts` in the "bundled skill artifact check" suite. Must maintain the frontmatter (name/description), lifecycle documentation (step peek/claim/complete/fail), and stepId usage.
+- Files changed: `skills/tamandua-agents/SKILL.md`
