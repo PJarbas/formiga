@@ -123,6 +123,19 @@ waiting → pending → running → done/failed
 - Logs: `~/.tamandua/tamandua.log`
 - Medic: `~/.tamandua/medic.json`
 
+## Skills and Agent Instructions
+
+When making changes that affect Tamandua agent behavior, always check whether `skills/tamandua-agents/SKILL.md` needs updating. This skill is provisioned to Tamandua workflow agents as AGENTS.md, IDENTITY.md, and SOUL.md instructions — if the skill is outdated, agents will operate with incorrect guidance.
+
+Changes that typically require skill updates include:
+- **Step lifecycle**: modifications to step claim/complete/fail/pipeline logic
+- **CLI commands**: new or changed CLI commands that agents use (step, workflow, logs, dashboard commands)
+- **Agent provisioning**: changes to how personas, workspace files, or skills are provisioned to agents
+- **Workflow structure**: new step types, loop wiring, or pipeline ordering changes
+- **Output format contracts**: changes to expected agent output formats (e.g., STATUS/CHANGES/TESTS blocks)
+
+If you update `skills/tamandua-agents/SKILL.md`, also verify that all bundled workflow persona AGENTS.md files reflect the change where relevant.
+
 ## Testing
 
 ```bash
