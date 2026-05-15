@@ -131,7 +131,7 @@ function printUsage() {
     "tamandua install                      Install all bundled workflows",
     "tamandua uninstall [--force]          Full uninstall",
     "", "tamandua workflow list                List available workflows",
-    "tamandua workflow install <name>      Install a workflow",
+    "tamandua workflow install <name|--all>  Install a workflow (or all)",
     "tamandua workflow run <name> <task> [--no-hurry-please-save-tokens-mode]",
     "                                      [--working-directory-for-harness <dir>]",
     "                                      [--worktree-origin-repository <dir>]",
@@ -804,6 +804,15 @@ async function main() {
   if (!target) { printUsage(); process.exit(1); }
 
   if (action === "install") {
+    const isAll = target === "--all" || target === "all";
+    if (isAll) {
+      const workflows = await listBundledWorkflows();
+      if (workflows.length === 0) { console.log("No bundled workflows found."); return; }
+      console.log(`Installing ${workflows.length} workflow(s)...`);
+      for (const wf of workflows) { try { await installWorkflow({ workflowId: wf }); console.log(`  ✓ ${wf}`); } catch (err) { console.log(`  ✗ ${wf}: ${err instanceof Error ? err.message : String(err)}`); } }
+      console.log(`\nDone. Start with: tamandua workflow run <name> "your task"`);
+      return;
+    }
     const result = await installWorkflow({ workflowId: target });
     console.log(`Installed workflow: ${result.workflowId}\nAgent crons will start when a run begins.\n\nStart with: tamandua workflow run ${result.workflowId} "your task"`);
     return;

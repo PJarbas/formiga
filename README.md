@@ -106,6 +106,9 @@ YAML + SQLite + polling. That's it. No Redis, no Kafka, no container orchestrato
 
 ```bash
 $ tamandua workflow install feature-dev
+
+# Or install all bundled workflows at once
+$ tamandua workflow install --all
 ✓ Installed workflow: feature-dev
 
 $ tamandua workflow run feature-dev "Add user authentication with OAuth"
@@ -187,7 +190,7 @@ You're installing agent teams that run code on your machine. We take that seriou
 | `tamandua workflow runs` | List all runs |
 | `tamandua workflow resume <run-id>` | Resume a failed run |
 | `tamandua workflow list` | List available workflows |
-| `tamandua workflow install <id>` | Install a single workflow |
+| `tamandua workflow install <id> [--all]` | Install one or all workflows |
 | `tamandua workflow uninstall <id>` | Remove a single workflow |
 
 ### Management

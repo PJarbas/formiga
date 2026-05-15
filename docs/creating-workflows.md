@@ -263,6 +263,9 @@ tamandua workflow list
 # Install a bundled workflow by name
 tamandua workflow install <workflow-id>
 
+# Install all bundled workflows at once
+tamandua workflow install --all
+
 # Run it
 tamandua workflow run <workflow-id> "your task description"
 ```
