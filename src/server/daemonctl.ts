@@ -346,7 +346,7 @@ export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ p
     if (opts?.homeDir) {
       spawnOpts.env = { ...process.env, HOME: opts.homeDir };
     }
-    const child = spawn("node", [daemonScript, String(port)], spawnOpts);
+    const child = spawn("node", ["--disable-warning=ExperimentalWarning", daemonScript, String(port)], spawnOpts);
 
     if (opts?.keepHandle) {
       // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
@@ -529,7 +529,7 @@ export async function startMcp(port?: number, opts?: StartOptions): Promise<{ pi
   if (opts?.homeDir) {
     spawnOpts.env = { ...process.env, HOME: opts.homeDir };
   }
-  const child = spawn("node", [standaloneScript, String(mcpPort)], spawnOpts);
+  const child = spawn("node", ["--disable-warning=ExperimentalWarning", standaloneScript, String(mcpPort)], spawnOpts);
 
   if (opts?.keepHandle) {
     // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
@@ -810,7 +810,7 @@ export async function startControlPlane(port?: number, opts?: StartOptions): Pro
   if (opts?.homeDir) {
     spawnOpts.env = { ...process.env, HOME: opts.homeDir };
   }
-  const child = spawn("node", [standaloneScript, String(cpPort)], spawnOpts);
+  const child = spawn("node", ["--disable-warning=ExperimentalWarning", standaloneScript, String(cpPort)], spawnOpts);
 
   if (opts?.keepHandle) {
     // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).

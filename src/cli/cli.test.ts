@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -75,6 +75,37 @@ describe("parseWorkflowRunArgs", () => {
     ]);
     assert.equal(result.taskTitle, "do something");
     assert.equal(result.noHurrySaveTokensMode, true);
+  });
+});
+
+describe("CLI entrypoint regression: no ExperimentalWarning", () => {
+  it("should not emit SQLite ExperimentalWarning when invoked through bin/tamandua wrapper", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cli-test-"));
+    const stateDir = path.join(tmpDir, "state");
+    const homeDir = path.join(tmpDir, "home");
+    fs.mkdirSync(stateDir);
+    fs.mkdirSync(homeDir);
+
+    try {
+      const wrapperPath = path.resolve("bin/tamandua");
+      const result = spawnSync("/bin/sh", [wrapperPath, "version"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          TAMANDUA_STATE_DIR: stateDir,
+        },
+      });
+
+      const stderr = result.stderr ?? "";
+      const stdout = result.stdout ?? "";
+
+      assert.doesNotMatch(stderr, /ExperimentalWarning/);
+      assert.doesNotMatch(stdout, /ExperimentalWarning/);
+      assert.match(stdout, /^tamandua v/);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
