@@ -11,17 +11,17 @@ const agentsMd = readFileSync(agentsMdPath, "utf-8");
 // Extract existing section headings
 const sectionHeadings = agentsMd.match(/^##\s.+/gm) ?? [];
 
-describe("AGENTS.md skill-update warning (US-001)", () => {
-  // AC 1: AGENTS.md contains a section titled "Skills and Agent Instructions"
-  it("contains a 'Skills and Agent Instructions' section", () => {
+describe("AGENTS.md artifact review section (US-001)", () => {
+  // AC 1: AGENTS.md contains a section titled "Artifacts to Review on Changes"
+  it("contains an 'Artifacts to Review on Changes' section", () => {
     assert.ok(
-      sectionHeadings.some((h) => h === "## Skills and Agent Instructions"),
-      "AGENTS.md must contain section '## Skills and Agent Instructions'",
+      sectionHeadings.some((h) => h === "## Artifacts to Review on Changes"),
+      "AGENTS.md must contain section '## Artifacts to Review on Changes'",
     );
   });
 
-  // AC 2: The section warns about updating skills/tamandua-agents/SKILL.md
-  it("warns about updating skills/tamandua-agents/SKILL.md", () => {
+  // AC 2: The section instructs reviewing multiple artifact types, including SKILL.md
+  it("instructs reviewing multiple artifacts including skills/tamandua-agents/SKILL.md", () => {
     assert.match(
       agentsMd,
       /skills\/tamandua-agents\/SKILL\.md/,
@@ -29,8 +29,8 @@ describe("AGENTS.md skill-update warning (US-001)", () => {
     );
     assert.match(
       agentsMd,
-      /check.*skills\/tamandua-agents\/SKILL\.md.*needs? updating/i,
-      "AGENTS.md must warn about checking whether the skill needs updating",
+      /review.*whether.*artifacts.*need.*updating/i,
+      "AGENTS.md must instruct to review whether artifacts need updating",
     );
   });
 
@@ -85,7 +85,16 @@ describe("AGENTS.md skill-update warning (US-001)", () => {
     assert.match(agentsMd, /Parallel Test Safety/);
   });
 
-  // AC 5: The skill is provisioned as AGENTS.md/IDENTITY.md/SOUL.md
+  // AC 5: The new section covers docs, MCP, CLI, dashboard, and README artifacts
+  it("lists docs, MCP, CLI, dashboard, and README as artifacts to review", () => {
+    assert.match(agentsMd, /docs\/creating-workflows\.md/);
+    assert.match(agentsMd, /src\/server\/mcp-server\.ts/);
+    assert.match(agentsMd, /src\/cli\/cli\.ts/);
+    assert.match(agentsMd, /src\/server\/index\.html/);
+    assert.match(agentsMd, /README\.md/);
+  });
+
+  // AC 6: The skill is documented as provisioned as persona files
   it("documents that the skill is provisioned as persona files", () => {
     assert.match(
       agentsMd,
@@ -94,18 +103,18 @@ describe("AGENTS.md skill-update warning (US-001)", () => {
     );
   });
 
-  // Verify section ordering: Skills section comes after State and before Testing
-  it("places the Skills section between State and Testing", () => {
+  // Verify section ordering: Artifacts section comes after State and before Testing
+  it("places the Artifacts section between State and Testing", () => {
     const stateIdx = agentsMd.indexOf("## State");
-    const skillsIdx = agentsMd.indexOf("## Skills and Agent Instructions");
+    const artifactsIdx = agentsMd.indexOf("## Artifacts to Review on Changes");
     const testingIdx = agentsMd.indexOf("## Testing");
 
     assert.ok(stateIdx >= 0, "State section must exist");
-    assert.ok(skillsIdx >= 0, "Skills section must exist");
+    assert.ok(artifactsIdx >= 0, "Artifacts section must exist");
     assert.ok(testingIdx >= 0, "Testing section must exist");
     assert.ok(
-      stateIdx < skillsIdx && skillsIdx < testingIdx,
-      "Skills section must appear after State and before Testing",
+      stateIdx < artifactsIdx && artifactsIdx < testingIdx,
+      "Artifacts section must appear after State and before Testing",
     );
   });
 });

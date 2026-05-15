@@ -167,6 +167,26 @@ output. The remote MCP server can be managed independently with
 `tamandua source-path` prints the source checkout path that `tamandua update`
 uses to pull, rebuild, and reinstall.
 
+### 5) Review artifacts on changes
+
+When making code changes, review whether these artifacts need updating:
+
+- `docs/creating-workflows.md` — user-facing workflow documentation
+- `src/server/mcp-server.ts` — MCP tools registered for agent use
+- `src/cli/cli.ts` — CLI commands that agents invoke
+- `src/server/index.html` — dashboard UI
+- `README.md` — project overview
+
+Changes that typically cascade to multiple artifacts:
+
+- **Step lifecycle** changes → update CLI, MCP, docs
+- **CLI command** additions or changes → update skill, MCP, docs
+- **Agent provisioning** changes → update skill, workspace files
+- **Output format contract** changes → update docs, MCP
+
+If you update this skill file, verify that bundled workflow persona AGENTS.md
+files reflect the change.
+
 ## Examples
 
 ### Polling loop example

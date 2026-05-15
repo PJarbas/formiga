@@ -123,18 +123,25 @@ waiting → pending → running → done/failed
 - Logs: `~/.tamandua/tamandua.log`
 - Medic: `~/.tamandua/medic.json`
 
-## Skills and Agent Instructions
+## Artifacts to Review on Changes
 
-When making changes that affect Tamandua agent behavior, always check whether `skills/tamandua-agents/SKILL.md` needs updating. This skill is provisioned to Tamandua workflow agents as AGENTS.md, IDENTITY.md, and SOUL.md instructions — if the skill is outdated, agents will operate with incorrect guidance.
+When making changes, review whether these artifacts need updating:
 
-Changes that typically require skill updates include:
-- **Step lifecycle**: modifications to step claim/complete/fail/pipeline logic
-- **CLI commands**: new or changed CLI commands that agents use (step, workflow, logs, dashboard commands)
-- **Agent provisioning**: changes to how personas, workspace files, or skills are provisioned to agents
-- **Workflow structure**: new step types, loop wiring, or pipeline ordering changes
-- **Output format contracts**: changes to expected agent output formats (e.g., STATUS/CHANGES/TESTS blocks)
+- `docs/creating-workflows.md` — user-facing workflow documentation
+- `skills/tamandua-agents/SKILL.md` — provisioned to agents as AGENTS.md/IDENTITY.md/SOUL.md
+- `src/server/mcp-server.ts` — MCP tools registered for agent use
+- `src/cli/cli.ts` — CLI commands that agents invoke
+- `src/server/index.html` — dashboard UI
+- `README.md` — project overview
 
-If you update `skills/tamandua-agents/SKILL.md`, also verify that all bundled workflow persona AGENTS.md files reflect the change where relevant.
+Changes that typically cascade to multiple artifacts:
+- **Step lifecycle**: step claim/complete/fail/pipeline logic
+- **CLI commands**: new or changed commands (step, workflow, logs, dashboard)
+- **Agent provisioning**: personas, workspace files, skill provisioning
+- **Workflow structure**: new step types, loop wiring, pipeline ordering
+- **Output format contracts**: agent output blocks (STATUS/CHANGES/TESTS)
+
+If you update `skills/tamandua-agents/SKILL.md`, verify that bundled workflow persona AGENTS.md files reflect the change.
 
 ## Testing
 
@@ -151,31 +158,23 @@ Tests are safe for parallel execution with `node --test tests/*.test.ts src/**/*
 
 ### Parallel Test Safety
 
-Tamandua is often used to develop and test itself. A real daemon, MCP server, or dashboard may be running while `npm test` executes from this same checkout. Breaking test isolation can stop the live daemon, corrupt live `~/.tamandua` state, or make an active self-improvement run fail.
+Tamandua is often used to develop and test itself. All tests use isolated temporary HOME and TAMANDUA_STATE_DIR directories, so PID/port files never conflict across parallel test files.
 
-All tests use isolated temporary HOME and TAMANDUA_STATE_DIR directories per test, so PID/port files never conflict across parallel test files.
-
-- **Random ports:** Tests that spawn listeners use `reserveRandomPort()` (bind-to-0, capture assigned port) instead of hardcoded ports. Normal tests must not bind, fetch, or probe default ports 3334/3338/3339; default-port behavior should be asserted as constants or covered behind an explicit opt-in/manual test.
-- **Temp HOME isolation:** CLI integration tests create temporary HOME directories via `fs.mkdtempSync()`, pass `HOME` env to spawned CLI subprocesses, and clean up with `fs.rmSync(tempHome, { recursive: true, force: true })` in `finally` blocks. Helpers that run `dist/cli/cli.js` must require an explicit isolated env; do not fall back to raw `process.env`.
-- **Scoped daemon control:** Tests must not call `stopDaemon()`, `stopMcp()`, or `stopControlPlane()` against real HOME. Pass an explicit `{ homeDir: tempHome }` or stop the exact child process handle created by the test. Do not import/unlink real pid files such as `MCP_PID_FILE` or `CONTROL_PLANE_PID_FILE` for cleanup.
-- **Process cleanup safety:** If a test kills a PID from a file, first ensure that PID belongs to the test environment, for example by checking its `/proc/<pid>/environ` HOME or by using daemonctl helpers with `{ homeDir }`.
+- **Random ports:** Tests that spawn listeners use `reserveRandomPort()` (bind-to-0). Normal tests must not bind, fetch, or probe default ports 3334/3338/3339.
+- **Temp HOME isolation:** Use `fs.mkdtempSync()` for temporary HOME directories, pass `HOME` env to spawned subprocesses, clean up in `finally` blocks. Helpers that run CLI must use an explicit isolated env — do not fall back to `process.env`.
+- **Scoped daemon control:** Pass `{ homeDir: tempHome }` or stop the exact child process handle created by the test. Never call lifecycle functions against real HOME; verify any PID belongs to the test environment before killing it.
 - **Guard coverage:** `tests/test-isolation-guard.test.ts` scans for patterns that can touch the live daemon. Update it when adding new service lifecycle tests.
-- **Real CLI defaults remain 3334/3338/3339:** The production daemon, MCP, and control plane use ports 3334, 3338, and 3339 respectively. Only production code should use those defaults during normal automated tests.
 
 `npm test` remains a convenience alias that runs the full parallel suite.
 
 `src/server/mcp-server.ts` supports dependency injection via `createTamanduaMcpServer(..., { services })` / `startTamanduaMcpServer(..., { services })`; protocol tests in `src/server/mcp-server.test.ts` should use this hook instead of duplicating DB/event setup.
 
-`src/server/daemon.ts` now starts dashboard + MCP together (dashboard port from `~/.tamandua/port`, MCP fixed to 3338). Co-lifecycle regression coverage lives in `src/server/daemon.test.ts`.
+`src/server/daemon.ts` starts dashboard + MCP together (dashboard port from `~/.tamandua/port`, MCP fixed to 3338). Co-lifecycle regression coverage lives in `src/server/daemon.test.ts`.
 
 Dashboard UI regressions are covered in `src/server/dashboard.test.ts` by fetching `/` from `createDashboardServer(...)` and asserting required HTML/script hooks (including logs-tail cursor polling markup).
 
-Bundled skill artifacts are validated in `tests/workflow-validation.test.ts` (existence, frontmatter, required command guidance, and workflow `workspace.skills` wiring).
-Bundled workflows are discovered by directory under `workflows/`; `tests/workflow-validation.test.ts` asserts each directory's `workflow.yml` has a matching `id` and that every `workspace.files` path exists relative to the workflow directory.
-Workflow catalog discoverability is also regression-tested there: README entries (heading + pipeline sequence) can be enforced for bundled workflows such as `feature-dev-merge`.
-Bundled workflow agents that run Tamandua steps should declare `tamandua-agents` in `workspace.skills`; when adding it, preserve any existing skills like `agent-browser`.
+`tests/workflow-validation.test.ts` validates bundled workflows: directory discovery, `workflow.yml` id matching, `workspace.files` path existence, skill wiring and frontmatter, README catalog entries (e.g., `feature-dev-merge-worktree`). Bundled workflow agents should declare `tamandua-agents` in `workspace.skills`, preserving any existing skills like `agent-browser`.
 Step output parsing (`parseOutputKeyValues` in `src/installer/step-ops.ts`) lowercases keys, so an agent output like `ORIGINAL_BRANCH: main` is consumed downstream as `{{original_branch}}`.
 Installer skill copy behavior (workflow-local + shared bundled skills) is covered in `tests/agent-skill-provisioning.test.ts`.
 
-For CLI integration tests, spawn `dist/cli/cli.js` and set temporary `TAMANDUA_STATE_DIR` plus `HOME` so event files and SQLite DB access are isolated per test.
-Dashboard API integration tests should also run in a subprocess with temp `HOME` (e.g., `dist/server/dashboard.js`), because DB path resolution in `src/db.ts` is bound at module load.
+Integration tests (CLI and dashboard API) should spawn subprocesses with temp `HOME` and `TAMANDUA_STATE_DIR` to isolate event files, SQLite, and DB path resolution.
