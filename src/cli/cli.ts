@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { readVersionStatus } from "../lib/version-check.js";
+import { parseWorkflowRunArgs } from "./workflow-run-args.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -168,99 +169,6 @@ function printUsage() {
     "tamandua source-path                  Print source checkout path",
     "tamandua update [--force]             Pull latest, rebuild, reinstall",
   ].join("\n") + "\n");
-}
-
-export function _parseWorkflowRunArgs(args: string[]): {
-  taskTitle: string;
-  workingDirectoryForHarness?: string;
-  worktreeOriginRepository?: string;
-  worktreeOriginRef?: string;
-  noHurrySaveTokensMode?: boolean;
-} {
-  const taskParts: string[] = [];
-  let workingDirectoryForHarness: string | undefined;
-  let worktreeOriginRepository: string | undefined;
-  let worktreeOriginRef: string | undefined;
-  let noHurrySaveTokensMode: boolean | undefined;
-
-  for (let i = 0; i < args.length; i++) {
-    const token = args[i];
-
-    if (token === "--no-hurry-please-save-tokens-mode") {
-      noHurrySaveTokensMode = true;
-      continue;
-    }
-
-    if (token === "--working-directory-for-harness") {
-      const value = args[i + 1]?.trim();
-      if (!value) {
-        throw new Error("Missing value for --working-directory-for-harness.");
-      }
-      workingDirectoryForHarness = value;
-      i++;
-      continue;
-    }
-
-    const inlinePrefix = "--working-directory-for-harness=";
-    if (token.startsWith(inlinePrefix)) {
-      const value = token.slice(inlinePrefix.length).trim();
-      if (!value) {
-        throw new Error("Missing value for --working-directory-for-harness.");
-      }
-      workingDirectoryForHarness = value;
-      continue;
-    }
-
-    if (token === "--worktree-origin-repository") {
-      const value = args[i + 1]?.trim();
-      if (!value) {
-        throw new Error("Missing value for --worktree-origin-repository.");
-      }
-      worktreeOriginRepository = value;
-      i++;
-      continue;
-    }
-
-    const wtRepoPrefix = "--worktree-origin-repository=";
-    if (token.startsWith(wtRepoPrefix)) {
-      const value = token.slice(wtRepoPrefix.length).trim();
-      if (!value) {
-        throw new Error("Missing value for --worktree-origin-repository.");
-      }
-      worktreeOriginRepository = value;
-      continue;
-    }
-
-    if (token === "--worktree-origin-ref") {
-      const value = args[i + 1]?.trim();
-      if (!value) {
-        throw new Error("Missing value for --worktree-origin-ref.");
-      }
-      worktreeOriginRef = value;
-      i++;
-      continue;
-    }
-
-    const wtRefPrefix = "--worktree-origin-ref=";
-    if (token.startsWith(wtRefPrefix)) {
-      const value = token.slice(wtRefPrefix.length).trim();
-      if (!value) {
-        throw new Error("Missing value for --worktree-origin-ref.");
-      }
-      worktreeOriginRef = value;
-      continue;
-    }
-
-    taskParts.push(token);
-  }
-
-  return {
-    taskTitle: taskParts.join(" ").trim(),
-    workingDirectoryForHarness,
-    worktreeOriginRepository,
-    worktreeOriginRef,
-    noHurrySaveTokensMode,
-  };
 }
 
 function shouldSkipUpdateWarning(group: string, action: string): boolean {
@@ -911,9 +819,9 @@ async function main() {
     const workflowName = args[2];
     if (!workflowName) { process.stderr.write("Missing workflow name.\n"); process.exit(1); }
 
-    let runArgs: ReturnType<typeof _parseWorkflowRunArgs>;
+    let runArgs: ReturnType<typeof parseWorkflowRunArgs>;
     try {
-      runArgs = _parseWorkflowRunArgs(args.slice(3));
+      runArgs = parseWorkflowRunArgs(args.slice(3));
     } catch (err) {
       process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
@@ -970,7 +878,4 @@ async function main() {
   printUsage(); process.exit(1);
 }
 
-const scriptPath = fileURLToPath(import.meta.url);
-if (process.argv[1] === scriptPath) {
-  await main().catch((err) => { console.error("Error:", err.message); process.exit(1); });
-}
+await main().catch((err) => { console.error("Error:", err.message); process.exit(1); });
