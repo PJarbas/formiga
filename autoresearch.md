@@ -7,13 +7,13 @@ Increase line coverage of the tamandua project by adding tests to source files u
 - **Primary**: `coverage` (ratio, higher is better) — line coverage from `./measure-test-coverage.sh`
 - **Secondary**: none
 
-## Current Status (after 19 experiments)
+## Current Status (after 21 experiments)
 - **Baseline**: 0.4677 (46.77%)
-- **Stable best**: 0.4815 (48.15%)
-- **Improvement**: +0.0138 / +3.0%
-- **New test files**: 16 files, ~130 tests
+- **Stable best**: 0.4820 (48.20%)
+- **Improvement**: +0.0143 / +3.1%
+- **New test files**: 17 files modified/created, ~135 tests added
 - **New modules covered**: agent-cron (0→100%), checks (0→65%), medic-cron (0→83%), medic (0→44%)
-- **Biggest per-file gains**: pi-config (45→100%), symlink (66→87%), workspace-files (75→92%), run-harness (76→96%), update (70→89%)
+- **Biggest per-file gains**: pi-config (45→100%), symlink (66→87%), workspace-files (75→92%), run-harness (76→96%), update (70→89%), logger (86→95+)
 - **Limiting factor**: Pi dependency code (~thousands of uncovered lines) dominates the aggregate metric. Tamandua's own modules are now well-covered but the `all files` aggregate is capped by third-party code.
 
 ## How to Run
