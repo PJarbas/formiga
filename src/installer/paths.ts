@@ -78,6 +78,7 @@ export function resolveRunRoot(): string {
 }
 
 export function resolveTamanduaCli(): string {
-  // From dist/installer/paths.js -> ../cli/cli.js
-  return path.resolve(__dirname, "..", "cli", "cli.js");
+  // From dist/installer/paths.js -> ../../bin/tamandua. Use the shell
+  // launcher rather than dist/cli/cli.js so Node runtime flags stay centralized.
+  return path.resolve(__dirname, "..", "..", "bin", "tamandua");
 }
