@@ -62,6 +62,12 @@ const RESERVED_CONTEXT_KEYS = new Set([
   "working_directory_for_harness",
   "task",
   "run_id",
+  "workspace_mode",
+  "worktree_path",
+  "worktree_origin_repository",
+  "worktree_origin_ref",
+  "worktree_origin_sha",
+  "original_branch",
 ]);
 
 // ══════════════════════════════════════════════════════════════════════

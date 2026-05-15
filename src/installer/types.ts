@@ -87,6 +87,9 @@ export type WorkflowSpec = {
   notifications?: {
     url?: string;
   };
+  run?: {
+    workspace?: "direct" | "worktree";
+  };
 };
 
 export type WorkflowInstallResult = {

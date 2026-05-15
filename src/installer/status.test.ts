@@ -1,0 +1,332 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import assert from "node:assert/strict";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
+import { describe, it } from "node:test";
+import { once } from "node:events";
+
+const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
+
+// ── Helpers ──
+
+function createTempEnv() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-status-test-"));
+  const homeDir = path.join(root, "home");
+  const tamanduaDir = path.join(homeDir, ".tamandua");
+  fs.mkdirSync(tamanduaDir, { recursive: true });
+  return { root, homeDir, tamanduaDir };
+}
+
+function spawnCli(args: string[], env: Record<string, string>): {
+  child: ChildProcessWithoutNullStreams;
+  getStdout: () => string;
+  getStderr: () => string;
+} {
+  const child = spawn(process.execPath, [cliPath, ...args], {
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  return {
+    child,
+    getStdout: () => stdout,
+    getStderr: () => stderr,
+  };
+}
+
+function seedDb(dbPath: string, runId: string, context: Record<string, string>, wtData?: {
+  worktreeOriginRepository: string;
+  worktreeOriginGitCommonDir: string;
+  worktreePath: string;
+  worktreeOriginRef?: string;
+  worktreeOriginSha?: string;
+  originalBranch?: string;
+  status?: string;
+  cleanupPolicy?: string;
+}): void {
+  const db = new DatabaseSync(dbPath);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS runs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      task TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      context TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      run_number INTEGER,
+      tokens_spent INTEGER NOT NULL DEFAULT 0,
+      notify_url TEXT
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS steps (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      step_index INTEGER NOT NULL,
+      input_template TEXT NOT NULL DEFAULT '',
+      expects TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'waiting',
+      output TEXT,
+      retry_count INTEGER DEFAULT 0,
+      max_retries INTEGER DEFAULT 4,
+      type TEXT NOT NULL DEFAULT 'single',
+      loop_config TEXT,
+      current_story_id TEXT,
+      abandoned_count INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS run_worktrees (
+      run_id TEXT PRIMARY KEY,
+      worktree_origin_repository TEXT NOT NULL,
+      worktree_origin_git_common_dir TEXT NOT NULL,
+      worktree_path TEXT NOT NULL,
+      worktree_origin_ref TEXT,
+      worktree_origin_sha TEXT,
+      original_branch TEXT,
+      status TEXT NOT NULL DEFAULT 'creating',
+      cleanup_policy TEXT NOT NULL DEFAULT 'remove_on_terminal',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      removed_at TEXT,
+      error TEXT
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS events (
+      ts TEXT NOT NULL,
+      event TEXT NOT NULL,
+      run_id TEXT,
+      detail TEXT
+    )
+  `);
+
+  db.prepare(
+    "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))"
+  ).run(runId, "feature-dev", "Build something", "running", JSON.stringify(context));
+
+  if (wtData) {
+    db.prepare(
+      `INSERT INTO run_worktrees (run_id, worktree_origin_repository, worktree_origin_git_common_dir, worktree_path,
+         worktree_origin_ref, worktree_origin_sha, original_branch, status, cleanup_policy)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      runId,
+      wtData.worktreeOriginRepository,
+      wtData.worktreeOriginGitCommonDir,
+      wtData.worktreePath,
+      wtData.worktreeOriginRef ?? null,
+      wtData.worktreeOriginSha ?? null,
+      wtData.originalBranch ?? null,
+      wtData.status ?? "ready",
+      wtData.cleanupPolicy ?? "remove_on_success",
+    );
+  }
+
+  db.close();
+}
+
+// ── Tests ──
+
+describe("CLI workflow status worktree display", () => {
+  it("shows worktree path and origin ref for worktree runs", async () => {
+    const env = createTempEnv();
+    const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+    const runId = "eeee5555-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+    seedDb(dbPath, runId, { workspace_mode: "worktree" }, {
+      worktreeOriginRepository: "/home/user/my-repo",
+      worktreeOriginGitCommonDir: "/home/user/my-repo/.git",
+      worktreePath: "/tmp/tamandua-worktrees/my-repo-hash/5-eeee5555",
+      worktreeOriginRef: "feature/cool-thing",
+      worktreeOriginSha: "def789abc",
+    });
+
+    const { child, getStdout } = spawnCli(
+      ["workflow", "status", runId],
+      { HOME: env.homeDir }
+    );
+
+    await new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+    });
+
+    const stdout = getStdout();
+    assert.match(stdout, /Run: eeee5555/);
+    assert.match(stdout, /Workspace: worktree/);
+    assert.match(stdout, /Worktree: \/tmp\/tamandua-worktrees\/my-repo-hash\/5-eeee5555/);
+    assert.match(stdout, /Origin ref: feature\/cool-thing/);
+    assert.match(stdout, /Tokens: 0/);
+
+    try { fs.rmSync(env.root, { recursive: true, force: true }); } catch { /* cleanup */ }
+  });
+
+  it("does NOT show worktree info for direct runs", async () => {
+    const env = createTempEnv();
+    const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+    const runId = "ffff6666-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+    seedDb(dbPath, runId, { workspace_mode: "direct" });
+
+    const { child, getStdout } = spawnCli(
+      ["workflow", "status", runId],
+      { HOME: env.homeDir }
+    );
+
+    await new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+    });
+
+    const stdout = getStdout();
+    assert.match(stdout, /Run: ffff6666/);
+    assert.doesNotMatch(stdout, /Workspace:/);
+    assert.doesNotMatch(stdout, /Worktree:/);
+    assert.doesNotMatch(stdout, /Origin ref:/);
+
+    try { fs.rmSync(env.root, { recursive: true, force: true }); } catch { /* cleanup */ }
+  });
+
+  it("compact workflow runs list does not show worktree info", async () => {
+    const env = createTempEnv();
+    const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+    const runId = "abab7777-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+    seedDb(dbPath, runId, { workspace_mode: "worktree" }, {
+      worktreeOriginRepository: "/home/user/project",
+      worktreeOriginGitCommonDir: "/home/user/project/.git",
+      worktreePath: "/tmp/wt/test-3",
+      worktreeOriginRef: "feat/ui",
+    });
+
+    const { child, getStdout } = spawnCli(
+      ["workflow", "runs"],
+      { HOME: env.homeDir }
+    );
+
+    await new Promise<void>((resolve) => {
+      child.on("close", () => resolve());
+    });
+
+    const stdout = getStdout();
+    assert.match(stdout, /Workflow runs:/);
+    assert.match(stdout, /abab7777/);
+    assert.doesNotMatch(stdout, /worktree/i);
+    assert.doesNotMatch(stdout, /Origin ref:/);
+
+    try { fs.rmSync(env.root, { recursive: true, force: true }); } catch { /* cleanup */ }
+  });
+});
+
+describe("dashboard run detail worktree enrichment", () => {
+  it("includes worktree data in API response for worktree runs", async () => {
+    const env = createTempEnv();
+    const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+    const runId = "caca8888-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+    seedDb(dbPath, runId, { workspace_mode: "worktree" }, {
+      worktreeOriginRepository: "/home/user/my-repo",
+      worktreeOriginGitCommonDir: "/home/user/my-repo/.git",
+      worktreePath: "/tmp/tamandua-worktrees/my-repo-hash/8-caca8888",
+      worktreeOriginRef: "main",
+      worktreeOriginSha: "abc123",
+      status: "ready",
+      cleanupPolicy: "remove_on_success",
+    });
+
+    const { createDashboardServer } = await import("../../dist/server/dashboard.js");
+
+    // Set HOME so db module picks up our test DB
+    const origHome = process.env.HOME;
+    process.env.HOME = env.homeDir;
+    try {
+      const server = createDashboardServer(0);
+      if (!server.listening) {
+        await once(server, "listening");
+      }
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+
+      try {
+        const response = await fetch(`http://localhost:${port}/api/runs/${runId}`);
+        const data = await response.json() as {
+          run: Record<string, unknown>;
+          steps: unknown[];
+          events: unknown[];
+          worktree: Record<string, unknown> | null;
+        };
+
+        assert.equal(response.status, 200);
+        assert.ok(data.worktree !== null, "worktree should be present");
+        assert.equal(data.worktree!.worktree_path, "/tmp/tamandua-worktrees/my-repo-hash/8-caca8888");
+        assert.equal(data.worktree!.worktree_origin_repository, "/home/user/my-repo");
+        assert.equal(data.worktree!.worktree_origin_ref, "main");
+        assert.equal(data.worktree!.worktree_origin_sha, "abc123");
+        assert.equal(data.worktree!.wt_status, "ready");
+        assert.equal(data.worktree!.cleanup_policy, "remove_on_success");
+      } finally {
+        server.close();
+        await once(server, "close");
+      }
+    } finally {
+      process.env.HOME = origHome;
+      try { fs.rmSync(env.root, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
+  });
+
+  it("does not include worktree data in API response for direct runs", async () => {
+    const env = createTempEnv();
+    const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+    const runId = "dada9999-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+    seedDb(dbPath, runId, { workspace_mode: "direct" });
+
+    const { createDashboardServer } = await import("../../dist/server/dashboard.js");
+
+    const origHome = process.env.HOME;
+    process.env.HOME = env.homeDir;
+    try {
+      const server = createDashboardServer(0);
+      if (!server.listening) {
+        await once(server, "listening");
+      }
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+
+      try {
+        const response = await fetch(`http://localhost:${port}/api/runs/${runId}`);
+        const data = await response.json() as {
+          run: Record<string, unknown>;
+          worktree: unknown;
+        };
+
+        assert.equal(response.status, 200);
+        assert.equal(data.worktree, null, "worktree should be null for direct runs");
+      } finally {
+        server.close();
+        await once(server, "close");
+      }
+    } finally {
+      process.env.HOME = origHome;
+      try { fs.rmSync(env.root, { recursive: true, force: true }); } catch { /* cleanup */ }
+    }
+  });
+});

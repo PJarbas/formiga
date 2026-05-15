@@ -169,6 +169,29 @@ function migrate(db: DatabaseSync): void {
     `);
     db.exec("INSERT OR IGNORE INTO tamandua_stats (id, system_tokens_spent) VALUES (1, 0)");
   }
+
+  // ── Worktree tracking ──
+  // Tracks managed git worktrees created for run workspace isolation.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS run_worktrees (
+      run_id TEXT PRIMARY KEY,
+      worktree_origin_repository TEXT NOT NULL,
+      worktree_origin_git_common_dir TEXT NOT NULL,
+      worktree_path TEXT NOT NULL,
+      worktree_origin_ref TEXT,
+      worktree_origin_sha TEXT,
+      original_branch TEXT,
+      status TEXT NOT NULL DEFAULT 'creating',
+      cleanup_policy TEXT NOT NULL DEFAULT 'remove_on_success',
+      created_at TEXT NOT NULL,
+      removed_at TEXT,
+      error TEXT
+    );
+  `);
+
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_run_worktrees_status ON run_worktrees(status)",
+  );
 }
 
 export function nextRunNumber(): number {

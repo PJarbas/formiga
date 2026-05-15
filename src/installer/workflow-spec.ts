@@ -88,5 +88,18 @@ export async function loadWorkflowSpec(
     }
   }
 
+  // Validate run.workspace if present
+  if (spec.run && typeof spec.run === "object") {
+    const runCfg = spec.run as Record<string, unknown>;
+    if (runCfg.workspace !== undefined) {
+      if (runCfg.workspace !== "direct" && runCfg.workspace !== "worktree") {
+        throw new Error(
+          `workflow.yml in ${workflowDir} has invalid run.workspace value: ` +
+          `"${String(runCfg.workspace)}". Must be "direct" or "worktree".`,
+        );
+      }
+    }
+  }
+
   return spec as unknown as WorkflowSpec;
 }

@@ -14,6 +14,7 @@ import {
   RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY,
   validateRunHarnessForScheduling,
 } from "./run-harness.js";
+import { createRunWorktree, type ManagedRunWorktree } from "./worktree-manager.js";
 
 export interface RunWorkflowParams {
   workflowId: string;
@@ -23,6 +24,10 @@ export interface RunWorkflowParams {
   context?: Record<string, string>;
   /** Working directory for the pi harness/tool execution environment */
   workingDirectoryForHarness?: string;
+  /** Origin repository for worktree-based workflows */
+  worktreeOriginRepository?: string;
+  /** Origin ref for worktree-based workflows */
+  worktreeOriginRef?: string;
 }
 
 export interface RunWorkflowResult {
@@ -53,6 +58,8 @@ export async function runWorkflow(
     notifyUrl,
     context = {},
     workingDirectoryForHarness: requestedWorkingDirectoryForHarness,
+    worktreeOriginRepository,
+    worktreeOriginRef,
   } = params;
 
   // Load the workflow spec from the installed workflow directory
@@ -66,9 +73,78 @@ export async function runWorkflow(
   const runId = crypto.randomUUID();
   const runNumber = nextRunNumber();
 
-  const workingDirectoryForHarness = path.resolve(
-    requestedWorkingDirectoryForHarness ?? process.cwd(),
-  );
+  const workspaceMode = workflow.run?.workspace ?? "direct";
+
+  let workingDirectoryForHarness: string;
+
+  // Seed the run context with the task description so step input templates can
+  // reference {{task}} from the very first step. Without this, the planner step
+  // (which always references {{task}}) fails immediately on claim with a missing
+  // template key error, aborting the whole run.
+  const seededContext: Record<string, string> = {
+    task: taskTitle,
+    ...context,
+    workspace_mode: workspaceMode,
+  };
+
+  if (workspaceMode === "direct") {
+    if (worktreeOriginRepository) {
+      throw new Error(
+        "--worktree-origin-repository is only valid for workflows with run.workspace: worktree",
+      );
+    }
+    if (worktreeOriginRef) {
+      throw new Error(
+        "--worktree-origin-ref is only valid for workflows with run.workspace: worktree",
+      );
+    }
+
+    workingDirectoryForHarness = path.resolve(
+      requestedWorkingDirectoryForHarness ?? process.cwd(),
+    );
+    seededContext[RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY] =
+      workingDirectoryForHarness;
+    seededContext.repo = workingDirectoryForHarness;
+  } else if (workspaceMode === "worktree") {
+    if (requestedWorkingDirectoryForHarness) {
+      throw new Error(
+        "--working-directory-for-harness is not valid for workflows with run.workspace: worktree. Use --worktree-origin-repository and --worktree-origin-ref instead.",
+      );
+    }
+
+    const originRepo = worktreeOriginRepository ?? process.cwd();
+    let managedWorktree: ManagedRunWorktree;
+    try {
+      managedWorktree = createRunWorktree({
+        runId,
+        runNumber,
+        workflowId,
+        worktreeOriginRepository: originRepo,
+        worktreeOriginRef,
+      });
+    } catch (err) {
+      // createRunWorktree already marks the run_worktrees row as error internally.
+      // Fail the run start before registering with the daemon.
+      throw new Error(
+        `Failed to create managed worktree for run: ${(err as Error).message}`,
+      );
+    }
+
+    workingDirectoryForHarness = managedWorktree.worktreePath;
+    seededContext[RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY] =
+      managedWorktree.worktreePath;
+    seededContext.repo = managedWorktree.worktreePath;
+    seededContext.worktree_path = managedWorktree.worktreePath;
+    seededContext.worktree_origin_repository =
+      managedWorktree.worktreeOriginRepository;
+    seededContext.worktree_origin_ref = managedWorktree.worktreeOriginRef;
+    seededContext.worktree_origin_sha = managedWorktree.worktreeOriginSha;
+    seededContext.original_branch = managedWorktree.originalBranch ?? "";
+  } else {
+    throw new Error(
+      `Invalid run.workspace value: "${workspaceMode}". Expected "direct" or "worktree".`,
+    );
+  }
 
   let workingDirectoryStats;
   try {
@@ -89,16 +165,6 @@ export async function runWorkflow(
     );
   }
 
-  // Seed the run context with the task description so step input templates can
-  // reference {{task}} from the very first step. Without this, the planner step
-  // (which always references {{task}}) fails immediately on claim with a missing
-  // template key error, aborting the whole run.
-  const seededContext = {
-    task: taskTitle,
-    ...context,
-    [RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY]: workingDirectoryForHarness,
-    repo: workingDirectoryForHarness,
-  };
   const contextJson = JSON.stringify(seededContext);
 
   // Insert the run record. New runs start with

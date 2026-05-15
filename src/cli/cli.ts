@@ -23,6 +23,13 @@ import { pauseRunWithDaemon, resumeRunWithDaemon } from "../server/control-clien
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
 import { ensureCliSymlink } from "../installer/symlink.js";
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
+import {
+  listRunWorktrees,
+  getRunWorktree,
+  removeRunWorktree,
+  type ManagedRunWorktree,
+} from "../installer/worktree-manager.js";
+import { getWorkflowStatus as getWorkflowStatusFn } from "../installer/status.js";
 import { runUpdate } from "./update.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -46,6 +53,38 @@ function printEvents(events: TamanduaEvent[]): void {
   for (const line of formatLogsTailLines(events)) {
     console.log(line);
   }
+}
+
+function parseDuration(input: string): number {
+  const match = input.match(/^(\d+)([dhm])$/);
+  if (!match) {
+    throw new Error(
+      `Invalid duration format: "${input}". Use <number><unit> where unit is d, h, or m (e.g. 7d, 24h, 30m).`,
+    );
+  }
+  const value = parseInt(match[1], 10);
+  const unit = match[2];
+  switch (unit) {
+    case "d":
+      return value * 24 * 60 * 60 * 1000;
+    case "h":
+      return value * 60 * 60 * 1000;
+    case "m":
+      return value * 60 * 1000;
+    default:
+      throw new Error(`Unknown duration unit: ${unit}`);
+  }
+}
+
+function formatWorktreeStatus(wt: ManagedRunWorktree): string {
+  const idShort = wt.runId.substring(0, 8);
+  const repoShort =
+    wt.worktreeOriginRepository.split("/").slice(-2).join("/") ||
+    wt.worktreeOriginRepository;
+  return [
+    `  [${wt.status.padEnd(9)}] ${idShort}  ${wt.cleanupPolicy.padEnd(20)} ${wt.worktreePath}`,
+    `           origin: ${repoShort}${wt.worktreeOriginRef ? ` @ ${wt.worktreeOriginRef}` : ""}`,
+  ].join("\n");
 }
 
 function getLogsTailPollIntervalMs(): number {
@@ -92,7 +131,13 @@ function printUsage() {
     "", "tamandua workflow list                List available workflows",
     "tamandua workflow install <name>      Install a workflow",
     "tamandua workflow run <name> <task> [--working-directory-for-harness <dir>]",
-    "                                      Start a workflow run",
+    "                                      [--worktree-origin-repository <dir>]",
+    "                                      [--worktree-origin-ref <ref>]  Start a workflow run",
+    "", "tamandua worktree list                List managed worktrees",
+    "tamandua worktree status <run-id>     Show worktree details for a run",
+    "tamandua worktree remove <run-id>     Remove managed worktree [--force]",
+    "tamandua worktree prune --completed   Remove old completed worktrees",
+    "           --older-than <duration>    (e.g. 7d, 24h, 30m)",
     "tamandua workflow status <query>      Check run status",
     "tamandua workflow runs                List all workflow runs",
     "tamandua workflow pause <run-id>      Pause a running workflow",
@@ -123,9 +168,16 @@ function printUsage() {
   ].join("\n") + "\n");
 }
 
-function parseWorkflowRunArgs(args: string[]): { taskTitle: string; workingDirectoryForHarness?: string } {
+function parseWorkflowRunArgs(args: string[]): {
+  taskTitle: string;
+  workingDirectoryForHarness?: string;
+  worktreeOriginRepository?: string;
+  worktreeOriginRef?: string;
+} {
   const taskParts: string[] = [];
   let workingDirectoryForHarness: string | undefined;
+  let worktreeOriginRepository: string | undefined;
+  let worktreeOriginRef: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
@@ -150,12 +202,54 @@ function parseWorkflowRunArgs(args: string[]): { taskTitle: string; workingDirec
       continue;
     }
 
+    if (token === "--worktree-origin-repository") {
+      const value = args[i + 1]?.trim();
+      if (!value) {
+        throw new Error("Missing value for --worktree-origin-repository.");
+      }
+      worktreeOriginRepository = value;
+      i++;
+      continue;
+    }
+
+    const wtRepoPrefix = "--worktree-origin-repository=";
+    if (token.startsWith(wtRepoPrefix)) {
+      const value = token.slice(wtRepoPrefix.length).trim();
+      if (!value) {
+        throw new Error("Missing value for --worktree-origin-repository.");
+      }
+      worktreeOriginRepository = value;
+      continue;
+    }
+
+    if (token === "--worktree-origin-ref") {
+      const value = args[i + 1]?.trim();
+      if (!value) {
+        throw new Error("Missing value for --worktree-origin-ref.");
+      }
+      worktreeOriginRef = value;
+      i++;
+      continue;
+    }
+
+    const wtRefPrefix = "--worktree-origin-ref=";
+    if (token.startsWith(wtRefPrefix)) {
+      const value = token.slice(wtRefPrefix.length).trim();
+      if (!value) {
+        throw new Error("Missing value for --worktree-origin-ref.");
+      }
+      worktreeOriginRef = value;
+      continue;
+    }
+
     taskParts.push(token);
   }
 
   return {
     taskTitle: taskParts.join(" ").trim(),
     workingDirectoryForHarness,
+    worktreeOriginRepository,
+    worktreeOriginRef,
   };
 }
 
@@ -466,6 +560,169 @@ async function main() {
     return;
   }
 
+  if (group === "worktree") {
+    if (action === "list") {
+      const worktrees = listRunWorktrees();
+      if (worktrees.length === 0) {
+        console.log("No managed worktrees found.");
+        return;
+      }
+      console.log("Managed worktrees:");
+      for (const wt of worktrees) {
+        console.log(formatWorktreeStatus(wt));
+      }
+      return;
+    }
+
+    if (action === "status") {
+      if (!target) {
+        process.stderr.write("Missing run-id.\nUsage: tamandua worktree status <run-id>\n");
+        process.exit(1);
+      }
+      // Resolve the run ID prefix to a full run ID via getWorkflowStatus
+      let fullRunId: string;
+      try {
+        fullRunId = getWorkflowStatusFn(target).id;
+      } catch {
+        process.stderr.write(
+          `No run found matching "${target}".\n`,
+        );
+        process.exit(1);
+      }
+
+      const wt = getRunWorktree(fullRunId);
+      if (!wt) {
+        console.log(`No managed worktree for run ${fullRunId.slice(0, 8)}.`);
+        return;
+      }
+
+      console.log(`Run:          ${wt.runId.slice(0, 8)}`);
+      console.log(`Status:       ${wt.status}`);
+      console.log(`Origin repo:  ${wt.worktreeOriginRepository}`);
+      console.log(`Origin ref:   ${wt.worktreeOriginRef || "(none)"}`);
+      console.log(`Origin SHA:   ${wt.worktreeOriginSha || "(none)"}`);
+      console.log(`Orig branch:  ${wt.originalBranch || "(none)"}`);
+      console.log(`Worktree:     ${wt.worktreePath}`);
+      console.log(`Cleanup:      ${wt.cleanupPolicy}`);
+      return;
+    }
+
+    if (action === "remove") {
+      if (!target) {
+        process.stderr.write("Missing run-id.\nUsage: tamandua worktree remove <run-id> [--force]\n");
+        process.exit(1);
+      }
+      const force = args.includes("--force");
+      let fullRunId: string;
+      try {
+        fullRunId = getWorkflowStatusFn(target).id;
+      } catch {
+        process.stderr.write(
+          `No run found matching "${target}".\n`,
+        );
+        process.exit(1);
+      }
+
+      try {
+        removeRunWorktree({ runId: fullRunId, force });
+        console.log(`Removed managed worktree for run ${fullRunId.slice(0, 8)}.`);
+      } catch (err) {
+        process.stderr.write(
+          `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (action === "prune") {
+      const completedFlagIdx = args.indexOf("--completed");
+      if (completedFlagIdx === -1) {
+        process.stderr.write(
+          "Missing --completed flag.\nUsage: tamandua worktree prune --completed --older-than <duration>\n",
+        );
+        process.exit(1);
+      }
+
+      const olderThanIdx = args.indexOf("--older-than");
+      if (olderThanIdx === -1 || !args[olderThanIdx + 1]) {
+        process.stderr.write(
+          "Missing --older-than <duration>.\nUsage: tamandua worktree prune --completed --older-than <duration>\n",
+        );
+        process.exit(1);
+      }
+
+      let thresholdMs: number;
+      try {
+        thresholdMs = parseDuration(args[olderThanIdx + 1]);
+      } catch (err) {
+        process.stderr.write(
+          `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        process.exit(1);
+      }
+
+      const cutoff = Date.now() - thresholdMs;
+      const worktrees = listRunWorktrees();
+      let pruned = 0;
+
+      for (const wt of worktrees) {
+        if (wt.status === "removed") continue;
+
+        // Check if the associated run is completed/canceled
+        let runStatus: string;
+        try {
+          runStatus = getWorkflowStatusFn(wt.runId).status;
+        } catch {
+          // Run not found, skip
+          continue;
+        }
+
+        if (runStatus !== "completed" && runStatus !== "canceled") continue;
+
+        // Check age: we need the worktree created_at from DB
+        // getRunWorktree() doesn't expose created_at, so query DB directly
+        const { getDb } = await import("../db.js");
+        const db = getDb();
+        const row = db
+          .prepare(
+            "SELECT created_at FROM run_worktrees WHERE run_id = ?",
+          )
+          .get(wt.runId) as { created_at: string } | undefined;
+
+        if (!row) continue;
+
+        const createdAt = new Date(row.created_at).getTime();
+        if (createdAt >= cutoff) continue;
+
+        // Remove (force for non-ready status, since it's terminal pruning)
+        try {
+          removeRunWorktree({ runId: wt.runId, force: true });
+          pruned++;
+          console.log(
+            `Pruned worktree for run ${wt.runId.slice(0, 8)} (${runStatus}).`,
+          );
+        } catch (err) {
+          console.warn(
+            `Warning: failed to prune run ${wt.runId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      if (pruned === 0) {
+        console.log("No worktrees to prune.");
+      } else {
+        console.log(`Pruned ${pruned} worktree(s).`);
+      }
+      return;
+    }
+
+    process.stderr.write(
+      `Unknown worktree action: ${action}\nUsage: tamandua worktree <list|status|remove|prune>\n`,
+    );
+    process.exit(1);
+  }
+
   if (args.length < 2) { printUsage(); process.exit(1); }
   if (group !== "workflow") { printUsage(); process.exit(1); }
 
@@ -640,6 +897,8 @@ async function main() {
       workflowId: workflowName,
       taskTitle: runArgs.taskTitle,
       workingDirectoryForHarness: runArgs.workingDirectoryForHarness,
+      worktreeOriginRepository: runArgs.worktreeOriginRepository,
+      worktreeOriginRef: runArgs.worktreeOriginRef,
     });
     console.log(`Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}\nHarness CWD: ${result.workingDirectoryForHarness}`);
     return;
@@ -649,7 +908,13 @@ async function main() {
     if (!target) { process.stderr.write("Missing query.\n"); process.exit(1); }
     try {
       const result = getWorkflowStatus(target);
-      console.log(`Run: ${result.id.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.task}\nStatus: ${result.status}\nTokens: ${result.tokensSpent.toLocaleString()}\nSteps:`);
+      console.log(`Run: ${result.id.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.task}\nStatus: ${result.status}\nTokens: ${result.tokensSpent.toLocaleString()}`);
+      if (result.workspace_mode === "worktree") {
+        console.log(`Workspace: ${result.workspace_mode}`);
+        if (result.worktree_path) console.log(`Worktree: ${result.worktree_path}`);
+        if (result.worktree_origin_ref) console.log(`Origin ref: ${result.worktree_origin_ref}`);
+      }
+      console.log(`Steps:`);
       for (const step of result.steps) {
         const icon = step.status === "done" ? "  [done   ]" : step.status === "running" ? "  [running]" : step.status === "failed" ? "  [failed ]" : step.status === "pending" ? "  [pending]" : `  [${step.status.padEnd(7)}]`;
         console.log(`${icon} ${step.stepId} (${step.agentId.split("_").slice(-1)[0]})`);

@@ -124,7 +124,22 @@ function handleRunDetail(
 
     const events = getRunEvents(runId);
 
-    jsonResponse(res, { run, steps, events });
+    // Enrich with worktree information
+    let worktree: unknown = null;
+    try {
+      const ctx = JSON.parse((run as { context?: string }).context ?? "{}") as Record<string, string>;
+      if (ctx.workspace_mode === "worktree") {
+        worktree = db
+          .prepare(
+            "SELECT worktree_path, worktree_origin_repository, worktree_origin_ref, worktree_origin_sha, status AS wt_status, cleanup_policy FROM run_worktrees WHERE run_id = ?",
+          )
+          .get(runId) ?? null;
+      }
+    } catch {
+      // context may be malformed
+    }
+
+    jsonResponse(res, { run, steps, events, worktree });
   } catch (err) {
     errorResponse(res, `Failed to get run detail: ${(err as Error).message}`);
   }

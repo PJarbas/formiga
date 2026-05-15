@@ -16,15 +16,22 @@ function wfDir(id: string): string {
 
 describe("workflow parsing", () => {
   it("finds at least 4 bundled workflows", () => {
-    assert.ok(workflowIds.length >= 4);
+    assert.ok(workflowIds.length >= 10);
     assert.ok(workflowIds.includes("feature-dev"));
     assert.ok(workflowIds.includes("feature-dev-merge"));
+    assert.ok(workflowIds.includes("feature-dev-merge-worktree"));
     assert.ok(workflowIds.includes("security-audit"));
     assert.ok(workflowIds.includes("security-audit-github-pr"));
     assert.ok(workflowIds.includes("bug-fix-github-pr"));
     assert.ok(workflowIds.includes("bug-fix-merge"));
     assert.ok(workflowIds.includes("security-audit-merge"));
     assert.ok(workflowIds.includes("bug-fix"));
+    // US-010: worktree variants
+    assert.ok(workflowIds.includes("bug-fix-merge-worktree"));
+    assert.ok(workflowIds.includes("security-audit-merge-worktree"));
+    assert.ok(workflowIds.includes("feature-dev-worktree"));
+    assert.ok(workflowIds.includes("bug-fix-worktree"));
+    assert.ok(workflowIds.includes("security-audit-worktree"));
   });
 
   for (const id of workflowIds) {
@@ -654,5 +661,271 @@ describe("US-004: fast-forward-first merge contradiction prevention and ordering
       assert.match(setupStep!.input, /Instructions:/,
         `${id}: setup input should contain an Instructions section`);
     }
+  });
+});
+
+describe("US-010: Create remaining worktree workflow variants", () => {
+  const worktreeVariantIds = [
+    "bug-fix-merge-worktree",
+    "security-audit-merge-worktree",
+    "feature-dev-worktree",
+    "bug-fix-worktree",
+    "security-audit-worktree",
+  ];
+
+  const mergeWorktreeVariantIds = [
+    "bug-fix-merge-worktree",
+    "security-audit-merge-worktree",
+  ];
+
+  const nonMergeWorktreeVariantIds = [
+    "feature-dev-worktree",
+    "bug-fix-worktree",
+    "security-audit-worktree",
+  ];
+
+  for (const id of worktreeVariantIds) {
+    it(`${id} parses successfully`, async () => {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      assert.equal(spec.id, id);
+      assert.ok(spec.agents.length > 0);
+      assert.ok(spec.steps.length > 0);
+    });
+
+    it(`${id} declares run.workspace: worktree`, async () => {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      assert.equal(spec.run?.workspace, "worktree");
+    });
+
+    it(`${id} all agent workspace files exist`, async () => {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      for (const agent of spec.agents) {
+        for (const [fileName, relativePath] of Object.entries(agent.workspace.files)) {
+          const resolved = resolve(wfDir(id), relativePath);
+          assert.ok(existsSync(resolved),
+            `${id}/${agent.id}: ${relativePath} should exist (for ${fileName})`);
+        }
+      }
+    });
+
+    it(`${id} all agents have tamandua-agents skill`, async () => {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      for (const agent of spec.agents) {
+        const skills = agent.workspace.skills ?? [];
+        assert.ok(
+          skills.includes("tamandua-agents"),
+          `${id}/${agent.id}: workspace.skills must include tamandua-agents`,
+        );
+      }
+    });
+
+    it(`${id} setup step adapted for detached worktree startup`, async () => {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      const setupStep = spec.steps.find((s) => s.id === "setup");
+      assert.ok(setupStep, `${id}: must define setup step`);
+
+      // Should reference {{original_branch}} context variable (pre-seeded by harness)
+      assert.match(setupStep!.input, /\{\{original_branch\}\}/);
+      assert.match(setupStep!.input, /ORIGINAL_BRANCH:\s*\{\{original_branch\}\}/);
+
+      // Should tell agent not to run git branch --show-current (detached HEAD)
+      assert.match(setupStep!.input, /do NOT run.*git branch --show-current/i);
+
+      // Should NOT include shell command to capture original_branch
+      assert.doesNotMatch(setupStep!.input, /ORIGINAL_BRANCH=\$\(git branch --show-current\)/);
+    });
+  }
+
+  for (const id of mergeWorktreeVariantIds) {
+    it(`${id} finalize_merge step has worktree_origin_repository guidance`, async () => {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      const finalStep = spec.steps.find((s) => s.id === "finalize_merge");
+      assert.ok(finalStep, `${id}: must define finalize_merge step`);
+
+      // Should reference {{worktree_origin_repository}} context variable
+      assert.match(finalStep!.input, /\{\{worktree_origin_repository\}\}/);
+
+      // Should include worktree mode instructions
+      assert.match(finalStep!.input, /Worktree Mode/);
+
+      // Should direct Phase 1 and Phase 3 to the origin repository
+      assert.match(finalStep!.input, /cd \{\{worktree_origin_repository\}\}/);
+    });
+
+    it(`${id} preserves fast-forward-first merge ordering (FF check before squash)`, async () => {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      const finalStep = spec.steps.find((s) => s.id === "finalize_merge");
+      assert.ok(finalStep);
+
+      const input = finalStep!.input;
+      const ffIdx = input.search(/git merge-base --is-ancestor/);
+      const squashIdx = input.search(/git merge --squash/);
+
+      assert.ok(ffIdx >= 0, `${id}: must contain git merge-base --is-ancestor`);
+      assert.ok(squashIdx >= 0, `${id}: must contain git merge --squash`);
+      assert.ok(
+        ffIdx < squashIdx,
+        `${id}: FF check (pos ${ffIdx}) must appear before squash merge (pos ${squashIdx})`,
+      );
+    });
+  }
+
+  it("security-audit-merge-worktree finalize_merge has tester retry path", async () => {
+    const spec = await loadWorkflowSpec(wfDir("security-audit-merge-worktree"));
+    const finalStep = spec.steps.find((s) => s.id === "finalize_merge");
+    assert.ok(finalStep);
+    assert.match(finalStep!.input, /RETRY_STEP:\s*test/);
+    assert.match(finalStep!.input, /CONFLICT_NOTES/);
+  });
+
+  for (const id of nonMergeWorktreeVariantIds) {
+    it(`${id} has no finalize_merge step (non-merge variant)`, async () => {
+      const spec = await loadWorkflowSpec(wfDir(id));
+      const stepIds = spec.steps.map((s) => s.id);
+      assert.ok(!stepIds.includes("finalize_merge"), `${id}: non-merge variant should not have finalize_merge step`);
+    });
+  }
+
+  it("feature-dev-worktree verifier agent preserves agent-browser skill", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-worktree"));
+    const verifier = spec.agents.find((a) => a.id === "verifier");
+    assert.ok(verifier, "must define verifier agent");
+    const skills = verifier!.workspace.skills ?? [];
+    assert.ok(skills.includes("agent-browser"), "verifier workspace.skills must preserve agent-browser");
+  });
+
+  it("bug-fix-merge-worktree step order matches original (triage → investigate → setup → fix → verify → finalize_merge)", async () => {
+    const spec = await loadWorkflowSpec(wfDir("bug-fix-merge-worktree"));
+    const stepIds = spec.steps.map((s) => s.id);
+    assert.deepEqual(stepIds, ["triage", "investigate", "setup", "fix", "verify", "finalize_merge"]);
+  });
+
+  it("security-audit-merge-worktree step order matches original", async () => {
+    const spec = await loadWorkflowSpec(wfDir("security-audit-merge-worktree"));
+    const stepIds = spec.steps.map((s) => s.id);
+    assert.deepEqual(stepIds, ["scan", "prioritize", "setup", "fix", "verify", "test", "finalize_merge"]);
+  });
+
+  it("bug-fix-worktree has no merger agent (non-merge variant)", async () => {
+    const spec = await loadWorkflowSpec(wfDir("bug-fix-worktree"));
+    const agentIds = spec.agents.map((a) => a.id);
+    assert.ok(!agentIds.includes("merger"), "bug-fix-worktree should not have merger agent");
+  });
+
+  it("feature-dev-worktree implements step has loop wiring", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-worktree"));
+    const implementStep = spec.steps.find((s) => s.id === "implement");
+    assert.ok(implementStep, "should define implement step");
+    assert.equal(implementStep!.type, "loop");
+    assert.equal(implementStep!.loop?.over, "stories");
+    assert.equal(implementStep!.loop?.verify_each, true);
+    assert.equal(implementStep!.loop?.verify_step, "verify");
+  });
+
+  it("security-audit-worktree fix step has loop wiring", async () => {
+    const spec = await loadWorkflowSpec(wfDir("security-audit-worktree"));
+    const fixStep = spec.steps.find((s) => s.id === "fix");
+    assert.ok(fixStep, "should define fix step");
+    assert.equal(fixStep!.type, "loop");
+    assert.equal(fixStep!.loop?.over, "stories");
+    assert.equal(fixStep!.loop?.verify_each, true);
+    assert.equal(fixStep!.loop?.verify_step, "verify");
+  });
+});
+
+describe("US-009: feature-dev-merge-worktree workflow variant", () => {
+  it("declares run.workspace: worktree", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-merge-worktree"));
+    assert.equal(spec.run?.workspace, "worktree");
+  });
+
+  it("setup step uses {{original_branch}} from context instead of git branch --show-current", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-merge-worktree"));
+    const setupStep = spec.steps.find((s) => s.id === "setup");
+    assert.ok(setupStep, "must define setup step");
+
+    // Should reference {{original_branch}} context variable
+    assert.match(setupStep!.input, /\{\{original_branch\}\}/);
+
+    // Should provide original_branch as pre-seeded (not captured via git branch --show-current)
+    assert.match(setupStep!.input, /pre-seeded|already provided|harness/);
+
+    // Should NOT include the command to capture original_branch via shell
+    assert.doesNotMatch(setupStep!.input, /ORIGINAL_BRANCH=\\$\(git branch --show-current\)/);
+
+    // Output format should use {{original_branch}} not a captured variable
+    assert.match(setupStep!.input, /ORIGINAL_BRANCH:\s*\{\{original_branch\}\}/);
+  });
+
+  it("finalize_merge step has worktree_origin_repository guidance", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-merge-worktree"));
+    const finalStep = spec.steps.find((s) => s.id === "finalize_merge");
+    assert.ok(finalStep, "must define finalize_merge step");
+
+    // Should reference {{worktree_origin_repository}} context variable
+    assert.match(finalStep!.input, /\{\{worktree_origin_repository\}\}/);
+
+    // Should include worktree mode instructions
+    assert.match(finalStep!.input, /Worktree Mode/);
+
+    // Should direct Phase 1 and Phase 3 to the origin repository
+    assert.match(finalStep!.input, /cd \{\{worktree_origin_repository\}\}/);
+  });
+
+  it("preserves fast-forward-first merge ordering (FF check before squash)", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-merge-worktree"));
+    const finalStep = spec.steps.find((s) => s.id === "finalize_merge");
+    assert.ok(finalStep);
+
+    const input = finalStep!.input;
+    const ffIdx = input.search(/git merge-base --is-ancestor/);
+    const squashIdx = input.search(/git merge --squash/);
+
+    assert.ok(ffIdx >= 0, "must contain git merge-base --is-ancestor");
+    assert.ok(squashIdx >= 0, "must contain git merge --squash");
+    assert.ok(
+      ffIdx < squashIdx,
+      `FF check (pos ${ffIdx}) must appear before squash merge (pos ${squashIdx})`,
+    );
+  });
+
+  it("finalize_merge has tester retry path with REBASED and CONFLICT_NOTES", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-merge-worktree"));
+    const finalStep = spec.steps.find((s) => s.id === "finalize_merge");
+    assert.ok(finalStep);
+    assert.match(finalStep!.input, /RETRY_STEP:\s*test/);
+    assert.match(finalStep!.input, /CONFLICT_NOTES/);
+  });
+
+  it("all agent workspace files exist", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-merge-worktree"));
+    for (const agent of spec.agents) {
+      for (const [fileName, relativePath] of Object.entries(agent.workspace.files)) {
+        const resolved = resolve(wfDir("feature-dev-merge-worktree"), relativePath);
+        assert.ok(existsSync(resolved),
+          `feature-dev-merge-worktree/${agent.id}: ${relativePath} should exist (for ${fileName})`);
+      }
+    }
+  });
+
+  it("all steps have valid roles and tamandua-agents skill", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-merge-worktree"));
+    const validRoles = new Set(["analysis", "coding", "verification", "testing", "pr", "scanning"]);
+    for (const agent of spec.agents) {
+      if (agent.role) assert.ok(validRoles.has(agent.role), `${agent.id}: "${agent.role}" is valid`);
+      const skills = agent.workspace.skills ?? [];
+      assert.ok(
+        skills.includes("tamandua-agents"),
+        `feature-dev-merge-worktree/${agent.id}: workspace.skills must include tamandua-agents`,
+      );
+    }
+  });
+
+  it("verifier agent preserves agent-browser skill", async () => {
+    const spec = await loadWorkflowSpec(wfDir("feature-dev-merge-worktree"));
+    const verifier = spec.agents.find((a) => a.id === "verifier");
+    assert.ok(verifier, "must define verifier agent");
+    const skills = verifier!.workspace.skills ?? [];
+    assert.ok(skills.includes("agent-browser"), "verifier workspace.skills must preserve agent-browser");
   });
 });

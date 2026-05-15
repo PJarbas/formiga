@@ -17,6 +17,11 @@ export interface RunInfo {
 export interface RunDetail extends RunInfo {
   steps: StepInfo[];
   stories?: StoryInfo[];
+  workspace_mode?: string;
+  worktree_path?: string;
+  worktree_origin_repository?: string;
+  worktree_origin_ref?: string;
+  worktree_origin_sha?: string;
 }
 
 export interface StepInfo {
@@ -46,7 +51,7 @@ export function getWorkflowStatus(query: string): RunDetail {
   // Try exact id match first
   let row = db
     .prepare(
-      "SELECT id, workflow_id, task, status, created_at, updated_at, tokens_spent FROM runs WHERE id = ?",
+      "SELECT id, workflow_id, task, status, context, created_at, updated_at, tokens_spent FROM runs WHERE id = ?",
     )
     .get(query) as unknown as RunRow | undefined;
 
@@ -54,7 +59,7 @@ export function getWorkflowStatus(query: string): RunDetail {
   if (!row) {
     const prefixRows = db
       .prepare(
-        "SELECT id, workflow_id, task, status, created_at, updated_at, tokens_spent FROM runs WHERE id LIKE ?",
+        "SELECT id, workflow_id, task, status, context, created_at, updated_at, tokens_spent FROM runs WHERE id LIKE ?",
       )
       .all(`${query}%`) as unknown as RunRow[];
     if (prefixRows.length === 1) {
@@ -70,7 +75,7 @@ export function getWorkflowStatus(query: string): RunDetail {
   if (!row) {
     const taskRows = db
       .prepare(
-        "SELECT id, workflow_id, task, status, created_at, updated_at, tokens_spent FROM runs WHERE task LIKE ?",
+        "SELECT id, workflow_id, task, status, context, created_at, updated_at, tokens_spent FROM runs WHERE task LIKE ?",
       )
       .all(`%${query}%`) as unknown as RunRow[];
     if (taskRows.length === 1) {
@@ -168,6 +173,7 @@ interface RunRow {
   workflow_id: string;
   task: string;
   status: string;
+  context: string;
   created_at: string;
   updated_at: string;
   tokens_spent: number;
@@ -231,6 +237,39 @@ function buildRunDetail(
 
   const stepSummary = getStepSummary(db, row.id);
 
+  // Enrich with worktree information when workspace_mode is 'worktree'
+  let workspaceMode: string | undefined;
+  let wtPath: string | undefined;
+  let wtOriginRepo: string | undefined;
+  let wtOriginRef: string | undefined;
+  let wtOriginSha: string | undefined;
+  try {
+    const ctx = JSON.parse(row.context || "{}") as Record<string, string>;
+    if (ctx.workspace_mode === "worktree") {
+      workspaceMode = ctx.workspace_mode;
+      const wtRow = db
+        .prepare(
+          "SELECT worktree_path, worktree_origin_repository, worktree_origin_ref, worktree_origin_sha FROM run_worktrees WHERE run_id = ?",
+        )
+        .get(row.id) as
+        | {
+            worktree_path: string;
+            worktree_origin_repository: string;
+            worktree_origin_ref: string | null;
+            worktree_origin_sha: string | null;
+          }
+        | undefined;
+      if (wtRow) {
+        wtPath = wtRow.worktree_path;
+        wtOriginRepo = wtRow.worktree_origin_repository;
+        wtOriginRef = wtRow.worktree_origin_ref ?? undefined;
+        wtOriginSha = wtRow.worktree_origin_sha ?? undefined;
+      }
+    }
+  } catch {
+    // context may be malformed; leave worktree fields unset
+  }
+
   return {
     id: row.id,
     workflowId: row.workflow_id,
@@ -242,5 +281,10 @@ function buildRunDetail(
     tokensSpent: row.tokens_spent,
     steps: stepInfos,
     stories: storyInfos.length > 0 ? storyInfos : undefined,
+    workspace_mode: workspaceMode,
+    worktree_path: wtPath,
+    worktree_origin_repository: wtOriginRepo,
+    worktree_origin_ref: wtOriginRef,
+    worktree_origin_sha: wtOriginSha,
   };
 }

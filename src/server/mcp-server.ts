@@ -12,7 +12,8 @@ import {
 import { getWorkflowStatus, listRuns, type RunDetail, type RunInfo } from "../installer/status.js";
 import { runWorkflow, type RunWorkflowResult } from "../installer/run.js";
 import { getRecentEvents, type TamanduaEvent } from "../installer/events.js";
-import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
+import { resolveSourcePath, resolveSkillPath, resolveWorkflowDir } from "../installer/paths.js";
+import { loadWorkflowSpec } from "../installer/workflow-spec.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 
 export const DEFAULT_MCP_PORT = 3338;
@@ -39,13 +40,16 @@ export interface TamanduaMcpToolServices {
   runWorkflow: (params: {
     workflowId: string;
     taskTitle: string;
-    workingDirectoryForHarness: string;
+    workingDirectoryForHarness?: string;
+    worktreeOriginRepository?: string;
+    worktreeOriginRef?: string;
   }) => Promise<RunWorkflowResult>;
   getRecentEvents: (limit?: number) => TamanduaEvent[];
   getSourcePath: () => string;
   getSkillPath: () => string;
   pauseRun: (runId: string, drain?: boolean) => Promise<{ runId: string; status: string }>;
   resumeRun: (runId: string) => Promise<{ runId: string; status: string }>;
+  resolveWorkspaceMode: (workflowId: string) => Promise<"direct" | "worktree">;
 }
 
 export type TamanduaMcpServerOptions = {
@@ -77,6 +81,11 @@ const defaultToolServices: TamanduaMcpToolServices = {
     if (!r) throw new Error("Daemon control plane unreachable");
     if (r.body.error) throw new Error(String(r.body.error));
     return { runId, status: String(r.body.state ?? r.status) };
+  },
+  async resolveWorkspaceMode(workflowId) {
+    const workflowDir = resolveWorkflowDir(workflowId);
+    const spec = await loadWorkflowSpec(workflowDir);
+    return spec.run?.workspace ?? "direct";
   },
 };
 
@@ -147,7 +156,7 @@ const mcpTools: Array<Record<string, unknown>> = [
   {
     name: MCP_TOOL_RUN_START,
     title: "Start Tamandua Run",
-    description: "Start a workflow run. For remote safety, workingDirectoryForHarness is required.",
+    description: "Start a workflow run. For direct workflows, workingDirectoryForHarness is required. For worktree workflows, worktreeOriginRepository is required.",
     annotations: {
       readOnlyHint: false,
       idempotentHint: false,
@@ -155,7 +164,7 @@ const mcpTools: Array<Record<string, unknown>> = [
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      required: ["workflowId", "taskTitle", "workingDirectoryForHarness"],
+      required: ["workflowId", "taskTitle"],
       properties: {
         workflowId: {
           type: "string",
@@ -170,7 +179,16 @@ const mcpTools: Array<Record<string, unknown>> = [
         workingDirectoryForHarness: {
           type: "string",
           minLength: 1,
-          description: "Mandatory harness working directory for remote MCP runs.",
+          description: "Harness working directory for remote MCP runs. Required for direct workflows, invalid for worktree workflows.",
+        },
+        worktreeOriginRepository: {
+          type: "string",
+          minLength: 1,
+          description: "Repository path to create the worktree from. Required for worktree workflows, invalid for direct workflows.",
+        },
+        worktreeOriginRef: {
+          type: "string",
+          description: "Git ref (branch, tag, SHA) for the worktree. Optional. Only valid for worktree workflows.",
         },
       },
     },
@@ -445,12 +463,52 @@ function createProtocolServer(services: TamanduaMcpToolServices): Server {
     if (name === MCP_TOOL_RUN_START) {
       const workflowId = readRequiredStringArgument(args, "workflowId");
       const taskTitle = readRequiredStringArgument(args, "taskTitle");
-      const workingDirectoryForHarness = readRequiredStringArgument(args, "workingDirectoryForHarness");
+      const workingDirectoryForHarness: string | undefined =
+        typeof args.workingDirectoryForHarness === "string" && args.workingDirectoryForHarness.trim().length > 0
+          ? args.workingDirectoryForHarness.trim()
+          : undefined;
+      const worktreeOriginRepository: string | undefined =
+        typeof args.worktreeOriginRepository === "string" && args.worktreeOriginRepository.trim().length > 0
+          ? args.worktreeOriginRepository.trim()
+          : undefined;
+      const worktreeOriginRef: string | undefined =
+        typeof args.worktreeOriginRef === "string" && args.worktreeOriginRef.trim().length > 0
+          ? args.worktreeOriginRef.trim()
+          : undefined;
+
+      try {
+        const workspaceMode = await services.resolveWorkspaceMode(workflowId);
+
+        if (workspaceMode === "direct") {
+          if (!workingDirectoryForHarness) {
+            invalidParams("workingDirectoryForHarness is required for direct workflows");
+          }
+          if (worktreeOriginRepository) {
+            invalidParams("worktreeOriginRepository is only valid for workflows with run.workspace: worktree");
+          }
+          if (worktreeOriginRef) {
+            invalidParams("worktreeOriginRef is only valid for workflows with run.workspace: worktree");
+          }
+        } else {
+          if (!worktreeOriginRepository) {
+            invalidParams("worktreeOriginRepository is required for worktree workflows");
+          }
+          if (workingDirectoryForHarness) {
+            invalidParams("workingDirectoryForHarness is not valid for worktree workflows. Use worktreeOriginRepository instead.");
+          }
+        }
+      } catch (err) {
+        if (err instanceof McpError) throw err;
+        throw new McpError(ErrorCode.InvalidParams, (err as Error).message);
+      }
+
       try {
         const run = await services.runWorkflow({
           workflowId,
           taskTitle,
           workingDirectoryForHarness,
+          worktreeOriginRepository,
+          worktreeOriginRef,
         });
         return createToolResult({ run });
       } catch (err) {

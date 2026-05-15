@@ -185,7 +185,7 @@ describe("mcp-server bootstrap", () => {
           return expectedRunDetail;
         },
         runWorkflow: async ({ workflowId, taskTitle, workingDirectoryForHarness }) => {
-          runStartCalls.push({ workflowId, taskTitle, workingDirectoryForHarness });
+          runStartCalls.push({ workflowId, taskTitle, workingDirectoryForHarness: workingDirectoryForHarness ?? "" });
           return {
             runId: "run-new",
             runNumber: 9,
@@ -193,7 +193,7 @@ describe("mcp-server bootstrap", () => {
             taskTitle,
             status: "running",
             stepCount: 1,
-            workingDirectoryForHarness,
+            workingDirectoryForHarness: workingDirectoryForHarness ?? "",
           };
         },
         getRecentEvents: (limit = 50) => {
@@ -210,6 +210,7 @@ describe("mcp-server bootstrap", () => {
         resumeRun: async (runId) => {
           return { runId, status: "running" };
         },
+        resolveWorkspaceMode: async () => "direct",
       },
     });
 
@@ -252,7 +253,7 @@ describe("mcp-server bootstrap", () => {
         description: "Maximum number of runs to return (default 50).",
       });
       assert.deepEqual((tools[1]?.inputSchema as { required?: string[] }).required, ["query"]);
-      assert.deepEqual((tools[2]?.inputSchema as { required?: string[] }).required, ["workflowId", "taskTitle", "workingDirectoryForHarness"]);
+      assert.deepEqual((tools[2]?.inputSchema as { required?: string[] }).required, ["workflowId", "taskTitle"]);
 
       const runsList = await callTool(server.port, sessionId, 3, "tamandua.runs.list", { limit: 10 });
       assert.equal(runsList.status, 200);
@@ -289,6 +290,11 @@ describe("mcp-server bootstrap", () => {
         taskTitle: "Implement MCP start",
         workingDirectoryForHarness: "/tmp/remote-harness",
       }]);
+
+      // Verify inputSchema properties include worktree fields
+      const runStartSchema = tools[2]?.inputSchema as { properties?: Record<string, unknown> };
+      assert.ok(runStartSchema.properties?.worktreeOriginRepository, "should have worktreeOriginRepository property");
+      assert.ok(runStartSchema.properties?.worktreeOriginRef, "should have worktreeOriginRef property");
 
       const eventsRecent = await callTool(server.port, sessionId, 6, "tamandua.events.recent", { limit: 7 });
       assert.equal(eventsRecent.status, 200);
@@ -329,6 +335,7 @@ describe("mcp-server bootstrap", () => {
         resumeRun: async () => {
           throw new Error("should not be called for invalid args");
         },
+        resolveWorkspaceMode: async () => "direct",
       },
     });
 
@@ -384,6 +391,7 @@ describe("mcp-server bootstrap", () => {
           resumeCalls.push(runId);
           return { runId, status: "running" };
         },
+        resolveWorkspaceMode: async () => "direct",
       },
     });
 
@@ -429,6 +437,7 @@ describe("mcp-server bootstrap", () => {
         resumeRun: async () => {
           throw new Error("should not be called");
         },
+        resolveWorkspaceMode: async () => "direct",
       },
     });
 
@@ -459,6 +468,7 @@ describe("mcp-server bootstrap", () => {
         resumeRun: async () => {
           throw new Error("should not be called");
         },
+        resolveWorkspaceMode: async () => "direct",
       },
     });
 
@@ -488,5 +498,246 @@ describe("mcp-server bootstrap", () => {
 
     await server.stop();
     assert.equal(server.server.listening, false);
+  });
+
+  it("MCP run-start rejects worktree args for direct workflows", async () => {
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async () => {
+          throw new Error("should not be called");
+        },
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => ({ runId: "x", status: "paused" }),
+        resumeRun: async () => ({ runId: "x", status: "running" }),
+        resolveWorkspaceMode: async () => "direct",
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      // Reject worktreeOriginRepository for direct workflow
+      const result = await callTool(server.port, sessionId, 50, "tamandua.run.start", {
+        workflowId: "feature-dev",
+        taskTitle: "test",
+        workingDirectoryForHarness: "/tmp/harness",
+        worktreeOriginRepository: "/tmp/repo",
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.body?.result, undefined);
+      assert.equal(result.body?.error?.code, -32602);
+      assert.match(result.body?.error?.message ?? "", /worktreeOriginRepository.*only valid.*worktree/);
+
+      // Reject worktreeOriginRef for direct workflow
+      const result2 = await callTool(server.port, sessionId, 51, "tamandua.run.start", {
+        workflowId: "feature-dev",
+        taskTitle: "test",
+        workingDirectoryForHarness: "/tmp/harness",
+        worktreeOriginRef: "main",
+      });
+      assert.equal(result2.status, 200);
+      assert.equal(result2.body?.result, undefined);
+      assert.equal(result2.body?.error?.code, -32602);
+      assert.match(result2.body?.error?.message ?? "", /worktreeOriginRef.*only valid.*worktree/);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("MCP run-start requires worktreeOriginRepository for worktree workflows (no default)", async () => {
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async () => {
+          throw new Error("should not be called");
+        },
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => ({ runId: "x", status: "paused" }),
+        resumeRun: async () => ({ runId: "x", status: "running" }),
+        resolveWorkspaceMode: async () => "worktree",
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      const result = await callTool(server.port, sessionId, 60, "tamandua.run.start", {
+        workflowId: "feature-dev-merge-worktree",
+        taskTitle: "worktree test",
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.body?.result, undefined);
+      assert.equal(result.body?.error?.code, -32602);
+      assert.match(result.body?.error?.message ?? "", /worktreeOriginRepository.*required.*worktree/);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("MCP run-start rejects workingDirectoryForHarness for worktree workflows", async () => {
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async () => {
+          throw new Error("should not be called");
+        },
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => ({ runId: "x", status: "paused" }),
+        resumeRun: async () => ({ runId: "x", status: "running" }),
+        resolveWorkspaceMode: async () => "worktree",
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      const result = await callTool(server.port, sessionId, 70, "tamandua.run.start", {
+        workflowId: "feature-dev-merge-worktree",
+        taskTitle: "worktree test",
+        worktreeOriginRepository: "/tmp/repo",
+        workingDirectoryForHarness: "/tmp/harness",
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.body?.result, undefined);
+      assert.equal(result.body?.error?.code, -32602);
+      assert.match(result.body?.error?.message ?? "", /workingDirectoryForHarness.*not valid.*worktree/);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("MCP run-start dispatches worktree params to runWorkflow", async () => {
+    const runStartCalls: Array<Record<string, unknown>> = [];
+
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async (params) => {
+          runStartCalls.push({ ...params });
+          return {
+            runId: "run-wt",
+            runNumber: 10,
+            workflowId: params.workflowId,
+            taskTitle: params.taskTitle,
+            status: "running",
+            stepCount: 3,
+            workingDirectoryForHarness: "/tmp/worktree/path",
+          };
+        },
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => ({ runId: "x", status: "paused" }),
+        resumeRun: async () => ({ runId: "x", status: "running" }),
+        resolveWorkspaceMode: async () => "worktree",
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      const result = await callTool(server.port, sessionId, 80, "tamandua.run.start", {
+        workflowId: "feature-dev-merge-worktree",
+        taskTitle: "worktree run",
+        worktreeOriginRepository: "/tmp/origin-repo",
+        worktreeOriginRef: "feature/my-branch",
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.body?.error, undefined);
+      assert.deepEqual(result.body?.result?.structuredContent, {
+        run: {
+          runId: "run-wt",
+          runNumber: 10,
+          workflowId: "feature-dev-merge-worktree",
+          taskTitle: "worktree run",
+          status: "running",
+          stepCount: 3,
+          workingDirectoryForHarness: "/tmp/worktree/path",
+        },
+      });
+      assert.deepEqual(runStartCalls, [{
+        workflowId: "feature-dev-merge-worktree",
+        taskTitle: "worktree run",
+        workingDirectoryForHarness: undefined,
+        worktreeOriginRepository: "/tmp/origin-repo",
+        worktreeOriginRef: "feature/my-branch",
+      }]);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("MCP run-start requires workingDirectoryForHarness for direct workflows", async () => {
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async () => {
+          throw new Error("should not be called");
+        },
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => ({ runId: "x", status: "paused" }),
+        resumeRun: async () => ({ runId: "x", status: "running" }),
+        resolveWorkspaceMode: async () => "direct",
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      const result = await callTool(server.port, sessionId, 90, "tamandua.run.start", {
+        workflowId: "feature-dev",
+        taskTitle: "no harness dir",
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.body?.result, undefined);
+      assert.equal(result.body?.error?.code, -32602);
+      assert.match(result.body?.error?.message ?? "", /workingDirectoryForHarness.*required.*direct/);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
+  });
+
+  it("MCP run-start handles invalid workflow id gracefully", async () => {
+    const server = await startTamanduaMcpServer(0, {
+      services: {
+        listRuns: () => [],
+        getWorkflowStatus: () => ({} as any),
+        runWorkflow: async () => {
+          throw new Error("should not be called");
+        },
+        getRecentEvents: () => [],
+        getSourcePath: () => "/x",
+        pauseRun: async () => ({ runId: "x", status: "paused" }),
+        resumeRun: async () => ({ runId: "x", status: "running" }),
+        resolveWorkspaceMode: async () => {
+          throw new Error("Unknown workflow: nonexistent-workflow");
+        },
+      },
+    });
+
+    try {
+      const sessionId = await initializeSession(server.port);
+
+      const result = await callTool(server.port, sessionId, 100, "tamandua.run.start", {
+        workflowId: "nonexistent-workflow",
+        taskTitle: "test",
+        workingDirectoryForHarness: "/tmp/harness",
+      });
+      assert.equal(result.status, 200);
+      assert.equal(result.body?.result, undefined);
+      assert.equal(result.body?.error?.code, -32602);
+      assert.match(result.body?.error?.message ?? "", /Unknown workflow/);
+    } finally {
+      await stopTamanduaMcpServer(server);
+    }
   });
 });
