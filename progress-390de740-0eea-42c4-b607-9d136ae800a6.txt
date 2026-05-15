@@ -15,6 +15,7 @@ Started: 2026-05-15
 - `_admitOrQueueRun` test export convention in control-server.ts follows agent-scheduler's `_functionName` pattern for exposing internals
 - control-server integration tests that need a real workflow must create a minimal workflow.yml in `<stateDir>/workflows/<id>/` on disk; `loadWorkflowSpec` validates agents have id + workspace.baseDir, and steps have id + agent
 - `shutdownAllCrons()` must be called in afterEach to clean up in-memory jobMetadata between tests that use `_admitOrQueueRun`
+- cli.ts is the main CLI entry point with top-level `main()`; guard it with `import.meta.url` check (`process.argv[1] === fileURLToPath(import.meta.url)`) so tests can import and call exported helpers without triggering the full CLI
 
 ---
 
@@ -126,6 +127,16 @@ Implementation notes:
 - Added 4 tests: default 'false' when flag absent, 'true' when flag=true, 'false' when flag=false, combined context keys
 - **Learnings:** runWorkflow() inserts the DB row BEFORE daemon registration, so tests can catch the expected daemon error and still query the DB to verify seeded context. Use lazy `await import("../../dist/db.js")` for getDb in tests.
 - Files changed: `src/installer/run.ts`, `src/installer/run.test.ts`
+
+## 2026-05-15 - US-005: Add CLI --no-hurry-please-save-tokens-mode flag parsing and wiring
+- Parsed `--no-hurry-please-save-tokens-mode` as boolean flag in `_parseWorkflowRunArgs()` (renamed and exported from `parseWorkflowRunArgs`)
+- Added `noHurrySaveTokensMode?: boolean` to return type of `_parseWorkflowRunArgs()`
+- Wired `noHurrySaveTokensMode` to `runWorkflow()` params in workflow run handler
+- Updated `printUsage()` to show the new flag in workflow run usage line
+- Guarded top-level `main()` with `import.meta.url` check so cli.ts can be imported by tests
+- Wrote 6 CLI integration tests in `src/cli/cli.test.ts`: basic flag, flag with other options, absent flag, all flags together, flag at end of args
+- **Learnings:** cli.ts had top-level `await main()` with no import guard, preventing test imports. Fixed with standard `process.argv[1] === fileURLToPath(import.meta.url)` guard. The `_` prefix export convention extends to CLI argument parsing helpers.
+- Files changed: `src/cli/cli.ts`, `src/cli/cli.test.ts` (new)
 
 ## 2026-05-15 - US-004: Update control-server.ts to read no_hurry_save_tokens_mode from context and pass to setupAgentCrons
 - In `admitOrQueueRun()`, parsed `run.context` JSON to extract `no_hurry_save_tokens_mode`, compared to string `'true'`
