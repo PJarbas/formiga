@@ -73,6 +73,14 @@ async function copyDirContents(src: string, dest: string): Promise<void> {
       await copyDirContents(srcPath, destPath);
     } else {
       try {
+        await fs.lstat(destPath);
+        continue;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== "ENOENT") throw err;
+      }
+
+      try {
         await fs.cp(srcPath, destPath, { force: false });
       } catch (err) {
         const code = (err as NodeJS.ErrnoException)?.code;
