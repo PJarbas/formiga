@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { logger, readRecentLogs, getLogPath } from "../../dist/lib/logger.js";
+import { logger, readRecentLogs, getLogPath, log, formatEntry } from "../../dist/lib/logger.js";
 
 describe("logger", () => {
   const logPath = getLogPath();
@@ -32,5 +32,45 @@ describe("logger", () => {
 
   it("getLogPath returns a path under .tamandua", () => {
     assert.ok(logPath.includes(".tamandua"));
+  });
+
+  it("logger.error writes an error-level message", () => {
+    logger.error("test error");
+    const content = fs.readFileSync(logPath, "utf-8");
+    assert.ok(content.includes("ERROR") || content.includes("error"));
+  });
+
+  it("logger.debug writes an info-level message", () => {
+    logger.debug("debug msg");
+    const content = fs.readFileSync(logPath, "utf-8");
+    assert.ok(content.includes("debug msg"));
+  });
+
+  it("formatEntry formats a log entry with runId", () => {
+    const result = formatEntry({
+      timestamp: "2024-01-15T10:30:00Z",
+      level: "INFO",
+      message: "test message",
+      runId: "abcdef1234567890",
+    });
+    assert.ok(result.includes("test message"));
+    assert.ok(result.includes("abcdef12"));
+    assert.ok(result.includes("INFO"));
+  });
+
+  it("formatEntry formats a log entry without runId", () => {
+    const result = formatEntry({
+      timestamp: "2024-01-15T10:30:00Z",
+      level: "WARN",
+      message: "no run",
+    });
+    assert.ok(result.includes("no run"));
+    assert.ok(result.includes("WARN"));
+  });
+
+  it("log function writes to log file", () => {
+    log("info", "standalone log test");
+    const content = fs.readFileSync(logPath, "utf-8");
+    assert.ok(content.includes("standalone log test"));
   });
 });
