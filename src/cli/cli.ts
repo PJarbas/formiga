@@ -518,9 +518,10 @@ async function main() {
       let fullRunId: string;
       try {
         fullRunId = getWorkflowStatusFn(target).id;
-      } catch {
+      } catch (err) {
+        const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
         process.stderr.write(
-          `No run found matching "${target}".\n`,
+          message.startsWith("No run found matching") ? `No run found matching "${target}".\n` : `${message}\n`,
         );
         process.exit(1);
       }
@@ -551,9 +552,10 @@ async function main() {
       let fullRunId: string;
       try {
         fullRunId = getWorkflowStatusFn(target).id;
-      } catch {
+      } catch (err) {
+        const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
         process.stderr.write(
-          `No run found matching "${target}".\n`,
+          message.startsWith("No run found matching") ? `No run found matching "${target}".\n` : `${message}\n`,
         );
         process.exit(1);
       }
@@ -856,7 +858,8 @@ async function main() {
         console.log(`${icon} ${step.stepId} (${step.agentId.split("_").slice(-1)[0]})`);
       }
     } catch (err) {
-      console.log(`No run found matching "${target}".`);
+      const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
+      console.log(message.startsWith("No run found matching") ? `No run found matching "${target}".` : message);
     }
     return;
   }

@@ -639,6 +639,103 @@ describe("CLI parseDuration", () => {
   });
 });
 
+describe("CLI handlers surface operational errors instead of masking them as not-found", () => {
+  it("workflow status surfaces SQLite errors instead of No run found matching", async () => {
+    const env = createTempEnv();
+    try {
+      // Write garbage into the DB file so SQLite throws an operational error
+      const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      fs.writeFileSync(dbPath, "not a valid database", "utf-8");
+
+      const { stdout, code } = await runCliToExit(
+        ["workflow", "status", "some-query"], { HOME: env.homeDir });
+      // Must NOT mask the operational error as "No run found matching"
+      assert.doesNotMatch(stdout, /No run found matching/);
+      // The actual SQLite error message should be surfaced
+      assert.match(stdout, /not a database|malformed|database disk image/i);
+    } finally {
+      try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("worktree status surfaces operational errors instead of No run found matching", async () => {
+    const env = createTempEnv();
+    try {
+      const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      fs.writeFileSync(dbPath, "not a valid database", "utf-8");
+
+      const { stderr, code } = await runCliToExit(
+        ["worktree", "status", "some-run-id"], { HOME: env.homeDir });
+      assert.equal(code, 1);
+      // Must NOT mask the operational error as "No run found matching"
+      assert.doesNotMatch(stderr, /No run found matching/);
+      // The actual SQLite error message should be surfaced
+      assert.match(stderr, /not a database|malformed|database disk image/i);
+    } finally {
+      try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("worktree remove surfaces operational errors instead of No run found matching", async () => {
+    const env = createTempEnv();
+    try {
+      const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      fs.writeFileSync(dbPath, "not a valid database", "utf-8");
+
+      const { stderr, code } = await runCliToExit(
+        ["worktree", "remove", "some-run-id"], { HOME: env.homeDir });
+      assert.equal(code, 1);
+      // Must NOT mask the operational error as "No run found matching"
+      assert.doesNotMatch(stderr, /No run found matching/);
+      // The actual SQLite error message should be surfaced
+      assert.match(stderr, /not a database|malformed|database disk image/i);
+    } finally {
+      try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("workflow status still prints not-found for genuinely missing runs", async () => {
+    const env = createTempEnv();
+    try {
+      initDb(path.join(env.tamanduaDir, "tamandua.db"));
+      const { stdout } = await runCliToExit(
+        ["workflow", "status", "nonexistent-run-query"], { HOME: env.homeDir });
+      assert.match(stdout, /No run found matching/);
+    } finally {
+      try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("worktree status still prints not-found for genuinely missing runs", async () => {
+    const env = createTempEnv();
+    try {
+      initDb(path.join(env.tamanduaDir, "tamandua.db"));
+      const { stderr, code } = await runCliToExit(
+        ["worktree", "status", "nonexistent-run"], { HOME: env.homeDir });
+      assert.equal(code, 1);
+      assert.match(stderr, /No run found matching/);
+    } finally {
+      try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
+    }
+  });
+
+  it("worktree remove still prints not-found for genuinely missing runs", async () => {
+    const env = createTempEnv();
+    try {
+      initDb(path.join(env.tamanduaDir, "tamandua.db"));
+      const { stderr, code } = await runCliToExit(
+        ["worktree", "remove", "nonexistent-run"], { HOME: env.homeDir });
+      assert.equal(code, 1);
+      assert.match(stderr, /No run found matching/);
+    } finally {
+      try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
+    }
+  });
+});
+
 describe("CLI printUsage includes worktree commands", () => {
   it("shows worktree subcommands in --help output", async () => {
     const env = createTempEnv();
