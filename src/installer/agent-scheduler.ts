@@ -81,6 +81,8 @@ export interface CreateCronJobParams {
 
 export interface SetupAgentCronsOptions {
   workingDirectoryForHarness?: string;
+  /** When true, elevates polling floor to 15 min and default to 15 min to save tokens. */
+  noHurrySaveTokensMode?: boolean;
 }
 
 // ── pi binary discovery ────────────────────────────────────────────
@@ -1385,14 +1387,20 @@ export async function setupAgentCrons(
       continue;
     }
 
+    const intervalMinutes = options.noHurrySaveTokensMode
+      ? (workflow.polling?.timeoutSeconds
+        ? Math.max(15, Math.ceil(workflow.polling.timeoutSeconds / 60))
+        : 15)
+      : (workflow.polling?.timeoutSeconds
+        ? Math.max(1, Math.ceil(workflow.polling.timeoutSeconds / 60))
+        : 5);
+
     const result = await createAgentCronJob({
       workflowId: workflow.id,
       runId,
       agent,
       workflow,
-      intervalMinutes: workflow.polling?.timeoutSeconds
-        ? Math.max(1, Math.ceil(workflow.polling.timeoutSeconds / 60))
-        : 5,
+      intervalMinutes,
       staggerOffsetMs: staggerMs,
       workingDirectoryForHarness: options.workingDirectoryForHarness,
     });
