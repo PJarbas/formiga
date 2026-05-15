@@ -877,3 +877,185 @@ describe("control-server unit exports", () => {
     });
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════
+// US-004: context no_hurry_save_tokens_mode → setupAgentCrons wiring
+// ══════════════════════════════════════════════════════════════════════
+
+import {
+  _admitOrQueueRun,
+  type RunRow,
+} from "../../dist/server/control-server.js";
+import {
+  _getJobIntervalsForRun,
+  shutdownAllCrons,
+} from "../../dist/installer/agent-scheduler.js";
+
+describe("control-server save-tokens context wiring", () => {
+  let tempHome: string;
+  let stateDir: string;
+  let dbPath: string;
+  let origStateDir: string | undefined;
+  let origDbPath: string | undefined;
+  let origMaxTimers: string | undefined;
+  let origHome: string | undefined;
+
+  beforeEach(() => {
+    origHome = process.env.HOME;
+    origStateDir = process.env.TAMANDUA_STATE_DIR;
+    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origMaxTimers = process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-save-tokens-"));
+    stateDir = path.join(tempHome, ".tamandua");
+    fs.mkdirSync(stateDir, { recursive: true });
+    dbPath = path.join(stateDir, "tamandua.db");
+
+    process.env.HOME = tempHome;
+    process.env.TAMANDUA_STATE_DIR = stateDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.TAMANDUA_MAX_ACTIVE_TIMERS = "10";
+  });
+
+  afterEach(() => {
+    shutdownAllCrons();
+
+    if (origHome) process.env.HOME = origHome;
+    else delete process.env.HOME;
+    if (origStateDir) process.env.TAMANDUA_STATE_DIR = origStateDir;
+    else delete process.env.TAMANDUA_STATE_DIR;
+    if (origDbPath) process.env.TAMANDUA_DB_PATH = origDbPath;
+    else delete process.env.TAMANDUA_DB_PATH;
+    if (origMaxTimers) process.env.TAMANDUA_MAX_ACTIVE_TIMERS = origMaxTimers;
+    else delete process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  function createMinimalWorkflow(workflowId: string): void {
+    const workflowDir = path.join(stateDir, "workflows", workflowId);
+    fs.mkdirSync(workflowDir, { recursive: true });
+    const yml = [
+      `id: ${workflowId}`,
+      `name: Save Tokens Test`,
+      `agents:`,
+      `  - id: developer`,
+      `    role: coding`,
+      `    workspace:`,
+      `      baseDir: agents/developer`,
+      `steps:`,
+      `  - id: impl`,
+      `    agent: developer`,
+      `    input: "implement feature"`,
+      `    expects: "implementation"`,
+    ].join("\n");
+    fs.writeFileSync(path.join(workflowDir, "workflow.yml"), yml, "utf-8");
+  }
+
+  async function insertRunWithContext(
+    runId: string,
+    workflowId: string,
+    context: Record<string, string>,
+  ): Promise<void> {
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+    const now = new Date().toISOString();
+    const contextJson = JSON.stringify(context);
+
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, scheduling_requested_at, created_at, updated_at) VALUES (?, ?, 'save-tokens-test', 'running', ?, 0, 'pending_register', ?, ?, ?)",
+    ).run(runId, workflowId, contextJson, now, now, now);
+
+    // Insert a step so requiredTimersForRun returns 1
+    const stepId = crypto.randomUUID();
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'impl', ?, 0, 'implement', 'implementation', 'waiting', 0, 3, 'single', NULL, ?, ?)",
+    ).run(stepId, runId, `${workflowId}_developer`, now, now);
+  }
+
+  it("passes noHurrySaveTokensMode: true when context has no_hurry_save_tokens_mode='true'", async () => {
+    const workflowId = "wf-save-tokens-context";
+    const runId = crypto.randomUUID();
+
+    createMinimalWorkflow(workflowId);
+    await insertRunWithContext(runId, workflowId, {
+      working_directory_for_harness: tempHome,
+      no_hurry_save_tokens_mode: "true",
+    });
+
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+    const run = db.prepare(
+      "SELECT id, workflow_id, status, scheduling_status, context, created_at FROM runs WHERE id = ?",
+    ).get(runId) as RunRow | undefined;
+    assert.ok(run, "run should exist in DB");
+
+    const result = await _admitOrQueueRun(run!);
+    assert.ok(result.status === 200 || result.status === 202,
+      `expected 200 or 202, got ${result.status}: ${JSON.stringify(result.body)}`);
+
+    const intervals = _getJobIntervalsForRun(runId);
+    assert.ok(intervals.length > 0, "should have at least one scheduled job");
+    for (const job of intervals) {
+      assert.equal(job.intervalMinutes, 15,
+        `save-tokens mode should use 15-min interval, got ${job.intervalMinutes}`);
+    }
+  });
+
+  it("passes noHurrySaveTokensMode: false when context has no_hurry_save_tokens_mode='false'", async () => {
+    const workflowId = "wf-no-save-tokens";
+    const runId = crypto.randomUUID();
+
+    createMinimalWorkflow(workflowId);
+    await insertRunWithContext(runId, workflowId, {
+      working_directory_for_harness: tempHome,
+      no_hurry_save_tokens_mode: "false",
+    });
+
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+    const run = db.prepare(
+      "SELECT id, workflow_id, status, scheduling_status, context, created_at FROM runs WHERE id = ?",
+    ).get(runId) as RunRow | undefined;
+    assert.ok(run, "run should exist in DB");
+
+    const result = await _admitOrQueueRun(run!);
+    assert.ok(result.status === 200 || result.status === 202,
+      `expected 200 or 202, got ${result.status}: ${JSON.stringify(result.body)}`);
+
+    const intervals = _getJobIntervalsForRun(runId);
+    assert.ok(intervals.length > 0, "should have at least one scheduled job");
+    for (const job of intervals) {
+      assert.equal(job.intervalMinutes, 5,
+        `non-save-tokens mode should use 5-min interval, got ${job.intervalMinutes}`);
+    }
+  });
+
+  it("defaults to false when no_hurry_save_tokens_mode is missing from context", async () => {
+    const workflowId = "wf-missing-flag";
+    const runId = crypto.randomUUID();
+
+    createMinimalWorkflow(workflowId);
+    await insertRunWithContext(runId, workflowId, {
+      working_directory_for_harness: tempHome,
+    });
+
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+    const run = db.prepare(
+      "SELECT id, workflow_id, status, scheduling_status, context, created_at FROM runs WHERE id = ?",
+    ).get(runId) as RunRow | undefined;
+    assert.ok(run, "run should exist in DB");
+
+    const result = await _admitOrQueueRun(run!);
+    assert.ok(result.status === 200 || result.status === 202,
+      `expected 200 or 202, got ${result.status}: ${JSON.stringify(result.body)}`);
+
+    const intervals = _getJobIntervalsForRun(runId);
+    assert.ok(intervals.length > 0, "should have at least one scheduled job");
+    for (const job of intervals) {
+      assert.equal(job.intervalMinutes, 5,
+        `missing flag should default to 5-min interval, got ${job.intervalMinutes}`);
+    }
+  });
+});

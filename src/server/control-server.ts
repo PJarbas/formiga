@@ -109,7 +109,7 @@ function unprocessable(message: string): JsonResponse {
   return { status: 422, body: { error: message } };
 }
 
-interface RunRow {
+export interface RunRow {
   id: string;
   workflow_id: string;
   status: string;
@@ -157,6 +157,15 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
   } = await import("../installer/agent-scheduler.js");
 
   const harness = validateRunHarnessForScheduling(run.id, run.context);
+
+  let isSaveTokensMode = false;
+  try {
+    const contextParsed = JSON.parse(run.context) as Record<string, unknown>;
+    isSaveTokensMode = contextParsed.no_hurry_save_tokens_mode === 'true';
+  } catch {
+    // context might be malformed; default to false
+  }
+
   const duplicateRunId = _runIdForScheduledHarnessWorkdir(
     harness.workingDirectoryForHarness,
     run.id,
@@ -225,6 +234,7 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
   try {
     await setupAgentCrons(workflow, run.id, {
       workingDirectoryForHarness: harness.workingDirectoryForHarness,
+      noHurrySaveTokensMode: isSaveTokensMode,
     });
     const scheduledForRun = _scheduledJobCountForRun(run.id);
     if (scheduledForRun < requiredTimers) {
@@ -638,6 +648,11 @@ const RECONCILER_INTERVAL_MS = 30_000;
  * maps. Runs at startup and every 30s thereafter. Survives missed control
  * notifications and transient errors.
  */
+/** @internal — exposed for tests to verify context flag → setupAgentCrons wiring. */
+export async function _admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
+  return admitOrQueueRun(run);
+}
+
 export function startReconciler(): { stop: () => void } {
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
