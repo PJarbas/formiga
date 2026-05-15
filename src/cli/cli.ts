@@ -131,7 +131,8 @@ function printUsage() {
     "tamandua uninstall [--force]          Full uninstall",
     "", "tamandua workflow list                List available workflows",
     "tamandua workflow install <name>      Install a workflow",
-    "tamandua workflow run <name> <task> [--working-directory-for-harness <dir>]",
+    "tamandua workflow run <name> <task> [--no-hurry-please-save-tokens-mode]",
+    "                                      [--working-directory-for-harness <dir>]",
     "                                      [--worktree-origin-repository <dir>]",
     "                                      [--worktree-origin-ref <ref>]  Start a workflow run",
     "", "tamandua worktree list                List managed worktrees",
@@ -169,19 +170,26 @@ function printUsage() {
   ].join("\n") + "\n");
 }
 
-function parseWorkflowRunArgs(args: string[]): {
+export function _parseWorkflowRunArgs(args: string[]): {
   taskTitle: string;
   workingDirectoryForHarness?: string;
   worktreeOriginRepository?: string;
   worktreeOriginRef?: string;
+  noHurrySaveTokensMode?: boolean;
 } {
   const taskParts: string[] = [];
   let workingDirectoryForHarness: string | undefined;
   let worktreeOriginRepository: string | undefined;
   let worktreeOriginRef: string | undefined;
+  let noHurrySaveTokensMode: boolean | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
+
+    if (token === "--no-hurry-please-save-tokens-mode") {
+      noHurrySaveTokensMode = true;
+      continue;
+    }
 
     if (token === "--working-directory-for-harness") {
       const value = args[i + 1]?.trim();
@@ -251,6 +259,7 @@ function parseWorkflowRunArgs(args: string[]): {
     workingDirectoryForHarness,
     worktreeOriginRepository,
     worktreeOriginRef,
+    noHurrySaveTokensMode,
   };
 }
 
@@ -902,9 +911,9 @@ async function main() {
     const workflowName = args[2];
     if (!workflowName) { process.stderr.write("Missing workflow name.\n"); process.exit(1); }
 
-    let runArgs: ReturnType<typeof parseWorkflowRunArgs>;
+    let runArgs: ReturnType<typeof _parseWorkflowRunArgs>;
     try {
-      runArgs = parseWorkflowRunArgs(args.slice(3));
+      runArgs = _parseWorkflowRunArgs(args.slice(3));
     } catch (err) {
       process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
@@ -917,6 +926,7 @@ async function main() {
       workingDirectoryForHarness: runArgs.workingDirectoryForHarness,
       worktreeOriginRepository: runArgs.worktreeOriginRepository,
       worktreeOriginRef: runArgs.worktreeOriginRef,
+      noHurrySaveTokensMode: runArgs.noHurrySaveTokensMode,
     });
     console.log(`Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}\nHarness CWD: ${result.workingDirectoryForHarness}`);
     return;
@@ -960,4 +970,7 @@ async function main() {
   printUsage(); process.exit(1);
 }
 
-await main().catch((err) => { console.error("Error:", err.message); process.exit(1); });
+const scriptPath = fileURLToPath(import.meta.url);
+if (process.argv[1] === scriptPath) {
+  await main().catch((err) => { console.error("Error:", err.message); process.exit(1); });
+}
