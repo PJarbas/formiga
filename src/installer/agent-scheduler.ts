@@ -1391,8 +1391,8 @@ export async function setupAgentCrons(
       agent,
       workflow,
       intervalMinutes: workflow.polling?.timeoutSeconds
-        ? Math.max(15, Math.ceil(workflow.polling.timeoutSeconds / 60))
-        : 15,
+        ? Math.max(1, Math.ceil(workflow.polling.timeoutSeconds / 60))
+        : 5,
       staggerOffsetMs: staggerMs,
       workingDirectoryForHarness: options.workingDirectoryForHarness,
     });
@@ -1565,6 +1565,17 @@ export function _scheduledJobCountForRun(runId: string): number {
     if (info.runId === runId) count++;
   }
   return count;
+}
+
+/** @internal — exposed for test assertions on interval values. */
+export function _getJobIntervalsForRun(runId: string): Array<{ agentId: string; intervalMinutes: number }> {
+  const results: Array<{ agentId: string; intervalMinutes: number }> = [];
+  for (const info of jobMetadata.values()) {
+    if (info.runId === runId) {
+      results.push({ agentId: info.agentId, intervalMinutes: info.intervalMinutes });
+    }
+  }
+  return results;
 }
 
 /** @internal — exposed for daemon admission safety checks. */
