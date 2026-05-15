@@ -1391,8 +1391,8 @@ export async function setupAgentCrons(
       agent,
       workflow,
       intervalMinutes: workflow.polling?.timeoutSeconds
-        ? Math.max(1, Math.ceil(workflow.polling.timeoutSeconds / 60))
-        : 5,
+        ? Math.max(15, Math.ceil(workflow.polling.timeoutSeconds / 60))
+        : 15,
       staggerOffsetMs: staggerMs,
       workingDirectoryForHarness: options.workingDirectoryForHarness,
     });
