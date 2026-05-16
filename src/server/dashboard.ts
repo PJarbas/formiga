@@ -125,6 +125,18 @@ function handleRunDetail(
 
     const events = getRunEvents(runId);
 
+    // Derive failure_reason from existing data (no new DB column)
+    let failure_reason: string | null = null;
+    const runStatus = (run as { status: string }).status;
+    if (runStatus === "failed") {
+      const failedStep = (steps as Array<{ status: string; output?: string | null }>).find(
+        (s) => s.status === "failed",
+      );
+      failure_reason = failedStep?.output || "Run failed";
+    } else if (runStatus === "canceled") {
+      failure_reason = "Canceled";
+    }
+
     // Enrich with worktree information
     let worktree: unknown = null;
     try {
@@ -140,7 +152,7 @@ function handleRunDetail(
       // context may be malformed
     }
 
-    jsonResponse(res, { run, steps, events, worktree });
+    jsonResponse(res, { run, steps, events, worktree, failure_reason });
   } catch (err) {
     errorResponse(res, `Failed to get run detail: ${(err as Error).message}`);
   }

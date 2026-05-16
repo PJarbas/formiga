@@ -218,7 +218,7 @@ describe("--help infrastructure", () => {
     const result = cli(["--help"]);
     try {
       assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /tamandua install/);
+      assert.match(result.stdout ?? "", /tamandua get-ready/);
       assert.match(result.stdout ?? "", /tamandua update/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
@@ -229,7 +229,7 @@ describe("--help infrastructure", () => {
     const result = cli(["-h"]);
     try {
       assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /tamandua install/);
+      assert.match(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -239,7 +239,7 @@ describe("--help infrastructure", () => {
     const result = cli(["step", "--help"]);
     try {
       assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /tamandua install/);
+      assert.match(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -272,7 +272,7 @@ describe("--help infrastructure", () => {
     const result = cli(["--help", "workflow", "run"]);
     try {
       assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /tamandua install/);
+      assert.match(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -286,7 +286,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /tamandua tamandua/);
       assert.match(result.stdout ?? "", /randomly selected tamandua-themed quote/);
       // Should NOT contain global usage
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -300,7 +300,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /tamandua version/);
       assert.match(result.stdout ?? "", /tamandua --version/);
       assert.match(result.stdout ?? "", /tamandua -v/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -335,7 +335,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /IDENTITY\.md/);
       assert.match(result.stdout ?? "", /SOUL\.md/);
       assert.match(result.stdout ?? "", /provisioned to workflow agents/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -349,7 +349,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /dist\//);
       assert.match(result.stdout ?? "", /package\.json/);
       assert.match(result.stdout ?? "", /build-and-install/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -387,14 +387,14 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /12\. Restarts only the services/);
       // --force documented
       assert.match(result.stdout ?? "", /--force/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("tamandua install --help explains workflow installation and dashboard startup", () => {
-    const result = cli(["install", "--help"]);
+  it("tamandua get-ready --help explains workflow installation and dashboard startup", () => {
+    const result = cli(["get-ready", "--help"]);
     try {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /Install all bundled workflows/);
@@ -455,7 +455,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /NO_WORK/);
       assert.match(result.stdout ?? "", /--run-id/);
       assert.match(result.stdout ?? "", /agent-id/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -471,7 +471,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /"input"/);
       assert.match(result.stdout ?? "", /--run-id/);
       assert.match(result.stdout ?? "", /NO_WORK/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -487,7 +487,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /TESTS:/);
       assert.match(result.stdout ?? "", /stdin/);
       assert.match(result.stdout ?? "", /EOF/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -501,7 +501,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /retry logic/);
       assert.match(result.stdout ?? "", /escalated/);
       assert.match(result.stdout ?? "", /Unknown error/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -516,7 +516,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /done/);
       assert.match(result.stdout ?? "", /pending/);
       assert.match(result.stdout ?? "", /retry/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -526,7 +526,7 @@ describe("--help infrastructure", () => {
     const result = cli(["step", "--help"]);
     try {
       assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /tamandua install/);
+      assert.match(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -543,7 +543,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /status/);
       assert.match(result.stdout ?? "", /3338/);
       assert.match(result.stdout ?? "", /\/mcp/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -560,7 +560,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /3334/);
       assert.match(result.stdout ?? "", /MCP server/);
       assert.match(result.stdout ?? "", /monitoring workflow runs/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -576,7 +576,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /status/);
       assert.match(result.stdout ?? "", /3339/);
       assert.match(result.stdout ?? "", /scheduling API/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -590,7 +590,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /--port/);
       assert.match(result.stdout ?? "", /default: 3338/);
       assert.match(result.stdout ?? "", /already running/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -618,7 +618,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /tamandua logs 20/);
       assert.match(result.stdout ?? "", /tamandua logs abc123/);
       assert.match(result.stdout ?? "", /tamandua logs #3/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -635,7 +635,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /tamandua logs-tail 20/);
       assert.match(result.stdout ?? "", /tamandua logs-tail abc123/);
       assert.match(result.stdout ?? "", /tamandua logs-tail #3/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -655,7 +655,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /tamandua worktree list/);
       assert.match(result.stdout ?? "", /tamandua worktree status abc12345/);
       assert.match(result.stdout ?? "", /tamandua worktree prune --completed --older-than 7d/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -673,7 +673,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /7d.*7 days/);
       assert.match(result.stdout ?? "", /24h.*24 hours/);
       assert.match(result.stdout ?? "", /30m.*30 minutes/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -687,7 +687,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /--force/);
       assert.match(result.stdout ?? "", /Allow removal.*any status/);
       assert.match(result.stdout ?? "", /non-ready/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -703,7 +703,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /Cleanup/);
       assert.match(result.stdout ?? "", /Path/);
       assert.match(result.stdout ?? "", /Origin/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -720,7 +720,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /Orig branch/);
       assert.match(result.stdout ?? "", /Worktree.*Absolute filesystem path/);
       assert.match(result.stdout ?? "", /Cleanup/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -760,7 +760,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /resume.*Resume a paused or failed/);
       assert.match(result.stdout ?? "", /pause-all.*Pause all running/);
       assert.match(result.stdout ?? "", /resume-all.*Resume all paused/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -777,7 +777,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /--worktree-origin-repository/);
       assert.match(result.stdout ?? "", /--worktree-origin-ref/);
       assert.match(result.stdout ?? "", /Add dark mode toggle/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -791,7 +791,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /--drain/);
       assert.match(result.stdout ?? "", /in-flight agent sessions/);
       assert.match(result.stdout ?? "", /dashboard daemon/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -805,7 +805,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /--all.*Uninstall every installed/);
       assert.match(result.stdout ?? "", /--force.*Skip the active-runs/);
       assert.match(result.stdout ?? "", /active runs.*running or paused/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -819,7 +819,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /paused.*Connects to the dashboard daemon/);
       assert.match(result.stdout ?? "", /failed.*Restarts the run/);
       assert.match(result.stdout ?? "", /completed.*cannot be resumed/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -831,7 +831,7 @@ describe("--help infrastructure", () => {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /List available bundled workflows/);
       assert.match(result.stdout ?? "", /workflows\/ directory/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -844,7 +844,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /List all workflow runs/);
       assert.match(result.stdout ?? "", /Status.*Run status/);
       assert.match(result.stdout ?? "", /Tokens.*Total tokens spent/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -857,7 +857,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /Install a specific workflow by name/);
       assert.match(result.stdout ?? "", /YAML spec/);
       assert.match(result.stdout ?? "", /agent workspaces/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -872,7 +872,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /running.*Step currently being executed/);
       assert.match(result.stdout ?? "", /failed.*Step failed/);
       assert.match(result.stdout ?? "", /pending.*Step waiting/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -884,7 +884,7 @@ describe("--help infrastructure", () => {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /Cancel a running workflow/);
       assert.match(result.stdout ?? "", /prefix matching/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -897,7 +897,7 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /Pause all running workflows/);
       assert.match(result.stdout ?? "", /--drain/);
       assert.match(result.stdout ?? "", /in-flight agent sessions/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -921,7 +921,19 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /Resume all paused workflows/);
       assert.match(result.stdout ?? "", /Only paused runs are resumed/);
       assert.match(result.stdout ?? "", /failed runs are not resumed/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua install/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  // US-001: get-ready replaces install
+  it("tamandua install as top-level command is no longer accepted", () => {
+    const result = cli(["install"]);
+    try {
+      assert.notEqual(result.status, 0);
+      // Should not perform old workflow installation behavior
+      assert.doesNotMatch(result.stdout ?? "", /Installing.*workflow/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }

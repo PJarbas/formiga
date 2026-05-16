@@ -237,12 +237,12 @@ Examples:
   tamandua update --force     # Force update even with active runs`;
 }
 
-function getInstallHelp(): string {
-  return `tamandua install — Install all bundled workflows from the source checkout
+function getGetReadyHelp(): string {
+  return `tamandua get-ready — Install all bundled workflows from the source checkout
 
-Usage: tamandua install
+Usage: tamandua get-ready
 
-tamandua install sets up Tamandua by installing every bundled workflow and
+tamandua get-ready sets up Tamandua by installing every bundled workflow and
 establishing the CLI symlink so tamandua is available on your PATH.
 
 In order, it does this:
@@ -259,7 +259,7 @@ In order, it does this:
   6. Reports whether the MCP server is running.
 
 Examples:
-  tamandua install            # Install all bundled workflows and start dashboard
+  tamandua get-ready            # Install all bundled workflows and start dashboard
   tamandua workflow install <name>  # Install a single workflow by name`;
 }
 
@@ -1034,7 +1034,7 @@ function getUsageText(): string {
   return [
     "Run tamandua <command> --help for detailed command help.",
     "",
-    "tamandua install                      Install all bundled workflows",
+    "tamandua get-ready                    Install bundled workflows and start dashboard/control plane",
     "tamandua uninstall [--force]          Full uninstall",
     "", "tamandua workflow list                List available workflows",
     "tamandua workflow install <name|--all>  Install a workflow (or all)",
@@ -1110,8 +1110,8 @@ async function main() {
     if (group === "update") {
       printHelp(getUpdateHelp());
     }
-    if (group === "install") {
-      printHelp(getInstallHelp());
+    if (group === "get-ready") {
+      printHelp(getGetReadyHelp());
     }
     if (group === "uninstall") {
       printHelp(getUninstallHelp());
@@ -1224,7 +1224,7 @@ async function main() {
     console.log("Tamandua fully uninstalled."); return;
   }
 
-  if (group === "install" && !args[1]) {
+  if (group === "get-ready" && !args[1]) {
     const workflows = await listBundledWorkflows();
     if (workflows.length === 0) { console.log("No bundled workflows found."); return; }
     console.log(`Installing ${workflows.length} workflow(s)...`);

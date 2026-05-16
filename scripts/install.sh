@@ -64,6 +64,6 @@ chmod +x "$HOME/.local/bin/tamandua"
 
 echo ""
 echo "Tamandua installed successfully!"
-echo "Run: tamandua install"
+echo "Run: tamandua get-ready"
 echo ""
 echo "Make sure ~/.local/bin is in your PATH if not already."

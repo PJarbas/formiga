@@ -419,4 +419,209 @@ describe("events", () => {
       );
     });
   });
+
+  it("returns empty when events file does not exist (ENOENT)", () => {
+    const result = readEventsFromCursor({ kind: "global" }, 0);
+    assert.deepEqual(result.events, []);
+    assert.equal(result.nextOffset, 0);
+  });
+
+  it("returns empty on non-ENOENT read error (e.g. permission denied)", () => {
+    // Create a directory where the file would be — making readFileSync fail with EISDIR
+    const globalFile = path.join(stateDir, "events", "all.jsonl");
+    fs.mkdirSync(globalFile, { recursive: true }); // create a directory with the file name
+
+    const result = readEventsFromCursor({ kind: "global" }, 0);
+    assert.deepEqual(result.events, []);
+  });
+});
+
+describe("emitEvent", () => {
+  let stateDir: string;
+  let originalStateDir: string | undefined;
+
+  beforeEach(() => {
+    originalStateDir = process.env.TAMANDUA_STATE_DIR;
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-emit-"));
+    process.env.TAMANDUA_STATE_DIR = stateDir;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = originalStateDir;
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("writes to both run-specific and global events files", () => {
+    const evt = makeEvent("run-emit", "run.started");
+    emitEvent(evt);
+
+    const runFile = path.join(stateDir, "events", "run-emit.jsonl");
+    const globalFile = path.join(stateDir, "events", "all.jsonl");
+
+    const runContent = fs.readFileSync(runFile, "utf-8");
+    const globalContent = fs.readFileSync(globalFile, "utf-8");
+
+    assert.ok(runContent.includes(evt.runId));
+    assert.ok(globalContent.includes(evt.runId));
+  });
+
+  it("creates events directory if it does not exist", () => {
+    const eventsDir = path.join(stateDir, "events");
+    assert.ok(!fs.existsSync(eventsDir));
+
+    emitEvent(makeEvent("run-createdir", "run.started"));
+
+    assert.ok(fs.existsSync(eventsDir));
+    assert.ok(fs.statSync(eventsDir).isDirectory());
+  });
+});
+
+describe("getRecentEvents", () => {
+  let stateDir: string;
+  let originalStateDir: string | undefined;
+
+  beforeEach(() => {
+    originalStateDir = process.env.TAMANDUA_STATE_DIR;
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-recent-"));
+    process.env.TAMANDUA_STATE_DIR = stateDir;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = originalStateDir;
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("returns empty array when global file does not exist", () => {
+    const events = getRecentEvents();
+    assert.deepEqual(events, []);
+  });
+
+  it("reads recent events from global file", () => {
+    const globalFile = path.join(stateDir, "events", "all.jsonl");
+    fs.mkdirSync(path.dirname(globalFile), { recursive: true });
+
+    const evt1 = makeEvent("run-a", "run.started");
+    const evt2 = makeEvent("run-a", "run.completed");
+    fs.appendFileSync(globalFile, `${JSON.stringify(evt1)}\n${JSON.stringify(evt2)}\n`, "utf-8");
+
+    const events = getRecentEvents();
+    assert.equal(events.length, 2);
+    assert.equal(events[0]!.event, "run.started");
+    assert.equal(events[1]!.event, "run.completed");
+  });
+
+  it("respects limit parameter", () => {
+    const globalFile = path.join(stateDir, "events", "all.jsonl");
+    fs.mkdirSync(path.dirname(globalFile), { recursive: true });
+
+    for (let i = 0; i < 10; i++) {
+      const evt = makeEvent("run-a", `event.${i}`);
+      fs.appendFileSync(globalFile, `${JSON.stringify(evt)}\n`, "utf-8");
+    }
+
+    const events = getRecentEvents(3);
+    assert.equal(events.length, 3);
+    assert.equal(events[0]!.event, "event.7");
+    assert.equal(events[2]!.event, "event.9");
+  });
+
+  it("skips malformed JSON lines", () => {
+    const globalFile = path.join(stateDir, "events", "all.jsonl");
+    fs.mkdirSync(path.dirname(globalFile), { recursive: true });
+
+    const evt1 = makeEvent("run-a", "run.started");
+    const evt2 = makeEvent("run-a", "run.completed");
+    fs.appendFileSync(globalFile, `${JSON.stringify(evt1)}\nnot-json\n${JSON.stringify(evt2)}\n`, "utf-8");
+
+    const events = getRecentEvents();
+    // Only valid JSON lines are returned
+    assert.equal(events.length, 2);
+    assert.equal(events[0]!.event, "run.started");
+    assert.equal(events[1]!.event, "run.completed");
+  });
+
+  it("handles global events file being a directory (non-ENOENT error)", () => {
+    // Create a directory where the global file should be
+    const globalFileAsDir = path.join(stateDir, "events", "all.jsonl");
+    fs.mkdirSync(globalFileAsDir, { recursive: true });
+
+    const events = getRecentEvents();
+    assert.deepEqual(events, []);
+  });
+});
+
+describe("getRunEvents", () => {
+  let stateDir: string;
+  let originalStateDir: string | undefined;
+
+  beforeEach(() => {
+    originalStateDir = process.env.TAMANDUA_STATE_DIR;
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-runevents-"));
+    process.env.TAMANDUA_STATE_DIR = stateDir;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
+    else process.env.TAMANDUA_STATE_DIR = originalStateDir;
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("returns empty array when run events file does not exist", () => {
+    const events = getRunEvents("nonexistent-run");
+    assert.deepEqual(events, []);
+  });
+
+  it("reads all events for a specific run", () => {
+    const runId = "run-readall";
+    const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
+    fs.mkdirSync(path.dirname(runFile), { recursive: true });
+
+    const evt1 = makeEvent(runId, "run.started");
+    const evt2 = makeEvent(runId, "step.running");
+    const evt3 = makeEvent(runId, "step.done");
+    fs.appendFileSync(
+      runFile,
+      `${JSON.stringify(evt1)}\n${JSON.stringify(evt2)}\n${JSON.stringify(evt3)}\n`,
+      "utf-8",
+    );
+
+    const events = getRunEvents(runId);
+    assert.equal(events.length, 3);
+    assert.equal(events[0]!.event, "run.started");
+    assert.equal(events[2]!.event, "step.done");
+  });
+
+  it("skips malformed JSON lines in run events", () => {
+    const runId = "run-malformed";
+    const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
+    fs.mkdirSync(path.dirname(runFile), { recursive: true });
+
+    const evt1 = makeEvent(runId, "run.started");
+    fs.appendFileSync(runFile, `bad-json\n${JSON.stringify(evt1)}\n`, "utf-8");
+
+    const events = getRunEvents(runId);
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.event, "run.started");
+  });
+
+  it("handles run events file being a directory", () => {
+    const runId = "run-dir-instead";
+    const runFileAsDir = path.join(stateDir, "events", `${runId}.jsonl`);
+    fs.mkdirSync(runFileAsDir, { recursive: true });
+
+    const events = getRunEvents(runId);
+    assert.deepEqual(events, []);
+  });
+});
+
+describe("getEventsPath", () => {
+  it("returns the events directory under TAMANDUA_STATE_DIR", () => {
+    const p = getEventsPath();
+    assert.ok(p.includes("events"));
+  });
 });

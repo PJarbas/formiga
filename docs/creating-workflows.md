@@ -270,4 +270,4 @@ tamandua workflow install --all
 tamandua workflow run <workflow-id> "your task description"
 ```
 
-`tamandua workflow install` only accepts the **id of a workflow bundled with this repo** (a directory under `workflows/` in the tamandua install). Installing a custom workflow from a filesystem path or a remote URL is not currently supported by the CLI — to add a custom workflow, drop it into the `workflows/` directory of your tamandua checkout and reinstall.
+`tamandua workflow install` only accepts the **id of a workflow bundled with this repo** (a directory under `workflows/` in the tamandua source checkout). Installing a custom workflow from a filesystem path or a remote URL is not currently supported by the CLI — to add a custom workflow, drop it into the `workflows/` directory of your tamandua checkout and reinstall.

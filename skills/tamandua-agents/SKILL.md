@@ -167,6 +167,39 @@ output. The remote MCP server can be managed independently with
 `tamandua source-path` prints the source checkout path that `tamandua update`
 uses to pull, rebuild, and reinstall.
 
+### 2.4) First-time setup with get-ready
+
+Use `tamandua get-ready` to prepare a fresh Tamandua checkout.
+
+```bash
+tamandua get-ready
+```
+
+`get-ready` performs these setup steps in order:
+
+1. Installs all bundled workflows into your Tamandua state directory
+2. Ensures the CLI launcher symlink exists at `~/.local/bin/tamandua`
+3. Starts the dashboard daemon if it is not already running
+   (the daemon co-manages the dashboard HTTP server and the in-process control plane)
+4. Reports dashboard and MCP server status
+
+Run `get-ready` after pulling a new Tamandua checkout or after
+`tamandua update` if workflows or services need reinstallation.
+It is safe to run multiple times — already-installed workflows are
+skipped and a running daemon is left untouched.
+
+Example session:
+
+```bash
+cd /path/to/tamandua
+./build && ./install
+tamandua get-ready
+# -> Installs bundled workflows
+# -> Ensures CLI symlink exists
+# -> Dashboard is running on port 3334
+# -> MCP server is not running (start it with: tamandua mcp start)
+```
+
 ### 5) Review artifacts on changes
 
 When making code changes, review whether these artifacts need updating:

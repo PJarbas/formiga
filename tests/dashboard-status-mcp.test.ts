@@ -268,8 +268,8 @@ describe("tamandua dashboard status MCP visibility", () => {
     }
   });
 
-  // AC 4: install suggests tamandua mcp start
-  it("tamandua install suggests MCP start when MCP is not running", async () => {
+  // AC 4: get-ready suggests tamandua mcp start
+  it("tamandua get-ready suggests MCP start when MCP is not running", async () => {
     const tempEnv = createTempEnv();
     const controlPort = await reserveRandomPort();
     const cliEnv = {
@@ -279,7 +279,7 @@ describe("tamandua dashboard status MCP visibility", () => {
     };
 
     try {
-      const install = await runCliOnce(["install"], cliEnv);
+      const install = await runCliOnce(["get-ready"], cliEnv);
       assert.equal(install.code, 0, install.stderr || install.stdout);
       assert.match(install.stdout, /MCP server not started\. To start it: tamandua mcp start/);
     } finally {

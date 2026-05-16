@@ -191,7 +191,7 @@ You're installing agent teams that run code on your machine. We take that seriou
 
 | Command | Description |
 |---------|-------------|
-| `tamandua install` | Install all bundled workflows |
+| `tamandua get-ready` | Install bundled workflows and start dashboard/control plane |
 | `tamandua source-path` | Print the Tamandua source checkout path |
 | `tamandua skill-path` | Print the path to the bundled tamandua-agents agent skill |
 | `tamandua update [--force]` | Pull the source checkout, rebuild, reinstall workflows, and restart previously running services |

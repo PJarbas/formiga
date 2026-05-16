@@ -473,6 +473,228 @@ describe("dashboard MCP status API", () => {
   });
 });
 
+describe("dashboard run detail failure_reason", () => {
+  it("returns failure_reason=null for running run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-running";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 1, 'wf-1', 'task', 'running', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+      assert.equal(response.status, 200);
+
+      const body = await response.json() as { failure_reason: string | null };
+      assert.equal(body.failure_reason, null);
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns failure_reason=null for completed run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-completed";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 2, 'wf-1', 'task', 'completed', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+      assert.equal(response.status, 200);
+
+      const body = await response.json() as { failure_reason: string | null };
+      assert.equal(body.failure_reason, null);
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns failure_reason=null for paused run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-paused";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 3, 'wf-1', 'task', 'paused', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+      assert.equal(response.status, 200);
+
+      const body = await response.json() as { failure_reason: string | null };
+      assert.equal(body.failure_reason, null);
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 'Canceled' for canceled run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-canceled";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 4, 'wf-1', 'task', 'canceled', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+      assert.equal(response.status, 200);
+
+      const body = await response.json() as { failure_reason: string | null };
+      assert.equal(body.failure_reason, "Canceled");
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns first failed step output for failed run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-failed";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 5, 'wf-1', 'task', 'failed', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, output, created_at, updated_at)
+      VALUES ('step-1', ?, 's1', 'agent-a', 0, 'do thing', '{}', 'done', 'All good', '2026-01-01', '2026-01-01')
+    `).run(runId);
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, output, created_at, updated_at)
+      VALUES ('step-2', ?, 's2', 'agent-b', 1, 'do thing 2', '{}', 'failed', 'Build error: syntax', '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+      assert.equal(response.status, 200);
+
+      const body = await response.json() as { failure_reason: string | null };
+      assert.equal(body.failure_reason, "Build error: syntax");
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 'Run failed' for failed run with no failed-step output", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-failed-no-output";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 6, 'wf-1', 'task', 'failed', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    // No steps at all - should fall back to "Run failed"
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}`);
+      assert.equal(response.status, 200);
+
+      const body = await response.json() as { failure_reason: string | null };
+      assert.equal(body.failure_reason, "Run failed");
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("dashboard version status API", () => {
   it("GET /api/version-status returns { updateAvailable, currentHead, remoteHead, checkedAt } when no file exists", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-version-"));
