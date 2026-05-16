@@ -49,4 +49,44 @@ describe("test isolation guard", () => {
 
     assert.deepEqual(violations, []);
   });
+
+  it("test files that use logger or agent-scheduler must set TAMANDUA_STATE_DIR", () => {
+    // Test files that import logger or agent-scheduler functions must isolate
+    // their log output using TAMANDUA_STATE_DIR to avoid polluting the live
+    // ~/.tamandua/tamandua.log. This regression test guards against that.
+    const testFiles = [
+      ...collectTestFiles(path.join(process.cwd(), "tests")),
+      ...collectTestFiles(path.join(process.cwd(), "src")),
+    ];
+
+    // Patterns that indicate the test file uses logger functions that write to disk.
+    // 1. Direct import from logger.js => logger.info/warn/error/debug/log calls write to disk.
+    // 2. Import of runPi or executePollingRound from agent-scheduler => these call the logger internally.
+    const loggerSensitiveImports = [
+      /from\s+["'].*\/lib\/logger\.js["']/,
+      /from\s+["'].*\/installer\/agent-scheduler\.js["'].*\brunPi\b/,
+      /from\s+["'].*\/installer\/agent-scheduler\.js["'].*\bexecutePollingRound\b/,
+    ];
+
+    const logsViaTamanduaDir = /TAMANDUA_STATE_DIR/;
+    // Acceptable alternatives to TAMANDUA_STATE_DIR: monkey-patching logger so it never writes to disk
+    const hasLoggerPatch = /captureLoggerCalls|mutableLogger\.(?:info|warn|error)\s*=/;
+
+    const violations: string[] = [];
+    for (const file of testFiles) {
+      const relative = path.relative(process.cwd(), file);
+      const content = fs.readFileSync(file, "utf-8");
+
+      const importsLogger = loggerSensitiveImports.some((p) => p.test(content));
+      if (!importsLogger) continue;
+
+      if (!logsViaTamanduaDir.test(content) && !hasLoggerPatch.test(content)) {
+        violations.push(
+          `${relative}: imports logger or agent-scheduler without setting TAMANDUA_STATE_DIR or monkey-patching logger`,
+        );
+      }
+    }
+
+    assert.deepEqual(violations, []);
+  });
 });

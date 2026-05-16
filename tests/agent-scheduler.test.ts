@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,6 +10,20 @@ import {
   parsePollingRoundMetadata,
   extractTokenUsage,
 } from "../dist/installer/agent-scheduler.js";
+
+// Isolate log output to a temp directory so tests don't write to ~/.tamandua/tamandua.log
+const originalStateDir = process.env.TAMANDUA_STATE_DIR;
+const testStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-agent-scheduler-"));
+process.env.TAMANDUA_STATE_DIR = testStateDir;
+
+after(() => {
+  if (originalStateDir === undefined) {
+    delete process.env.TAMANDUA_STATE_DIR;
+  } else {
+    process.env.TAMANDUA_STATE_DIR = originalStateDir;
+  }
+  fs.rmSync(testStateDir, { recursive: true, force: true });
+});
 
 // ── Probe for real pi availability (synchronous, module-load time) ─
 let piAvailable = false;

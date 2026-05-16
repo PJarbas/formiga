@@ -1,6 +1,22 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { logger, readRecentLogs, log, formatEntry } from "../dist/lib/logger.js";
+
+const originalStateDir = process.env.TAMANDUA_STATE_DIR;
+const testStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-logger-callers-"));
+process.env.TAMANDUA_STATE_DIR = testStateDir;
+
+after(() => {
+  if (originalStateDir === undefined) {
+    delete process.env.TAMANDUA_STATE_DIR;
+  } else {
+    process.env.TAMANDUA_STATE_DIR = originalStateDir;
+  }
+  fs.rmSync(testStateDir, { recursive: true, force: true });
+});
 
 describe("US-002: Logger caller integration", () => {
   it("logger.info returns void (not a Promise)", () => {
