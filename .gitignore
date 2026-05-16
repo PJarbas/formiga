@@ -9,10 +9,10 @@ medic.json
 .tamandua-pid
 *.key
 *.pem
+*.secret
 *.swp
 .DS_Store
 coverage/
 .nyc_output/
 .env.local
 .env.*.local
-*.secret

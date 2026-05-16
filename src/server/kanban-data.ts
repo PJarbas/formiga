@@ -19,6 +19,7 @@
  * representing the step itself.
  */
 import type { DatabaseSync } from "node:sqlite";
+import type { TamanduaEvent } from "../installer/events.js";
 
 export type VisualStatus = "todo" | "running" | "done" | "failed";
 
@@ -65,6 +66,42 @@ export interface KanbanSnapshot {
   currentStoryId: string | null;
   /** Server-side wall clock, for client elapsed/skew calculations. */
   generatedAt: string;
+}
+
+export interface KanbanCardDetail {
+  runId: string;
+  cardId: string;
+  title: string;
+  status: string;
+  /** Present for story cards (loop step children). */
+  storyId?: string;
+  /** Story description (story cards only). */
+  description?: string;
+  /** Story acceptance criteria (story cards only). */
+  acceptanceCriteria?: string[];
+  /** The input template (prompt) sent to the agent for this step. */
+  input_template: string;
+  /** Step/story output text. */
+  output?: string;
+  /** Run task description. */
+  task: string;
+  /** Events filtered to the relevant step/story. */
+  events: TamanduaEvent[];
+  /** Timing computed from first and last relevant event. */
+  timing?: {
+    firstEvent: string;
+    lastEvent: string;
+    durationMs: number;
+  };
+  /** Token spend from run.tokens.updated events (total and per-delta). */
+  tokens?: {
+    total: number;
+    deltas: number[];
+  };
+  /** Failure detail from step.failed / story.failed events. */
+  failureDetail?: string;
+  retryCount: number;
+  maxRetries: number;
 }
 
 interface StepRow {
@@ -162,6 +199,171 @@ function stepCardSub(step: StepRow): string {
     return `retry ${step.retry_count}/${step.max_retries ?? "?"}`;
   }
   return `updated ${step.updated_at}`;
+}
+
+// ── Helpers for buildKanbanCardDetail ──────────────────────────────
+
+function parseEventIsoMs(ts: string | undefined): number {
+  if (!ts) return 0;
+  const d = new Date(ts);
+  return Number.isFinite(d.getTime()) ? d.getTime() : 0;
+}
+
+function extractFailureDetail(events: TamanduaEvent[]): string | undefined {
+  // Prefer story.failed then step.failed, most recent first.
+  const sorted = [...events].sort(
+    (a, b) => parseEventIsoMs(b.ts) - parseEventIsoMs(a.ts),
+  );
+  for (const e of sorted) {
+    if (e.event === "story.failed" && e.detail) return e.detail;
+  }
+  for (const e of sorted) {
+    if (e.event === "step.failed" && e.detail) return e.detail;
+  }
+  return undefined;
+}
+
+function aggregateTokens(events: TamanduaEvent[]): NonNullable<KanbanCardDetail["tokens"]> | undefined {
+  const deltas: number[] = [];
+  let lastTotal = 0;
+  for (const e of events) {
+    if (e.event === "run.tokens.updated") {
+      if (typeof e.tokenDelta === "number") deltas.push(e.tokenDelta);
+      if (typeof e.tokensSpent === "number") lastTotal = e.tokensSpent;
+    }
+  }
+  if (deltas.length === 0 && lastTotal === 0) return undefined;
+  return { total: lastTotal, deltas };
+}
+
+/**
+ * Build enriched detail for a single kanban card (story or step).
+ * Returns null if the run doesn't exist or the cardId doesn't match
+ * any story or step in the run.
+ *
+ * Visible for testing: takes a DatabaseSync handle + event list so
+ * tests can inject in-memory data.
+ */
+export function buildKanbanCardDetail(
+  db: DatabaseSync,
+  runId: string,
+  cardId: string,
+  runEvents?: TamanduaEvent[],
+): KanbanCardDetail | null {
+  // ── run existence check ─────────────────────────────────────────
+  const run = db.prepare(
+    "SELECT id, task FROM runs WHERE id = ?",
+  ).get(runId) as unknown as { id: string; task: string } | undefined;
+  if (!run) return null;
+
+  // ── try matching a story first ─────────────────────────────────
+  const story = db.prepare(`
+    SELECT story_id, story_index, title, description, acceptance_criteria,
+           status, output, retry_count, max_retries
+    FROM stories WHERE run_id = ? AND story_id = ?
+  `).get(runId, cardId) as unknown as {
+    story_id: string; story_index: number; title: string;
+    description: string; acceptance_criteria: string;
+    status: string; output: string | null;
+    retry_count: number; max_retries: number;
+  } | undefined;
+
+  if (story) {
+    // Find the loop step that holds this story.
+    const loopStep = db.prepare(`
+      SELECT step_id, input_template, output, retry_count, max_retries
+      FROM steps WHERE run_id = ? AND type = 'loop'
+      ORDER BY step_index ASC LIMIT 1
+    `).get(runId) as unknown as {
+      step_id: string; input_template: string; output: string | null;
+      retry_count: number; max_retries: number;
+    } | undefined;
+
+    const events = (runEvents ?? []).filter(
+      (e) =>
+        e.storyId === cardId ||
+        (loopStep &&
+          e.stepId === loopStep.step_id &&
+          !e.storyId),
+    );
+    const timing = buildTiming(events);
+    return {
+      runId,
+      cardId,
+      title: story.title,
+      status: story.status,
+      storyId: story.story_id,
+      description: story.description || undefined,
+      acceptanceCriteria: safeParseJsonArray(story.acceptance_criteria),
+      input_template: loopStep?.input_template ?? "",
+      output: story.output ?? loopStep?.output ?? undefined,
+      task: run.task,
+      events,
+      timing,
+      tokens: aggregateTokens(events),
+      failureDetail: extractFailureDetail(events),
+      retryCount: story.retry_count ?? 0,
+      maxRetries: story.max_retries ?? 4,
+    };
+  }
+
+  // ── try matching a step ────────────────────────────────────────
+  const step = db.prepare(`
+    SELECT step_id, agent_id, input_template, output, status,
+           retry_count, max_retries
+    FROM steps WHERE run_id = ? AND step_id = ?
+  `).get(runId, cardId) as unknown as {
+    step_id: string; agent_id: string; input_template: string;
+    output: string | null; status: string;
+    retry_count: number; max_retries: number;
+  } | undefined;
+
+  if (!step) return null;
+
+  const events = (runEvents ?? []).filter((e) => e.stepId === cardId);
+  const timing = buildTiming(events);
+  return {
+    runId,
+    cardId,
+    title: `${step.agent_id.split("_").pop() ?? step.agent_id} step`,
+    status: step.status,
+    input_template: step.input_template ?? "",
+    output: step.output ?? undefined,
+    task: run.task,
+    events,
+    timing,
+    tokens: aggregateTokens(events),
+    failureDetail: extractFailureDetail(events),
+    retryCount: step.retry_count ?? 0,
+    maxRetries: step.max_retries ?? 4,
+  };
+}
+
+function buildTiming(events: TamanduaEvent[]): KanbanCardDetail["timing"] {
+  if (events.length === 0) return undefined;
+  const sorted = [...events].sort(
+    (a, b) => parseEventIsoMs(a.ts) - parseEventIsoMs(b.ts),
+  );
+  const first = parseEventIsoMs(sorted[0].ts);
+  const last = parseEventIsoMs(sorted[sorted.length - 1].ts);
+  if (first === 0 || last === 0) return undefined;
+  const durationMs = last - first;
+  return {
+    firstEvent: sorted[0].ts,
+    lastEvent: sorted[sorted.length - 1].ts,
+    durationMs: Math.max(0, durationMs),
+  };
+}
+
+function safeParseJsonArray(raw: string): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed as string[];
+  } catch {
+    // malformed JSON — treat as missing
+  }
+  return undefined;
 }
 
 /**

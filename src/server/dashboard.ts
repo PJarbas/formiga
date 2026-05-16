@@ -20,7 +20,7 @@ import { getDb, getSystemTokenSpend } from "../db.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { getMcpStatus } from "./daemonctl.js";
-import { buildKanbanSnapshot } from "./kanban-data.js";
+import { buildKanbanSnapshot, buildKanbanCardDetail } from "./kanban-data.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 import { readVersionStatus } from "../lib/version-check.js";
 
@@ -143,6 +143,35 @@ function handleRunDetail(
     jsonResponse(res, { run, steps, events, worktree });
   } catch (err) {
     errorResponse(res, `Failed to get run detail: ${(err as Error).message}`);
+  }
+}
+
+function handleRunKanbanCardDetail(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const cardId = url.searchParams.get("cardId")?.trim();
+
+    if (!cardId) {
+      errorResponse(res, "Missing required query parameter: cardId", 400);
+      return;
+    }
+
+    const db = getDb();
+    const events = getRunEvents(runId);
+    const detail = buildKanbanCardDetail(db, runId, cardId, events);
+
+    if (!detail) {
+      errorResponse(res, `Card not found: ${cardId} in run ${runId}`, 404);
+      return;
+    }
+
+    jsonResponse(res, detail);
+  } catch (err) {
+    errorResponse(res, `Failed to build card detail: ${(err as Error).message}`);
   }
 }
 
@@ -405,6 +434,13 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
 <body><h1>Tamandua Kanban</h1><p>Kanban HTML not found. Rebuild tamandua or check dist/server/kanban.html.</p></body>
 </html>`, 200);
     }
+    return;
+  }
+
+  // GET /api/runs/:id/kanban/card-detail (registered before /api/runs/:id/kanban and /api/runs/:id)
+  const cardDetailMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/kanban\/card-detail$/);
+  if (method === "GET" && cardDetailMatch) {
+    handleRunKanbanCardDetail(req, res, cardDetailMatch[1]);
     return;
   }
 

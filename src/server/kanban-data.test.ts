@@ -2,8 +2,10 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 
+import type { TamanduaEvent } from "../../dist/installer/events.js";
 import {
   buildKanbanSnapshot,
+  buildKanbanCardDetail,
   laneAgentSuffix,
   normaliseStatus,
 } from "../../dist/server/kanban-data.js";
@@ -76,22 +78,24 @@ function insertStep(
   agent: string,
   index: number,
   status: string,
-  opts: { type?: string; current_story_id?: string | null; retry?: number } = {},
+  opts: { type?: string; current_story_id?: string | null; retry?: number; input_template?: string; output?: string } = {},
 ): void {
   const now = new Date().toISOString();
   db.prepare(
-    "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, type, current_story_id, retry_count, created_at, updated_at) " +
-    "VALUES (?, ?, ?, ?, ?, '', '', ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, type, current_story_id, retry_count, output, created_at, updated_at) " +
+    "VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     `step_${runId}_${stepId}`,
     runId,
     stepId,
     `feature-dev-merge_${agent}`,
     index,
+    opts.input_template ?? "",
     status,
     opts.type ?? "single",
     opts.current_story_id ?? null,
     opts.retry ?? 0,
+    opts.output ?? null,
     now,
     now,
   );
@@ -104,12 +108,25 @@ function insertStory(
   index: number,
   title: string,
   status: string,
+  opts: { description?: string; acceptance_criteria?: string; output?: string } = {},
 ): void {
   const now = new Date().toISOString();
   db.prepare(
-    "INSERT INTO stories (id, run_id, story_index, story_id, title, status, created_at, updated_at) " +
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run(`story_${runId}_${storyId}`, runId, index, storyId, title, status, now, now);
+    "INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status, output, created_at, updated_at) " +
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    `story_${runId}_${storyId}`,
+    runId,
+    index,
+    storyId,
+    title,
+    opts.description ?? "",
+    opts.acceptance_criteria ?? "[]",
+    status,
+    opts.output ?? null,
+    now,
+    now,
+  );
 }
 
 describe("kanban-data: normaliseStatus", () => {
@@ -227,5 +244,289 @@ describe("kanban-data: buildKanbanSnapshot", () => {
       snap.lanes.map((l) => l.agent),
       ["planner", "developer", "merger"],
     );
+  });
+});
+
+// ── buildKanbanCardDetail tests ────────────────────────────────────
+
+function makeEvent(
+  ts: string,
+  event: string,
+  opts: { runId?: string; stepId?: string; storyId?: string; detail?: string; tokenDelta?: number; tokensSpent?: number } = {},
+): TamanduaEvent {
+  return {
+    ts,
+    event,
+    runId: opts.runId ?? "r-detail",
+    stepId: opts.stepId,
+    storyId: opts.storyId,
+    detail: opts.detail,
+    tokenDelta: opts.tokenDelta,
+    tokensSpent: opts.tokensSpent,
+  };
+}
+
+describe("kanban-data: buildKanbanCardDetail", () => {
+  it("returns null for unknown runId", () => {
+    const db = seedDb();
+    assert.equal(buildKanbanCardDetail(db, "nonexistent", "US-001"), null);
+  });
+
+  it("returns null for cardId not matching any story or step", () => {
+    const db = seedDb();
+    insertRun(db, "r1", "running");
+    assert.equal(buildKanbanCardDetail(db, "r1", "nonsense"), null);
+  });
+
+  it("returns story card detail with prompt from loop step", () => {
+    const db = seedDb();
+    insertRun(db, "r1", "running");
+    insertStep(db, "r1", "implement", "developer", 0, "running", {
+      type: "loop",
+      input_template: "Implement the user story: {{story_id}}",
+    });
+    insertStory(db, "r1", "US-001", 0, "Add login", "done", {
+      description: "As a user I want login",
+      acceptance_criteria: '["Login form works", "Error on bad password"]',
+      output: "STATUS: done\nCHANGES: Added login",
+    });
+
+    const events: TamanduaEvent[] = [
+      makeEvent("2025-01-01T10:00:00Z", "story.started", { runId: "r1", stepId: "implement", storyId: "US-001" }),
+      makeEvent("2025-01-01T10:05:00Z", "story.done", { runId: "r1", stepId: "implement", storyId: "US-001" }),
+    ];
+
+    const detail = buildKanbanCardDetail(db, "r1", "US-001", events);
+    assert.ok(detail);
+    assert.equal(detail.cardId, "US-001");
+    assert.equal(detail.title, "Add login");
+    assert.equal(detail.status, "done");
+    assert.equal(detail.storyId, "US-001");
+    assert.equal(detail.description, "As a user I want login");
+    assert.deepEqual(detail.acceptanceCriteria, ["Login form works", "Error on bad password"]);
+    assert.equal(detail.input_template, "Implement the user story: {{story_id}}");
+    assert.equal(detail.output, "STATUS: done\nCHANGES: Added login");
+    assert.equal(detail.retryCount, 0);
+    assert.equal(detail.maxRetries, 4);
+    assert.equal(detail.events.length, 2);
+    assert.ok(detail.timing);
+    assert.equal(detail.timing.durationMs, 5 * 60 * 1000); // 5 minutes
+  });
+
+  it("returns step card detail with input_template and output", () => {
+    const db = seedDb();
+    insertRun(db, "r2", "running");
+    insertStep(db, "r2", "plan", "planner", 0, "done", {
+      input_template: "Plan the feature",
+      output: "STATUS: done\nREPO: /home/repo",
+    });
+
+    const events: TamanduaEvent[] = [
+      makeEvent("2025-01-02T09:00:00Z", "step.running", { runId: "r2", stepId: "plan" }),
+      makeEvent("2025-01-02T09:30:00Z", "step.done", { runId: "r2", stepId: "plan" }),
+    ];
+
+    const detail = buildKanbanCardDetail(db, "r2", "plan", events);
+    assert.ok(detail);
+    assert.equal(detail.cardId, "plan");
+    assert.equal(detail.title, "planner step");
+    assert.equal(detail.status, "done");
+    assert.equal(detail.input_template, "Plan the feature");
+    assert.equal(detail.output, "STATUS: done\nREPO: /home/repo");
+    assert.equal(detail.events.length, 2);
+    assert.ok(detail.timing);
+    assert.equal(detail.timing.durationMs, 30 * 60 * 1000);
+  });
+
+  it("extracts failure detail from step.failed events", () => {
+    const db = seedDb();
+    insertRun(db, "r3", "running");
+    insertStep(db, "r3", "verify", "verifier", 0, "failed", {
+      input_template: "Verify the changes",
+    });
+
+    const events: TamanduaEvent[] = [
+      makeEvent("2025-01-03T10:00:00Z", "step.running", { runId: "r3", stepId: "verify" }),
+      makeEvent("2025-01-03T10:02:00Z", "step.failed", { runId: "r3", stepId: "verify", detail: "Agent terminated without completing step; retries exhausted" }),
+    ];
+
+    const detail = buildKanbanCardDetail(db, "r3", "verify", events);
+    assert.ok(detail);
+    assert.equal(detail.failureDetail, "Agent terminated without completing step; retries exhausted");
+  });
+
+  it("extracts failure detail from story.failed events (preferred over step.failed)", () => {
+    const db = seedDb();
+    insertRun(db, "r4", "running");
+    insertStep(db, "r4", "implement", "developer", 0, "running", {
+      type: "loop",
+      input_template: "Implement {{story_id}}",
+    });
+    insertStory(db, "r4", "US-001", 0, "Broken story", "failed");
+
+    const events: TamanduaEvent[] = [
+      makeEvent("2025-01-04T10:00:00Z", "story.started", { runId: "r4", stepId: "implement", storyId: "US-001" }),
+      makeEvent("2025-01-04T10:01:00Z", "story.failed", { runId: "r4", stepId: "implement", storyId: "US-001", detail: "Abandoned — retries exhausted" }),
+      makeEvent("2025-01-04T10:01:01Z", "step.failed", { runId: "r4", stepId: "implement", detail: "Loop step failed" }),
+    ];
+
+    const detail = buildKanbanCardDetail(db, "r4", "US-001", events);
+    assert.ok(detail);
+    // story.failed detail should win over step.failed detail
+    assert.equal(detail.failureDetail, "Abandoned — retries exhausted");
+  });
+
+  it("aggregates token deltas from run.tokens.updated events", () => {
+    const db = seedDb();
+    insertRun(db, "r5", "running");
+    insertStep(db, "r5", "plan", "planner", 0, "done", {
+      input_template: "Plan it",
+    });
+
+    const events: TamanduaEvent[] = [
+      makeEvent("2025-01-05T10:00:00Z", "step.running", { runId: "r5", stepId: "plan" }),
+      makeEvent("2025-01-05T10:01:00Z", "run.tokens.updated", { runId: "r5", stepId: "plan", tokenDelta: 1500, tokensSpent: 1500 }),
+      makeEvent("2025-01-05T10:02:00Z", "run.tokens.updated", { runId: "r5", stepId: "plan", tokenDelta: 800, tokensSpent: 2300 }),
+      makeEvent("2025-01-05T10:03:00Z", "step.done", { runId: "r5", stepId: "plan" }),
+      makeEvent("2025-01-05T10:03:01Z", "run.tokens.updated", { runId: "r5", stepId: "plan", tokenDelta: 200, tokensSpent: 2500 }),
+    ];
+
+    const detail = buildKanbanCardDetail(db, "r5", "plan", events);
+    assert.ok(detail);
+    assert.ok(detail.tokens);
+    assert.equal(detail.tokens.total, 2500);
+    assert.deepEqual(detail.tokens.deltas, [1500, 800, 200]);
+  });
+
+  it("returns undefined tokens when no token events exist", () => {
+    const db = seedDb();
+    insertRun(db, "r6", "running");
+    insertStep(db, "r6", "plan", "planner", 0, "done", { input_template: "Plan" });
+
+    const events: TamanduaEvent[] = [
+      makeEvent("2025-01-06T10:00:00Z", "step.running", { runId: "r6", stepId: "plan" }),
+      makeEvent("2025-01-06T10:01:00Z", "step.done", { runId: "r6", stepId: "plan" }),
+    ];
+
+    const detail = buildKanbanCardDetail(db, "r6", "plan", events);
+    assert.ok(detail);
+    assert.equal(detail.tokens, undefined);
+  });
+
+  it("returns undefined timing for empty events", () => {
+    const db = seedDb();
+    insertRun(db, "r7", "running");
+    insertStep(db, "r7", "plan", "planner", 0, "waiting", { input_template: "Plan" });
+
+    const detail = buildKanbanCardDetail(db, "r7", "plan", []);
+    assert.ok(detail);
+    assert.equal(detail.timing, undefined);
+  });
+
+  it("returns story card detail without optional fields when missing", () => {
+    const db = seedDb();
+    insertRun(db, "r8", "running");
+    insertStep(db, "r8", "implement", "developer", 0, "running", {
+      type: "loop",
+      input_template: "",
+    });
+    insertStory(db, "r8", "US-001", 0, "Minimal", "pending");
+
+    const detail = buildKanbanCardDetail(db, "r8", "US-001", []);
+    assert.ok(detail);
+    assert.equal(detail.description, undefined);
+    assert.equal(detail.acceptanceCriteria, undefined);
+    assert.equal(detail.input_template, "");
+    assert.equal(detail.output, undefined);
+    assert.equal(detail.failureDetail, undefined);
+  });
+
+  it("returns run task in the detail", () => {
+    const db = seedDb();
+    insertRun(db, "r9", "running");
+    insertStep(db, "r9", "plan", "planner", 0, "done", {
+      input_template: "Plan",
+    });
+
+    const detail = buildKanbanCardDetail(db, "r9", "plan", []);
+    assert.ok(detail);
+    assert.equal(detail.task, "demo task");
+  });
+
+  it("handles story with malformed acceptance_criteria JSON gracefully", () => {
+    const db = seedDb();
+    insertRun(db, "r10", "running");
+    insertStep(db, "r10", "implement", "developer", 0, "running", {
+      type: "loop",
+      input_template: "Do it",
+    });
+    insertStory(db, "r10", "US-001", 0, "Broken JSON story", "done", {
+      acceptance_criteria: "not-valid-json",
+    });
+
+    const detail = buildKanbanCardDetail(db, "r10", "US-001", []);
+    assert.ok(detail);
+    assert.equal(detail.acceptanceCriteria, undefined);
+  });
+
+  it("events array includes only step-matching events for step cards", () => {
+    const db = seedDb();
+    insertRun(db, "r11", "running");
+    insertStep(db, "r11", "plan", "planner", 0, "done", { input_template: "Plan" });
+    insertStep(db, "r11", "verify", "verifier", 1, "done", { input_template: "Verify" });
+
+    const events: TamanduaEvent[] = [
+      makeEvent("2025-01-07T10:00:00Z", "step.running", { runId: "r11", stepId: "plan" }),
+      makeEvent("2025-01-07T10:01:00Z", "step.done", { runId: "r11", stepId: "plan" }),
+      makeEvent("2025-01-07T10:02:00Z", "step.running", { runId: "r11", stepId: "verify" }),
+      makeEvent("2025-01-07T10:03:00Z", "step.done", { runId: "r11", stepId: "verify" }),
+    ];
+
+    const detail = buildKanbanCardDetail(db, "r11", "plan", events);
+    assert.ok(detail);
+    assert.equal(detail.events.length, 2);
+    assert.ok(detail.events.every((e) => e.stepId === "plan"));
+  });
+
+  it("events array includes story-matching and loop-step events for story cards", () => {
+    const db = seedDb();
+    insertRun(db, "r12", "running");
+    insertStep(db, "r12", "implement", "developer", 0, "running", {
+      type: "loop",
+      input_template: "Implement",
+    });
+    insertStory(db, "r12", "US-001", 0, "Story A", "done");
+    insertStory(db, "r12", "US-002", 1, "Story B", "pending");
+
+    const events: TamanduaEvent[] = [
+      makeEvent("2025-01-08T10:00:00Z", "story.started", { runId: "r12", stepId: "implement", storyId: "US-001" }),
+      makeEvent("2025-01-08T10:01:00Z", "run.tokens.updated", { runId: "r12", stepId: "implement", tokenDelta: 500, tokensSpent: 500 }),
+      makeEvent("2025-01-08T10:02:00Z", "story.done", { runId: "r12", stepId: "implement", storyId: "US-001" }),
+      // This one is for US-002 — should NOT be included for US-001 card
+      makeEvent("2025-01-08T10:03:00Z", "story.started", { runId: "r12", stepId: "implement", storyId: "US-002" }),
+    ];
+
+    const detail = buildKanbanCardDetail(db, "r12", "US-001", events);
+    assert.ok(detail);
+    // Should include storyId==="US-001" events (3) + loop-step events (the token event with stepId==="implement")
+    // The story.started for US-002 should be excluded
+    assert.equal(detail.events.length, 3);
+    // US-002 events should be excluded (different storyId + step-level filter)
+    assert.ok(!detail.events.some((e) => e.storyId === "US-002"));
+  });
+
+  it("includes step output when story output is null", () => {
+    const db = seedDb();
+    insertRun(db, "r13", "running");
+    insertStep(db, "r13", "implement", "developer", 0, "running", {
+      type: "loop",
+      input_template: "Do it",
+      output: "Step-level output",
+    });
+    insertStory(db, "r13", "US-001", 0, "Story", "done");
+
+    const detail = buildKanbanCardDetail(db, "r13", "US-001", []);
+    assert.ok(detail);
+    assert.equal(detail.output, "Step-level output");
   });
 });
