@@ -32,6 +32,7 @@ describe("workflow parsing", () => {
     assert.ok(workflowIds.includes("feature-dev-worktree"));
     assert.ok(workflowIds.includes("bug-fix-worktree"));
     assert.ok(workflowIds.includes("security-audit-worktree"));
+    assert.ok(workflowIds.includes("just-do-it"));
   });
 
   for (const id of workflowIds) {

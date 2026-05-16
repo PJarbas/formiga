@@ -87,6 +87,14 @@ Paste a bug report. Get back a fix with a regression test. Triager reproduces it
 triage → investigate → setup → fix → verify → PR
 ```
 
+### just-do-it `1 agent`
+
+Describe what you want in plain language. The dispatcher analyzes your prompt, picks the most appropriate workflow, and launches it. No need to know which workflow to use — just describe the task and it figures out the rest.
+
+```
+dispatch
+```
+
 ---
 
 ## Why It Works

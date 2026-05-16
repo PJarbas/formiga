@@ -1,0 +1,81 @@
+# Ralph loop (https://github.com/snarktank/ralph) — each agent runs in a fresh
+# session with clean context. Memory persists via git history and progress files.
+id: just-do-it
+name: Just Do It
+version: 1
+description: |
+  Meta-workflow that analyzes user prompts and dispatches to the most
+  appropriate workflow for the task. The dispatcher agent studies the
+  available workflows, selects the one best suited for what the user asked,
+  decides whether to launch it as a no-hurry run, and then itself
+  launches a tamandua run with the chosen workflow.
+
+  If just-do-it is itself launched as no-hurry, the dispatched workflow
+  will always be no-hurry regardless of the user prompt content.
+
+polling:
+  model: default
+  timeoutSeconds: 120
+
+agents:
+  - id: dispatcher
+    name: Dispatcher
+    role: analysis
+    description: Analyzes user prompts, selects the best workflow, and launches runs.
+    workspace:
+      baseDir: agents/dispatcher
+      skills:
+        - tamandua-agents
+      files:
+        AGENTS.md: agents/dispatcher/AGENTS.md
+        SOUL.md: agents/dispatcher/SOUL.md
+        IDENTITY.md: agents/dispatcher/IDENTITY.md
+
+steps:
+  - id: dispatch
+    agent: dispatcher
+    input: |
+      Analyze the user's task and dispatch it to the most appropriate workflow.
+
+      TASK:
+      {{task}}
+
+      NO_HURRY_SAVE_TOKENS_MODE: {{no_hurry_save_tokens_mode}}
+
+      Instructions:
+      1. Discover available workflows: `tamandua workflow list`
+      2. Analyze the TASK above — what is the user asking for?
+      3. Select the most appropriate workflow based on the task type:
+         - Feature development → feature-dev, feature-dev-merge, feature-dev-github-pr,
+           feature-dev-worktree, feature-dev-merge-worktree
+         - Bug fixing → bug-fix, bug-fix-merge, bug-fix-github-pr,
+           bug-fix-worktree, bug-fix-merge-worktree
+         - Security audit → security-audit, security-audit-merge, security-audit-github-pr,
+           security-audit-worktree, security-audit-merge-worktree
+      4. Choose the variant based on user needs: merge vs non-merge, worktree vs direct,
+         PR vs local-only
+      5. Decide no-hurry mode:
+         - If {{no_hurry_save_tokens_mode}} is true, launch the dispatched workflow
+           with --no-hurry ALWAYS (parent was no-hurry)
+         - If {{no_hurry_save_tokens_mode}} is false, detect urgency from the user's
+           prompt: markers like "URGENT", "ASAP", "immediately", "right now", "as fast
+           as possible" indicate normal (fast) mode; polite or casual language
+           ("when you get a chance", "no rush", "whenever") indicates no-hurry
+         - Default: normal mode unless urgency markers are absent AND the prompt
+           tone is relaxed
+      6. Launch the run:
+         - Use `tamandua workflow run <selected-workflow-id> --task "<the user's original task>"`
+         - If no-hurry was decided, add `--no-hurry` to the command
+         - Capture the RUN_ID from the output
+      7. Report what you did
+
+      Reply with:
+      STATUS: done
+      SELECTED_WORKFLOW: <workflow-id you chose>
+      NO_HURRY: <true|false>
+      REASONING: <why you chose this workflow and no-hurry decision>
+      LAUNCHED_RUN_ID: <the run ID from tamandua workflow run>
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
