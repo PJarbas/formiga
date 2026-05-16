@@ -39,6 +39,14 @@ That's it. Run `tamandua workflow list` to see available workflows.
 
 ## What You Get: Agent Team Workflows
 
+### do-now `1 agent`
+
+Submit any task. Get back a success/failure report with a clear reason. No planning, no stories, no merge — just execute the task and report back what happened. Ideal for quick one-off tasks.
+
+```
+execute
+```
+
 ### feature-dev `7 agents`
 
 Drop in a feature request. Get back a tested PR. The planner decomposes your task into stories. Each story gets implemented, verified, and tested in isolation. Failures retry automatically. Nothing ships without a code review.

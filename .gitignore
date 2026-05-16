@@ -10,3 +10,9 @@ medic.json
 *.key
 *.pem
 *.swp
+.DS_Store
+coverage/
+.nyc_output/
+.env.local
+.env.*.local
+*.secret
