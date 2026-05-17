@@ -1,0 +1,95 @@
+# Progress Log
+Run: 2ca85f7e-4dc6-41b2-af10-5bb74132a484
+Task: Create a new do-review-do-verify workflow with doer, reviewer, and verifier agents
+Started: 2026-05-17
+
+## Codebase Patterns
+
+- Workflow YAML format: id, name, version, description, polling, agents, steps
+- loadWorkflowSpec validates id, agents (non-empty array with id + workspace.baseDir), steps (with id + agent)
+- Workspace files use relative paths from the workflow directory
+- Agent roles: analysis (read-only), coding (read/write/exec), verification (read+exec, no write), testing, pr, scanning
+- Use `tamandua` on PATH to run the CLI (installed at ~/.local/bin/tamandua), not `node bin/tamandua`
+- Tests import from dist/ (build before testing)
+- Generic workflow validation tests iterate over ALL directories in workflows/ - new workflows must include all workspace.files or those tests fail
+- Persona-specific tests live in describes within tests/workflow-validation.test.ts; each agent gets a dedicated block
+- AGENTS.md for each agent should include: responsibilities, output format, retry_feedback handling, operating modes
+- Workflow structure tests check: agent count, step count and ordering, agent assignments, context passing via `{{var}}` placeholders in step inputs, no unexpected loop wiring, no merge steps
+
+---
+
+## 2026-05-17 - US-001: Create workflow.yml for do-review-do-verify
+- Created workflows/do-review-do-verify/workflow.yml with:
+  - 3 agents: doer (coding), reviewer (analysis), verifier (verification)
+  - 4 steps: do, review, do-again, verify in order
+  - Polling config: model default, timeout 120s
+  - All steps have expects "STATUS: done", max_retries 2, escalate_to human
+  - Step inputs pass context: do gets {{task}}; review gets {{task}}+{{changes}}+{{report}}; do-again gets {{task}}+{{feedback}}+{{issues}}; verify gets {{task}}+{{changes}}+{{report}}+{{issues}}
+  - {{retry_feedback}} placeholder in all steps
+- Created minimal placeholder agent persona files for doer, reviewer, verifier (agents/<id>/AGENTS.md, IDENTITY.md, SOUL.md)
+- Placeholders describe output format and key responsibilities; to be fleshed out in US-002/003/004
+- Build and all 158 workflow validation tests pass
+- Files changed: workflows/do-review-do-verify/ (new directory, 10 files)
+- **Learnings:** Generic validation tests check ALL workflow directories; must provide workspace files even for incomplete workflows
+
+## 2026-05-17 - US-002: Create doer agent persona files
+- Rewrote AGENTS.md with full instructions covering:
+  - Mode 1: Initial Execution (step "do") — execute task from scratch
+  - Mode 2: Refinement (step "do-again") — improve based on reviewer FEEDBACK and ISSUES
+  - Output format: STATUS: done|failed, CHANGES, REPORT
+  - {{retry_feedback}} handling with clear instructions for retrying
+  - General guidelines for arbitrary task execution (not just software dev)
+- Kept IDENTITY.md as-is (already had correct Name/Role from US-001)
+- Rewrote SOUL.md with fuller personality: pragmatic, honest, adaptable to feedback
+- Added 7 new tests in tests/workflow-validation.test.ts under "US-002: doer agent persona" describe block
+- All 165 tests pass (7 new + 158 existing)
+- Files changed: 3 (AGENTS.md rewrite, SOUL.md rewrite, test additions)
+- **Learnings:** Persona tests follow existing patterns — use describe blocks named after the user story, check file existence, content patterns, and required output format fields
+
+## 2026-05-17 - US-003: Create reviewer agent persona files
+- Rewrote AGENTS.md with full instructions covering:
+  - Review process: understand task, examine doer output, formulate feedback, deliver review
+  - Output format: STATUS: done, FEEDBACK, ISSUES
+  - Handling perfect work case (ISSUES: none, acknowledge excellence specifically)
+  - {{retry_feedback}} handling
+  - Review standards: thorough, fair, constructive, specific
+- Kept IDENTITY.md as-is (already correct from US-001)
+- Rewrote SOUL.md with fuller personality: thorough, constructive, specific, fair
+- Added 6 new tests in tests/workflow-validation.test.ts
+- All 172 tests pass
+- Files changed: 3 (AGENTS.md rewrite, SOUL.md rewrite, test additions)
+
+## 2026-05-17 - US-004: Create verifier agent persona files
+- Rewrote AGENTS.md with full instructions covering:
+  - 5-step verification process: understand task, examine output, consider reviewer feedback, weigh evidence, deliver verdict
+  - Output format: STATUS: done, VERDICT: accomplished|not_accomplished, DETAILS
+  - Detailed verdict criteria for both accomplished and not_accomplished
+  - DETAILS requirements: task summary, output summary, reviewer context, evidence, gap analysis, conclusion
+  - Always provides detailed feedback regardless of verdict
+  - {{retry_feedback}} handling
+  - Verification standards: thorough, fair, evidence-based, complete
+- Kept IDENTITY.md as-is (already correct from US-001)
+- Rewrote SOUL.md with fuller personality: fair, objective, evidence-based judge
+- Added 8 new tests in tests/workflow-validation.test.ts
+- All 180 workflow validation tests pass
+- Files changed: 3 (AGENTS.md rewrite, SOUL.md rewrite, test additions)
+
+## 2026-05-17 - US-005: Add workflow validation tests for do-review-do-verify
+- Added 12 new tests in tests/workflow-validation.test.ts under "US-005: do-review-do-verify workflow structure" describe block:
+  - 3 agents (doer, reviewer, verifier) with correct ids
+  - 4 steps in correct order: do → review → do-again → verify
+  - All agents have tamandua-agents skill
+  - All agent workspace files exist
+  - All steps reference valid agent ids
+  - Correct agent assignments per step (doer, reviewer, doer, verifier)
+  - do step input passes {{task}} and {{retry_feedback}}
+  - review step input passes {{task}}, {{changes}}, {{report}}, {{retry_feedback}}
+  - do-again step input passes {{task}}, {{feedback}}, {{issues}}, {{retry_feedback}}
+  - verify step input passes {{task}}, {{changes}}, {{report}}, {{issues}}, {{retry_feedback}}
+  - Linear pipeline (no loop wiring on any step)
+  - No merge or finalize_merge step
+- Added `do-review-do-verify` to the workflow discovery assertion
+- All 192 workflow validation tests pass (12 new + 180 existing)
+- Build passes
+- Files changed: 2 (tests/workflow-validation.test.ts, progress file)
+---

@@ -33,6 +33,7 @@ describe("workflow parsing", () => {
     assert.ok(workflowIds.includes("bug-fix-worktree"));
     assert.ok(workflowIds.includes("security-audit-worktree"));
     assert.ok(workflowIds.includes("just-do-it"));
+    assert.ok(workflowIds.includes("do-review-do-verify"));
   });
 
   for (const id of workflowIds) {
@@ -934,5 +935,323 @@ describe("US-009: feature-dev-merge-worktree workflow variant", () => {
     assert.ok(verifier, "must define verifier agent");
     const skills = verifier!.workspace.skills ?? [];
     assert.ok(skills.includes("agent-browser"), "verifier workspace.skills must preserve agent-browser");
+  });
+});
+
+describe("US-002: doer agent persona", () => {
+  const doerDir = resolve(wfDir("do-review-do-verify"), "agents", "doer");
+  const doerAgentsMd = resolve(doerDir, "AGENTS.md");
+
+  it("doer persona files exist and are non-empty", () => {
+    for (const f of ["AGENTS.md", "IDENTITY.md", "SOUL.md"]) {
+      const path = resolve(doerDir, f);
+      assert.ok(existsSync(path), `doer/${f} should exist`);
+      const content = readFileSync(path, "utf-8");
+      assert.ok(content.length > 0, `doer/${f} should be non-empty`);
+    }
+  });
+
+  it("AGENTS.md describes both initial execution and refinement modes", () => {
+    const content = readFileSync(doerAgentsMd, "utf-8");
+    assert.match(content, /Initial Execution/);
+    assert.match(content, /step "do"/);
+    assert.match(content, /Refinement/);
+    assert.match(content, /step "do-again"/);
+  });
+
+  it("AGENTS.md mandates STATUS: done|failed and CHANGES: output fields", () => {
+    const content = readFileSync(doerAgentsMd, "utf-8");
+    // Must require STATUS in output format
+    assert.match(content, /STATUS:\s*done\|failed/);
+    // Must require CHANGES in output format
+    assert.match(content, /CHANGES:/);
+    // Must describe what STATUS values mean
+    assert.match(content, /done.*success/i);
+    assert.match(content, /failed.*not.*complete/i);
+  });
+
+  it("AGENTS.md references {{retry_feedback}} handling", () => {
+    const content = readFileSync(doerAgentsMd, "utf-8");
+    assert.match(content, /\{\{retry_feedback\}\}/);
+    assert.match(content, /retry_feedback/i);
+    assert.match(content, /previous attempt.*reject/i);
+  });
+
+  it("AGENTS.md output format includes REPORT field", () => {
+    const content = readFileSync(doerAgentsMd, "utf-8");
+    assert.match(content, /REPORT:/);
+    assert.match(content, /detailed report/);
+  });
+
+  it("IDENTITY.md has correct name and role", () => {
+    const content = readFileSync(resolve(doerDir, "IDENTITY.md"), "utf-8");
+    assert.match(content, /Name:\s*Doer/);
+    assert.match(content, /Role:\s*Executes arbitrary tasks/);
+  });
+
+  it("SOUL.md describes doer personality", () => {
+    const content = readFileSync(resolve(doerDir, "SOUL.md"), "utf-8");
+    assert.match(content, /get things done/i);
+    assert.match(content, /honest/i);
+    assert.match(content, /feedback/i);
+  });
+});
+
+describe("US-003: reviewer agent persona", () => {
+  const reviewerDir = resolve(wfDir("do-review-do-verify"), "agents", "reviewer");
+  const reviewerAgentsMd = resolve(reviewerDir, "AGENTS.md");
+
+  it("reviewer persona files exist and are non-empty", () => {
+    for (const f of ["AGENTS.md", "IDENTITY.md", "SOUL.md"]) {
+      const path = resolve(reviewerDir, f);
+      assert.ok(existsSync(path), `reviewer/${f} should exist`);
+      const content = readFileSync(path, "utf-8");
+      assert.ok(content.length > 0, `reviewer/${f} should be non-empty`);
+    }
+  });
+
+  it("AGENTS.md mandates STATUS: done, FEEDBACK:, and ISSUES: output fields", () => {
+    const content = readFileSync(reviewerAgentsMd, "utf-8");
+    // Must require STATUS in output format
+    assert.match(content, /STATUS:\s*done/);
+    // Must require FEEDBACK in output format
+    assert.match(content, /FEEDBACK:/);
+    // Must require ISSUES in output format
+    assert.match(content, /ISSUES:/);
+    // Must describe what FEEDBACK should contain
+    assert.match(content, /what was done well/i);
+    // Must describe what ISSUES are
+    assert.match(content, /specific problems/i);
+  });
+
+  it("AGENTS.md handles perfect-work case (no issues found)", () => {
+    const content = readFileSync(reviewerAgentsMd, "utf-8");
+    // Must describe handling when work is perfect
+    assert.match(content, /perfect/i);
+    // Must allow ISSUES: none
+    assert.match(content, /ISSUES:\s*none/);
+    // Must recommend no changes when perfect
+    assert.match(content, /no changes/i);
+  });
+
+  it("AGENTS.md references {{retry_feedback}} handling", () => {
+    const content = readFileSync(reviewerAgentsMd, "utf-8");
+    assert.match(content, /\{\{retry_feedback\}\}/);
+    assert.match(content, /retry_feedback/i);
+    assert.match(content, /previous.*review.*reject/i);
+  });
+
+  it("AGENTS.md describes review process against original task", () => {
+    const content = readFileSync(reviewerAgentsMd, "utf-8");
+    // Must reference checking against {{task}}
+    assert.match(content, /\{\{task\}\}/);
+    // Must describe examining the doer's output
+    assert.match(content, /\{\{changes\}\}/);
+    assert.match(content, /\{\{report\}\}/);
+  });
+
+  it("IDENTITY.md has correct name and role", () => {
+    const content = readFileSync(resolve(reviewerDir, "IDENTITY.md"), "utf-8");
+    assert.match(content, /Name:\s*Reviewer/);
+    assert.match(content, /Role:\s*Reviews completed work/);
+  });
+
+  it("SOUL.md describes reviewer personality as thorough, constructive, specific", () => {
+    const content = readFileSync(resolve(reviewerDir, "SOUL.md"), "utf-8");
+    assert.match(content, /thorough/i);
+    assert.match(content, /constructive/i);
+    assert.match(content, /specific/i);
+    assert.match(content, /feedback/i);
+  });
+});
+
+describe("US-005: do-review-do-verify workflow structure", () => {
+  const loadSpec = () => loadWorkflowSpec(wfDir("do-review-do-verify"));
+
+  it("has 3 agents: doer, reviewer, verifier", async () => {
+    const spec = await loadSpec();
+    assert.equal(spec.agents.length, 3);
+    const agentIds = spec.agents.map((a) => a.id);
+    assert.deepEqual(agentIds, ["doer", "reviewer", "verifier"]);
+  });
+
+  it("has 4 steps in correct order: do → review → do-again → verify", async () => {
+    const spec = await loadSpec();
+    assert.equal(spec.steps.length, 4);
+    const stepIds = spec.steps.map((s) => s.id);
+    assert.deepEqual(stepIds, ["do", "review", "do-again", "verify"]);
+  });
+
+  it("all agents have tamandua-agents skill", async () => {
+    const spec = await loadSpec();
+    for (const agent of spec.agents) {
+      const skills = agent.workspace.skills ?? [];
+      assert.ok(
+        skills.includes("tamandua-agents"),
+        `do-review-do-verify/${agent.id}: workspace.skills must include tamandua-agents`,
+      );
+    }
+  });
+
+  it("all agent workspace files exist", async () => {
+    const spec = await loadSpec();
+    for (const agent of spec.agents) {
+      for (const [fileName, relativePath] of Object.entries(agent.workspace.files)) {
+        const resolved = resolve(wfDir("do-review-do-verify"), relativePath);
+        assert.ok(existsSync(resolved),
+          `do-review-do-verify/${agent.id}: ${relativePath} should exist (for ${fileName})`);
+      }
+    }
+  });
+
+  it("all steps reference valid agent ids", async () => {
+    const spec = await loadSpec();
+    const agentIds = new Set(spec.agents.map((a) => a.id));
+    for (const step of spec.steps) {
+      assert.ok(agentIds.has(step.agent),
+        `step "${step.id}" references unknown agent "${step.agent}"`);
+    }
+  });
+
+  it("steps have correct agent assignments", async () => {
+    const spec = await loadSpec();
+    assert.equal(spec.steps[0].agent, "doer");
+    assert.equal(spec.steps[1].agent, "reviewer");
+    assert.equal(spec.steps[2].agent, "doer");
+    assert.equal(spec.steps[3].agent, "verifier");
+  });
+
+  it("do step input passes task context", async () => {
+    const spec = await loadSpec();
+    const doStep = spec.steps.find((s) => s.id === "do");
+    assert.ok(doStep);
+    assert.match(doStep!.input, /\{\{task\}\}/);
+    assert.match(doStep!.input, /\{\{retry_feedback\}\}/);
+  });
+
+  it("review step input passes task, changes, report, and retry_feedback context", async () => {
+    const spec = await loadSpec();
+    const reviewStep = spec.steps.find((s) => s.id === "review");
+    assert.ok(reviewStep);
+    assert.match(reviewStep!.input, /\{\{task\}\}/);
+    assert.match(reviewStep!.input, /\{\{changes\}\}/);
+    assert.match(reviewStep!.input, /\{\{report\}\}/);
+    assert.match(reviewStep!.input, /\{\{retry_feedback\}\}/);
+  });
+
+  it("do-again step input passes task, feedback, issues, and retry_feedback context", async () => {
+    const spec = await loadSpec();
+    const doAgainStep = spec.steps.find((s) => s.id === "do-again");
+    assert.ok(doAgainStep);
+    assert.match(doAgainStep!.input, /\{\{task\}\}/);
+    assert.match(doAgainStep!.input, /\{\{feedback\}\}/);
+    assert.match(doAgainStep!.input, /\{\{issues\}\}/);
+    assert.match(doAgainStep!.input, /\{\{retry_feedback\}\}/);
+  });
+
+  it("verify step input passes task, changes, report, issues, and retry_feedback context", async () => {
+    const spec = await loadSpec();
+    const verifyStep = spec.steps.find((s) => s.id === "verify");
+    assert.ok(verifyStep);
+    assert.match(verifyStep!.input, /\{\{task\}\}/);
+    assert.match(verifyStep!.input, /\{\{changes\}\}/);
+    assert.match(verifyStep!.input, /\{\{report\}\}/);
+    assert.match(verifyStep!.input, /\{\{issues\}\}/);
+    assert.match(verifyStep!.input, /\{\{retry_feedback\}\}/);
+  });
+
+  it("is a linear pipeline (no loop wiring)", async () => {
+    const spec = await loadSpec();
+    for (const step of spec.steps) {
+      assert.equal(step.type, undefined, `step "${step.id}" should not have loop wiring`);
+    }
+  });
+
+  it("has no merge or finalize_merge step", async () => {
+    const spec = await loadSpec();
+    const stepIds = spec.steps.map((s) => s.id);
+    assert.ok(!stepIds.includes("merge"));
+    assert.ok(!stepIds.includes("finalize_merge"));
+  });
+});
+
+describe("US-004: verifier agent persona", () => {
+  const verifierDir = resolve(wfDir("do-review-do-verify"), "agents", "verifier");
+  const verifierAgentsMd = resolve(verifierDir, "AGENTS.md");
+
+  it("verifier persona files exist and are non-empty", () => {
+    for (const f of ["AGENTS.md", "IDENTITY.md", "SOUL.md"]) {
+      const path = resolve(verifierDir, f);
+      assert.ok(existsSync(path), `verifier/${f} should exist`);
+      const content = readFileSync(path, "utf-8");
+      assert.ok(content.length > 0, `verifier/${f} should be non-empty`);
+    }
+  });
+
+  it("AGENTS.md mandates STATUS: done, VERDICT:, and DETAILS: output fields", () => {
+    const content = readFileSync(verifierAgentsMd, "utf-8");
+    // Must require STATUS in output format
+    assert.match(content, /STATUS:\s*done/);
+    // Must require VERDICT in output format
+    assert.match(content, /VERDICT:\s*(accomplished\|not_accomplished|not_accomplished\|accomplished)/);
+    // Must require DETAILS in output format
+    assert.match(content, /DETAILS:/);
+    // Must describe what the verdict means
+    assert.match(content, /accomplished/i);
+    assert.match(content, /not.?accomplished/i);
+    // Must describe what DETAILS should contain
+    assert.match(content, /detailed reasoning/i);
+  });
+
+  it("AGENTS.md describes comparing output against original task description", () => {
+    const content = readFileSync(verifierAgentsMd, "utf-8");
+    // Must reference the original task
+    assert.match(content, /\{\{task\}\}/);
+    // Must describe comparing output against task
+    assert.match(content, /original task/i);
+    // Must describe examining CHANGES and REPORT
+    assert.match(content, /\{\{changes\}\}/);
+    assert.match(content, /\{\{report\}\}/);
+  });
+
+  it("AGENTS.md requires detailed feedback regardless of accomplishment", () => {
+    const content = readFileSync(verifierAgentsMd, "utf-8");
+    // Must say to provide details regardless of verdict
+    assert.match(content, /regardless.*verdict|verdict.*regardless/i);
+    // Must describe giving evidence for the verdict
+    assert.match(content, /evidence/i);
+    // Must require explanation for both accomplished and not_accomplished
+    assert.match(content, /accomplished.*explain|explain.*why/);
+  });
+
+  it("AGENTS.md considers both initial work and reviewer feedback", () => {
+    const content = readFileSync(verifierAgentsMd, "utf-8");
+    // Must reference reviewer's ISSUES
+    assert.match(content, /\{\{issues\}\}/);
+    // Must describe considering reviewer feedback
+    assert.match(content, /reviewer.*feedback|feedback.*reviewer/i);
+    // Must describe the do-again refinement step
+    assert.match(content, /refinement|do.?again/i);
+  });
+
+  it("AGENTS.md references {{retry_feedback}} handling", () => {
+    const content = readFileSync(verifierAgentsMd, "utf-8");
+    assert.match(content, /\{\{retry_feedback\}\}/);
+    assert.match(content, /retry_feedback/i);
+    assert.match(content, /previous.*verification.*reject/i);
+  });
+
+  it("IDENTITY.md has correct name and role", () => {
+    const content = readFileSync(resolve(verifierDir, "IDENTITY.md"), "utf-8");
+    assert.match(content, /Name:\s*Verifier/);
+    assert.match(content, /Role:\s*Judges task accomplishment/);
+  });
+
+  it("SOUL.md describes verifier as fair, objective, evidence-based judge", () => {
+    const content = readFileSync(resolve(verifierDir, "SOUL.md"), "utf-8");
+    assert.match(content, /fair/i);
+    assert.match(content, /objective/i);
+    assert.match(content, /evidence/i);
+    assert.match(content, /judge/i);
   });
 });
