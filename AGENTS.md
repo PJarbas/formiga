@@ -176,7 +176,7 @@ If you update `skills/tamandua-agents/SKILL.md`, verify that bundled workflow pe
 ## Testing
 
 ```bash
-# Run all tests
+# Run all tests (unit + integration)
 npm test
 
 # Or build first then test (tests import from dist/)
@@ -185,6 +185,17 @@ npm run build && npm test
 
 Tests use Node's built-in `node:test` and `node:assert`.
 Tests are safe for parallel execution with `node --test tests/*.test.ts src/**/*.test.ts`.
+
+### End-to-End Tests
+
+End-to-end tests live under `e2e-tests/` and exercise real tamandua workflow runs
+with multiple agents in full pipelines. They are separate from the regular test suite.
+
+- **Agents must NOT run e2e tests by default.** Only run the regular test suite
+  (`./run-all-tests` or `npm test`) when fulfilling development duties.
+- Run e2e tests only when explicitly asked: `./run-all-e2e-tests`
+- E2e tests are NOT included in `npm test`
+- E2e tests are NOT compiled by `tsconfig.json` (they live outside `src/`)
 
 ### Parallel Test Safety
 

@@ -1,0 +1,111 @@
+# Progress Log
+Run: 4aca3c12-7255-4b30-8709-bff4753e873c
+Task: Create a end-to-end integration test that creates a directory with a very small example project (fixed) containing a bug, uses tamandua workflow feature-dev-merge-worktree to develop a trivial feature on it, uses bug-fix-merge-worktree to fix the bug, wait for both runs to end, verifies that both runs succeed.
+Started: 2026-05-18
+
+## Codebase Patterns
+
+- Tests use Node's built-in `node:test` and `node:assert/strict`. No external test runners.
+- `npm test` runs `node --test tests/*.test.ts src/**/*.test.ts` — tests import from dist/.
+- `tsconfig.json` only compiles `src/**/*.ts`, excludes `tests/` and `src/**/*.test.ts`.
+- All test scripts (`./build`, `./run-all-tests`, etc.) are bash with `set -euo pipefail` and `cd "$(dirname "$0")"`.
+- Test isolation uses `fs.mkdtempSync()` for temp HOME directories with cleanup in `finally` blocks.
+- Tests that need the built CLI invoke `tamandua` via shell, not via direct imports.
+- Git commits must end with: `Co-Authored-By: Tamandua <tamandua@tetradactyla.org>`
+
+## Story Plan
+
+### US-001: Create e2e-tests infrastructure, scripts, and update AGENTS.md
+
+**Description:** As a developer, I need to set up the e2e test infrastructure and update documentation so that end-to-end tests are clearly separated from regular unit/integration tests.
+
+Implementation notes:
+- Create e2e-tests/ directory at repo root
+- Create ./run-all-e2e-tests executable bash script following the same pattern as ./run-all-tests but running only e2e tests
+- Update ./run-all-tests with a comment at the top noting that e2e tests live under e2e-tests/ and are NOT included
+- Update AGENTS.md Testing section to add an End-to-End Tests subsection with clear guidance
+- Verify that npm test does NOT pick up files from e2e-tests/
+
+**Acceptance Criteria:**
+- e2e-tests/ directory exists
+- run-all-e2e-tests is executable and runs node --test e2e-tests/*.test.ts
+- run-all-tests has a comment noting e2e tests are separate
+- AGENTS.md documents e2e test separation and agent guidance about not running e2e tests by default
+- npm test does not pick up files from e2e-tests/
+- Tests for e2e test infrastructure pass
+- Typecheck passes
+
+### US-002: Create minimal sample project fixture with deliberate bug
+
+**Description:** As a developer, I need a small fixed example project with a deliberate bug that can be used as a test fixture for e2e workflow testing.
+
+Implementation notes:
+- Create e2e-tests/fixtures/sample-project/ directory
+- Create package.json with type module and build/test scripts
+- Create tsconfig.json with basic Node ES2022+ settings
+- Create src/math.ts with an add function that deliberately returns a-b instead of a+b (the bug)
+- Create test/math.test.ts with two tests: one that inadvertently matches the bug behavior and passes, and one that correctly expects addition and fails
+- The bug should be obvious: change a-b to a+b
+
+**Acceptance Criteria:**
+- e2e-tests/fixtures/sample-project/ exists with package.json, tsconfig.json, src/math.ts, test/math.test.ts
+- src/math.ts has add() function that returns a - b (the bug)
+- test/math.test.ts has at least one test that exposes the bug
+- package.json has build and test scripts
+- Running npm install && npm run build && npm test in the fixture directory shows at least one test failure
+- Tests for fixture creation pass
+- Typecheck passes
+
+### US-003: Write e2e integration test exercising feature-dev-merge-worktree and bug-fix-merge-worktree
+
+**Description:** As a developer, I need an e2e integration test that exercises the feature-dev-merge-worktree and bug-fix-merge-worktree workflows against the sample project fixture.
+
+Implementation notes:
+- Write e2e-tests/workflows-e2e.test.ts
+- Use Node built-in node:test and node:assert/strict matching existing conventions
+- Create temp HOME directories with fs.mkdtempSync() for isolation
+- Copy fixture project to temp dir, init as git repo, create worktree origin
+- Install both workflows into temp HOME
+- Use tamandua workflow run to create runs
+- Use tamandua step claim and step complete to simulate agent execution and advance pipeline steps
+- Verify both runs complete successfully via run status queries
+- Clean up temp directories in finally blocks
+- Follow existing isolation patterns: temp HOME, random ports
+
+**Acceptance Criteria:**
+- e2e-tests/workflows-e2e.test.ts exists
+- Test creates temp dir with sample project fixture as a git repo with worktree origin
+- Test creates feature-dev-merge-worktree run and advances all steps to completion
+- Test creates bug-fix-merge-worktree run and advances all steps to completion
+- Both runs are verified to complete successfully
+- Test uses temp HOME isolation with cleanup in finally blocks
+- Tests for the e2e test pass
+- Typecheck passes
+
+---
+
+## 2026-05-18 09:30 - US-001: Create e2e-tests infrastructure, scripts, and update AGENTS.md
+- Created `e2e-tests/` directory with `.gitkeep` placeholder
+- Created `run-all-e2e-tests` executable bash script running `node --test e2e-tests/*.test.ts`
+- Updated `run-all-tests` with comment noting e2e tests are separate and NOT included
+- Updated `AGENTS.md` Testing section with End-to-End Tests subsection:
+  - Agents must NOT run e2e tests by default
+  - e2e tests are NOT included in npm test
+  - e2e tests are NOT compiled by tsconfig.json
+- Created `tests/e2e-infrastructure.test.ts` with 7 tests verifying:
+  - e2e-tests/ directory exists
+  - run-all-e2e-tests is executable
+  - run-all-tests documents separation
+  - npm test excludes e2e-tests/
+  - tsconfig.json excludes e2e-tests/
+  - AGENTS.md documents guidance
+  - run-all-e2e-tests has correct glob
+- All 7 infrastructure tests pass
+- Typecheck passes
+- `npm test` does NOT pick up files from e2e-tests/ (verified via package.json inspection)
+
+**Learnings:**
+- `npm test` globs (`tests/*.test.ts src/**/*.test.ts`) naturally exclude `e2e-tests/` without any config changes
+- `tsconfig.json` only compiles `src/**/*.ts`, naturally excluding `e2e-tests/`
+- 4 pre-existing test failures in `tests/cli-worktree.test.ts` (SQLite "no such table: runs") are unrelated to these changes
+---
