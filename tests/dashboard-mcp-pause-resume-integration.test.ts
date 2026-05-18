@@ -8,6 +8,7 @@
  *  - Kanban snapshot reflects paused status
  */
 import fs from "node:fs";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -33,7 +34,7 @@ function createTempHome(): { root: string; homeDir: string } {
 function runNodeScript(script: string, env: Record<string, string>): Record<string, unknown> {
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
     cwd: process.cwd(),
-    env: { ...process.env, ...env },
+    env: cleanChildEnv(env),
     encoding: "utf-8",
   });
 

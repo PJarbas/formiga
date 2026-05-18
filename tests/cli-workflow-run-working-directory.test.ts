@@ -1,4 +1,8 @@
 import fs from "node:fs";
+import {
+  cleanChildEnv,
+  reserveDistinctRandomPorts,
+} from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -7,17 +11,15 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
-let nextControlPort = 34410;
-let nextDashboardPort = 35410;
 
-function createTempEnv() {
+async function createTempEnv() {
+  const [controlPort, dashboardPort] = await reserveDistinctRandomPorts(2);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cli-run-cwd-"));
   const homeDir = path.join(root, "home");
   const tamanduaDir = path.join(homeDir, ".tamandua");
   fs.mkdirSync(tamanduaDir, { recursive: true });
-  const dashboardPort = nextDashboardPort++;
   fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
-  return { root, homeDir, tamanduaDir, controlPort: nextControlPort++, dashboardPort };
+  return { root, homeDir, tamanduaDir, controlPort, dashboardPort };
 }
 
 function writeMinimalWorkflow(homeDir: string, workflowId: string): void {
@@ -46,7 +48,7 @@ function writeMinimalWorkflow(homeDir: string, workflowId: string): void {
 async function runCliUntilOutput(args: string[], env: Record<string, string>, pattern: RegExp): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      env: { ...process.env, ...env },
+      env: cleanChildEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -102,7 +104,7 @@ async function runCliUntilOutput(args: string[], env: Record<string, string>, pa
 async function runCliToExit(args: string[], env: Record<string, string>): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      env: { ...process.env, ...env },
+      env: cleanChildEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -124,7 +126,7 @@ async function runCliToExit(args: string[], env: Record<string, string>): Promis
 
 describe("CLI workflow run working-directory-for-harness", () => {
   it("passes --working-directory-for-harness into run context and cron metadata", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
 
     try {
       const workflowId = "cli-run-cwd";
@@ -185,7 +187,7 @@ describe("CLI workflow run working-directory-for-harness", () => {
   });
 
   it("fails fast when --working-directory-for-harness does not exist", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
 
     try {
       const workflowId = "cli-run-cwd-invalid";

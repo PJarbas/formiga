@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -17,7 +18,7 @@ function createTempHome() {
 function runNodeScript(script: string, env: Record<string, string>) {
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: cleanChildEnv(env),
     encoding: "utf-8",
   });
 
@@ -193,23 +194,38 @@ describe("run token observability end-to-end (US-005 integration verification)",
           const tokenEvents = allEvents.filter((evt) => evt.event === "run.tokens.updated");
 
           const cliPath = path.join(process.cwd(), "dist", "cli", "cli.js");
+          const childEnv = {};
+          for (const key of [
+            "PATH",
+            "HOME",
+            "TMPDIR",
+            "TEMP",
+            "TMP",
+            "TAMANDUA_STATE_DIR",
+            "TAMANDUA_DB_PATH",
+            "TAMANDUA_WORKTREE_ROOT",
+          ]) {
+            const value = process.env[key];
+            if (value !== undefined) childEnv[key] = value;
+          }
+
           const logsResult = spawnSync(process.execPath, [cliPath, "logs", "200"], {
-            env: { ...process.env },
+            env: childEnv,
             encoding: "utf-8",
           });
 
           const statusAResult = spawnSync(process.execPath, [cliPath, "workflow", "status", runA], {
-            env: { ...process.env },
+            env: childEnv,
             encoding: "utf-8",
           });
 
           const statusBResult = spawnSync(process.execPath, [cliPath, "workflow", "status", runB], {
-            env: { ...process.env },
+            env: childEnv,
             encoding: "utf-8",
           });
 
           const runsResult = spawnSync(process.execPath, [cliPath, "workflow", "runs"], {
-            env: { ...process.env },
+            env: childEnv,
             encoding: "utf-8",
           });
 

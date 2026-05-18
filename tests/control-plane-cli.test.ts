@@ -16,6 +16,7 @@
  */
 
 import { describe, it } from "node:test";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -119,7 +120,7 @@ function runCli(args: string[], homeDir: string): Promise<CliResult> {
 
     const child = spawn("node", ["--no-warnings", CLI_SCRIPT, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, HOME: homeDir },
+      env: cleanChildEnv({ HOME: homeDir  }),
     });
 
     child.stdout?.on("data", (chunk: Buffer) => {

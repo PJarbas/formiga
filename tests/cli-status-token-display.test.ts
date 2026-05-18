@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -22,7 +23,7 @@ function spawnCli(args: string[], env: Record<string, string>): {
   getStderr: () => string;
 } {
   const child = spawn(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, ...env },
+    env: cleanChildEnv(env),
     stdio: ["ignore", "pipe", "pipe"],
   });
 

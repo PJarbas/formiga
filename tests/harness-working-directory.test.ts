@@ -1,4 +1,8 @@
 import fs from "node:fs";
+import {
+  cleanChildEnv,
+  reserveDistinctRandomPorts,
+} from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -6,16 +10,13 @@ import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
 
 const repoRoot = process.cwd();
-let nextControlPort = 34339;
-let nextDashboardPort = 35339;
 
-function createTempHome() {
+async function createTempHome() {
+  const [controlPort, dashboardPort] = await reserveDistinctRandomPorts(2);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-harness-cwd-"));
   const homeDir = path.join(root, "home");
   const tamanduaDir = path.join(homeDir, ".tamandua");
   fs.mkdirSync(tamanduaDir, { recursive: true });
-  const controlPort = nextControlPort++;
-  const dashboardPort = nextDashboardPort++;
   fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
   return { root, homeDir, controlPort, dashboardPort };
 }
@@ -49,7 +50,7 @@ function runNodeScript(script: string, env: Record<string, string>) {
     ["--input-type=module", "-e", script],
     {
       cwd: repoRoot,
-      env: { ...process.env, ...env },
+      env: cleanChildEnv(env),
       encoding: "utf-8",
     },
   );
@@ -71,8 +72,8 @@ function runNodeScript(script: string, env: Record<string, string>) {
 }
 
 describe("working-directory-for-harness", () => {
-  it("runWorkflow persists explicit workingDirectoryForHarness in run context and scheduler job metadata", () => {
-    const temp = createTempHome();
+  it("runWorkflow persists explicit workingDirectoryForHarness in run context and scheduler job metadata", async () => {
+    const temp = await createTempHome();
 
     try {
       const workflowId = "harness-explicit";
@@ -153,8 +154,8 @@ describe("working-directory-for-harness", () => {
     }
   });
 
-  it("defaults workingDirectoryForHarness to the current cwd", () => {
-    const temp = createTempHome();
+  it("defaults workingDirectoryForHarness to the current cwd", async () => {
+    const temp = await createTempHome();
 
     try {
       const workflowId = "harness-default";

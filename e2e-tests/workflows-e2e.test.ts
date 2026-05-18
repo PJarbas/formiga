@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import {
+  cleanChildEnv,
+  reserveDistinctRandomPorts,
+} from "../tests/helpers/test-env.ts";
 import { spawnSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,7 +16,8 @@ const fixtureDir = path.join(repoRoot, "e2e-tests", "fixtures", "sample-project"
 
 // ── Helpers ──
 
-function createTempHome(controlPort: number, dashboardPort: number) {
+async function createTempHome() {
+  const [controlPort, dashboardPort] = await reserveDistinctRandomPorts(2);
   const root = fs.mkdtempSync(
     path.join(os.tmpdir(), "tamandua-e2e-workflows-"),
   );
@@ -44,7 +49,7 @@ function baseEnv(homeDir: string, controlPort: number) {
 
 function cli(args: string[], env: Record<string, string>) {
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, ...env },
+    env: cleanChildEnv(env),
     encoding: "utf-8",
   });
 }
@@ -85,7 +90,7 @@ function stepComplete(
   env: Record<string, string>,
 ) {
   const r = spawnSync(process.execPath, [cliPath, "step", "complete", stepId], {
-    env: { ...process.env, ...env },
+    env: cleanChildEnv(env),
     input: output,
     encoding: "utf-8",
   });
@@ -108,7 +113,7 @@ function spawnWorkflowRun(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      env: { ...process.env, ...env },
+      env: cleanChildEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -229,21 +234,18 @@ function cleanupTempHome(
 // ── Tests ──
 
 describe("workflows e2e", { concurrency: 1 }, () => {
-  // Use unique high ports to avoid conflicts
-  const CONTROL_PORT = 35500;
-  const DASHBOARD_PORT = 36500;
-
   it(
     "feature-dev-merge-worktree: plan → setup → implement → verify → test → merge → done",
     { timeout: 120_000 },
     async () => {
-      const env = createTempHome(CONTROL_PORT, DASHBOARD_PORT);
+      const env = await createTempHome();
+      const be = () => baseEnv(env.homeDir, env.controlPort);
 
       try {
         // 1. Install the workflow
         cliMustSucceed(
           ["workflow", "install", "feature-dev-merge-worktree"],
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
           "install feature-dev-merge-worktree",
         );
 
@@ -261,7 +263,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
             "--worktree-origin-repository",
             repoDir,
           ],
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
 
@@ -271,7 +273,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
         const plan = stepClaim(
           "feature-dev-merge-worktree_planner",
           runId,
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         const planResult = stepComplete(
           plan.stepId,
@@ -279,7 +281,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
             `REPO: ${repoDir}\n` +
             "BRANCH: feature/add-multiply\n" +
             'STORIES_JSON: [{"id":"US-001","title":"Add multiply function","description":"Add a function multiply(a,b) that returns a * b to src/math.ts","acceptanceCriteria":["multiply function exists in src/math.ts","export is added to index if applicable","tests pass","Typecheck passes"]}]\n',
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         assert.ok(
           planResult.status === "advanced" || planResult.status === "completed",
@@ -290,7 +292,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
         const setup = stepClaim(
           "feature-dev-merge-worktree_setup",
           runId,
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         const setupResult = stepComplete(
           setup.stepId,
@@ -300,7 +302,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
             "TEST_CMD: npm test\n" +
             "CI_NOTES: Standard TypeScript project\n" +
             "BASELINE: Build succeeds, 1 test passes, 1 test fails (known bug in add)\n",
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         assert.equal(setupResult.status, "advanced");
 
@@ -308,7 +310,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
         const implement = stepClaim(
           "feature-dev-merge-worktree_developer",
           runId,
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         assert.ok(
           implement.input.includes("US-001"),
@@ -319,7 +321,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
           "STATUS: done\n" +
             "CHANGES: Added multiply function to src/math.ts\n" +
             "TESTS: Added test for multiply function, all tests pass\n",
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         assert.equal(implResult.status, "advanced");
 
@@ -327,13 +329,13 @@ describe("workflows e2e", { concurrency: 1 }, () => {
         const verify = stepClaim(
           "feature-dev-merge-worktree_verifier",
           runId,
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         const verifyResult = stepComplete(
           verify.stepId,
           "STATUS: done\n" +
             "VERIFIED: multiply function exists in src/math.ts, test passes\n",
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         assert.ok(
           verifyResult.status === "advanced" ||
@@ -345,13 +347,13 @@ describe("workflows e2e", { concurrency: 1 }, () => {
         const testStep = stepClaim(
           "feature-dev-merge-worktree_tester",
           runId,
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         const testResult = stepComplete(
           testStep.stepId,
           "STATUS: done\n" +
             "RESULTS: Full test suite passes, integration verified\n",
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         assert.equal(testResult.status, "advanced");
 
@@ -359,7 +361,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
         const merge = stepClaim(
           "feature-dev-merge-worktree_merger",
           runId,
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         const mergeResult = stepComplete(
           merge.stepId,
@@ -367,14 +369,14 @@ describe("workflows e2e", { concurrency: 1 }, () => {
             "REBASED: false\n" +
             "MERGE_COMMIT: abc1234\n" +
             "MERGED_INTO: main\n",
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
         );
         assert.equal(mergeResult.status, "completed");
 
         // 4. Verify the run completed
         const statusOut = cliMustSucceed(
           ["workflow", "status", runId],
-          baseEnv(env.homeDir, CONTROL_PORT),
+          be(),
           "workflow status",
         );
         assert.match(statusOut, /Status:\s+completed/i);
@@ -394,7 +396,7 @@ describe("workflows e2e", { concurrency: 1 }, () => {
     "bug-fix-merge-worktree: triage → investigate → setup → fix → verify → merge → done",
     { timeout: 120_000 },
     async () => {
-      const env = createTempHome(CONTROL_PORT + 100, DASHBOARD_PORT + 100);
+      const env = await createTempHome();
       const be = () => baseEnv(env.homeDir, env.controlPort);
 
       try {

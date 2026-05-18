@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -32,8 +33,8 @@ function createTempEnv() {
   return { root, stateDir, homeDir };
 }
 
-function setupDbWithRun(homeDir: string, runId: string, runNumber: number): void {
-  const dbDir = path.join(homeDir, ".tamandua");
+function setupDbWithRun(stateDir: string, runId: string, runNumber: number): void {
+  const dbDir = stateDir;
   const dbPath = path.join(dbDir, "tamandua.db");
   fs.mkdirSync(dbDir, { recursive: true });
 
@@ -62,7 +63,7 @@ function setupDbWithRun(homeDir: string, runId: string, runNumber: number): void
 
 async function runCliOnce(args: string[], env: Record<string, string>): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const child = spawn(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, ...env },
+    env: cleanChildEnv(env),
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -96,7 +97,7 @@ describe("tamandua logs prefix expansion", () => {
     const fullRunId = "aaaaaaaa-bbbb-cccc-dddd-eeeeffff0001";
     const shortPrefix = fullRunId.slice(0, 8); // "aaaaaaaa"
 
-    setupDbWithRun(env.homeDir, fullRunId, 42);
+    setupDbWithRun(env.stateDir, fullRunId, 42);
 
     const runFile = path.join(env.stateDir, "events", `${fullRunId}.jsonl`);
     appendEvent(runFile, makeEvent(fullRunId, "first-event"));
@@ -150,18 +151,15 @@ describe("tamandua logs prefix expansion", () => {
     const fullRunId = "bbbbbbbb-1111-2222-3333-444455556666";
     const shortPrefix = fullRunId.slice(0, 8); // "bbbbbbbb"
 
-    setupDbWithRun(env.homeDir, fullRunId, 99);
+    setupDbWithRun(env.stateDir, fullRunId, 99);
 
     const runFile = path.join(env.stateDir, "events", `${fullRunId}.jsonl`);
     appendEvent(runFile, makeEvent(fullRunId, "tail-first"));
 
     const child = spawn(process.execPath, [cliPath, "logs-tail", shortPrefix], {
-      env: {
-        ...process.env,
-        TAMANDUA_STATE_DIR: env.stateDir,
+      env: cleanChildEnv({ TAMANDUA_STATE_DIR: env.stateDir,
         HOME: env.homeDir,
-        TAMANDUA_LOGS_TAIL_POLL_MS: "25",
-      },
+        TAMANDUA_LOGS_TAIL_POLL_MS: "25", }),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -192,7 +190,7 @@ describe("tamandua logs prefix expansion", () => {
     const env = createTempEnv();
     const fullRunId = "cccccccc-dddd-eeee-ffff-111122223333";
 
-    setupDbWithRun(env.homeDir, fullRunId, 7);
+    setupDbWithRun(env.stateDir, fullRunId, 7);
 
     const runFile = path.join(env.stateDir, "events", `${fullRunId}.jsonl`);
     appendEvent(runFile, makeEvent(fullRunId, "full-uuid-event"));

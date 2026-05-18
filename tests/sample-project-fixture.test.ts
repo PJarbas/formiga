@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { execSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 
 const repoRoot = process.cwd();
 const fixtureDir = path.join(repoRoot, "e2e-tests", "fixtures", "sample-project");
@@ -63,18 +65,30 @@ describe("sample project fixture", () => {
 
   it("fixture compiles and shows test failure when run", () => {
     // Copy fixture to temp dir to verify it actually works without polluting
-    const tmpDir = fs.mkdtempSync("sample-project-test-");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sample-project-test-"));
+    const homeDir = path.join(tmpDir, "home");
+    const testEnv = cleanChildEnv({ HOME: homeDir });
     try {
+      fs.mkdirSync(homeDir, { recursive: true });
       // Copy fixture files
-      execSync(`cp -r ${fixtureDir}/. ${tmpDir}/`, { encoding: "utf-8" });
+      execSync(`cp -r ${fixtureDir}/. ${tmpDir}/`, {
+        encoding: "utf-8",
+        env: testEnv,
+      });
 
       // Install dependencies
-      execSync("npm install", { cwd: tmpDir, encoding: "utf-8", stdio: "pipe" });
+      execSync("npm install", {
+        cwd: tmpDir,
+        encoding: "utf-8",
+        env: testEnv,
+        stdio: "pipe",
+      });
 
       // Build should succeed
       const buildResult = spawnSync("npm", ["run", "build"], {
         cwd: tmpDir,
         encoding: "utf-8",
+        env: testEnv,
       });
       assert.equal(
         buildResult.status,
@@ -85,7 +99,6 @@ describe("sample project fixture", () => {
       // Test should fail (at least one test failure)
       // Unset NODE_TEST_CONTEXT to avoid recursive test detection when running
       // node --test from within another node --test process.
-      const testEnv = { ...process.env };
       delete testEnv.NODE_TEST_CONTEXT;
       const testResult = spawnSync("npm", ["test"], {
         cwd: tmpDir,

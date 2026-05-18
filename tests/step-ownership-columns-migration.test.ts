@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -28,7 +29,7 @@ function runMigrationScript(homeDir: string) {
     `],
     {
       cwd: repoRoot,
-      env: { ...process.env, HOME: homeDir },
+      env: cleanChildEnv({ HOME: homeDir  }),
       encoding: "utf-8",
     },
   );

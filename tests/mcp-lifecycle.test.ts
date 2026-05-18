@@ -12,6 +12,11 @@
  */
 
 import fs from "node:fs";
+import {
+  cleanChildEnv,
+  reserveDistinctRandomPorts,
+  reserveRandomPort,
+} from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
@@ -35,19 +40,22 @@ type CliResult = {
   stderr: string;
 };
 
-let nextControlPort = 34500;
-let nextDashboardPort = 35500;
-
-function createTempEnv(): { root: string; stateDir: string; homeDir: string; controlPort: number; dashboardPort: number } {
+async function createTempEnv(): Promise<{
+  root: string;
+  stateDir: string;
+  homeDir: string;
+  controlPort: number;
+  dashboardPort: number;
+}> {
+  const [controlPort, dashboardPort] = await reserveDistinctRandomPorts(2);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-mcp-lifecycle-"));
   const stateDir = path.join(root, "state");
   const homeDir = path.join(root, "home");
   const tamanduaDir = path.join(homeDir, ".tamandua");
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(tamanduaDir, { recursive: true });
-  const dashboardPort = nextDashboardPort++;
   fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
-  return { root, stateDir, homeDir, controlPort: nextControlPort++, dashboardPort };
+  return { root, stateDir, homeDir, controlPort, dashboardPort };
 }
 
 function writeMinimalWorkflow(stateDir: string, workflowId: string): void {
@@ -78,7 +86,7 @@ async function runCli(args: string[], env: Record<string, string>): Promise<CliR
     process.execPath,
     ["--no-warnings", cliPath, ...args],
     {
-      env: { ...process.env, ...env },
+      env: cleanChildEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -120,16 +128,6 @@ async function canBind(port: number): Promise<boolean> {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   }
-}
-
-async function reserveRandomPort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const port = address.port;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
 }
 
 async function waitForHttpUp(
@@ -326,7 +324,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -391,7 +389,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
     }
 
     const mcpPort = await reserveRandomPort();
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -478,7 +476,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -541,7 +539,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.fail(`Port ${customPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${customPort}`);
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -593,7 +591,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.fail(`Dashboard port ${dashboardPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${dashboardPort}`);
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -660,7 +658,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -710,7 +708,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -811,7 +809,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -885,7 +883,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       return;
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
     const cliEnv = {
       HOME: tempEnv.homeDir,
       TAMANDUA_STATE_DIR: tempEnv.stateDir,
@@ -916,7 +914,7 @@ describe("MCP lifecycle integration", { concurrency: 1 }, () => {
       assert.fail(`Port ${mcpPort} is already in use — likely a leaked test process from a prior run. Check: lsof -i :${mcpPort}`);
     }
 
-    const tempEnv = createTempEnv();
+    const tempEnv = await createTempEnv();
 
     let result: { pid: number; port: number; child: ReturnType<typeof spawn> } | undefined;
 

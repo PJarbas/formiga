@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import http from "node:http";
 import { spawnSync } from "node:child_process";
 
-import { runWorkflow, type RunWorkflowParams } from "../../dist/installer/run.js";
+import { runWorkflow } from "../../dist/installer/run.js";
+import { getPidFile, getPortFile, stopDaemon } from "../../dist/server/daemonctl.js";
 
 // ── Helpers ──
 
@@ -27,6 +29,40 @@ function initGitRepo(dir: string): void {
   fs.writeFileSync(path.join(dir, "README.md"), "# Test Repo\n", "utf-8");
   runGit(["add", "README.md"], dir);
   runGit(["commit", "-m", "initial commit"], dir);
+}
+
+async function reserveRandomPort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const port = address.port;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
+
+function readPid(filePath: string): number | null {
+  try {
+    const pid = parseInt(fs.readFileSync(filePath, "utf-8").trim(), 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForPidExit(pid: number, timeoutMs = 3000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 function writeMinimalWorkflow(
@@ -58,21 +94,71 @@ function writeWorkflowWithInvalidWorkspace(
 describe("runWorkflow", () => {
   let tempHome: string;
   let origHome: string | undefined;
+  let origControlPort: string | undefined;
+  let origDbPath: string | undefined;
+  let origStateDir: string | undefined;
+  let origWorktreeRoot: string | undefined;
 
-  before(() => {
+  before(async () => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-run-"));
     origHome = process.env.HOME;
+    origControlPort = process.env.TAMANDUA_CONTROL_PORT;
+    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origStateDir = process.env.TAMANDUA_STATE_DIR;
+    origWorktreeRoot = process.env.TAMANDUA_WORKTREE_ROOT;
+
+    const tamanduaDir = path.join(tempHome, ".tamandua");
+    const dashboardPort = await reserveRandomPort();
+    let controlPort = await reserveRandomPort();
+    while (controlPort === dashboardPort) {
+      controlPort = await reserveRandomPort();
+    }
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+    fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
+
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_DB_PATH;
+    process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
+    process.env.TAMANDUA_DB_PATH = path.join(tamanduaDir, "tamandua.db");
+    process.env.TAMANDUA_STATE_DIR = tamanduaDir;
+    process.env.TAMANDUA_WORKTREE_ROOT = path.join(tamanduaDir, "worktrees");
   });
 
-  after(() => {
-    if (origHome) {
+  after(async () => {
+    const pid = readPid(getPidFile({ homeDir: tempHome }));
+    try { stopDaemon({ homeDir: tempHome }); } catch {}
+    if (pid !== null) await waitForPidExit(pid);
+
+    if (origHome !== undefined) {
       process.env.HOME = origHome;
     } else {
       delete process.env.HOME;
     }
+    if (origControlPort !== undefined) {
+      process.env.TAMANDUA_CONTROL_PORT = origControlPort;
+    } else {
+      delete process.env.TAMANDUA_CONTROL_PORT;
+    }
+    if (origDbPath !== undefined) {
+      process.env.TAMANDUA_DB_PATH = origDbPath;
+    } else {
+      delete process.env.TAMANDUA_DB_PATH;
+    }
+    if (origStateDir !== undefined) {
+      process.env.TAMANDUA_STATE_DIR = origStateDir;
+    } else {
+      delete process.env.TAMANDUA_STATE_DIR;
+    }
+    if (origWorktreeRoot !== undefined) {
+      process.env.TAMANDUA_WORKTREE_ROOT = origWorktreeRoot;
+    } else {
+      delete process.env.TAMANDUA_WORKTREE_ROOT;
+    }
     fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("daemonctl paths honor HOME assigned after module import", () => {
+    assert.ok(getPidFile().startsWith(tempHome));
+    assert.ok(getPortFile().startsWith(tempHome));
   });
 
   describe("working directory validation", () => {
@@ -230,7 +316,7 @@ describe("runWorkflow", () => {
       try {
         await runWorkflow({ workflowId, taskTitle: "Test default save tokens flag" });
       } catch {
-        // Expected: daemon registration fails in tests
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
       }
 
       const { getDb } = await import("../../dist/db.js");
@@ -254,7 +340,7 @@ describe("runWorkflow", () => {
           noHurrySaveTokensMode: true,
         });
       } catch {
-        // Expected: daemon registration fails in tests
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
       }
 
       const { getDb } = await import("../../dist/db.js");
@@ -278,7 +364,7 @@ describe("runWorkflow", () => {
           noHurrySaveTokensMode: false,
         });
       } catch {
-        // Expected: daemon registration fails in tests
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
       }
 
       const { getDb } = await import("../../dist/db.js");
@@ -302,7 +388,7 @@ describe("runWorkflow", () => {
           noHurrySaveTokensMode: true,
         });
       } catch {
-        // Expected: daemon registration fails in tests
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
       }
 
       const { getDb } = await import("../../dist/db.js");
@@ -329,7 +415,7 @@ describe("runWorkflow", () => {
           taskTitle: "Test default harness type context",
         });
       } catch {
-        // Expected: daemon registration fails in tests
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
       }
 
       const { getDb } = await import("../../dist/db.js");
@@ -353,7 +439,7 @@ describe("runWorkflow", () => {
           harnessType: "hermes",
         });
       } catch {
-        // Expected: daemon registration fails in tests
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
       }
 
       const { getDb } = await import("../../dist/db.js");
@@ -377,7 +463,7 @@ describe("runWorkflow", () => {
           harnessType: "pi",
         });
       } catch {
-        // Expected: daemon registration fails in tests
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
       }
 
       const { getDb } = await import("../../dist/db.js");
@@ -402,7 +488,7 @@ describe("runWorkflow", () => {
           harnessType: "hermes",
         });
       } catch {
-        // Expected: daemon registration fails in tests
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
       }
 
       const { getDb } = await import("../../dist/db.js");

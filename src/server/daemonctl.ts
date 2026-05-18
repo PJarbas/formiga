@@ -18,25 +18,23 @@ import { DEFAULT_CONTROL_PORT } from "./control-server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const TAMANDUA_DIR = path.join(os.homedir(), ".tamandua");
-const PID_FILE = path.join(TAMANDUA_DIR, "tamandua.pid");
-const PORT_FILE = path.join(TAMANDUA_DIR, "port");
-const LOG_FILE = path.join(TAMANDUA_DIR, "dashboard.log");
-const START_LOCK_FILE = path.join(TAMANDUA_DIR, "daemon-start.lock");
 const STARTUP_ERROR_TAIL_LINES = 20;
 const START_LOCK_STALE_MS = 30_000;
 
 // ── MCP file paths ─────────────────────────────────────────────────
 
-export const MCP_PID_FILE = path.join(TAMANDUA_DIR, "mcp.pid");
-export const MCP_PORT_FILE = path.join(TAMANDUA_DIR, "mcp-port");
-const MCP_LOG_FILE = path.join(TAMANDUA_DIR, "mcp.log");
+function defaultTamanduaDir(): string {
+  return path.join(process.env.HOME?.trim() || os.homedir(), ".tamandua");
+}
+
+export const MCP_PID_FILE = path.join(defaultTamanduaDir(), "mcp.pid");
+export const MCP_PORT_FILE = path.join(defaultTamanduaDir(), "mcp-port");
 
 // ── Control plane file paths ──────────────────────────────────────
 
-export const CONTROL_PLANE_PID_FILE = path.join(TAMANDUA_DIR, "control-plane.pid");
-export const CONTROL_PLANE_PORT_FILE = path.join(TAMANDUA_DIR, "control-plane-port");
-export const CONTROL_PLANE_LOG_FILE = path.join(TAMANDUA_DIR, "control-plane.log");
+export const CONTROL_PLANE_PID_FILE = path.join(defaultTamanduaDir(), "control-plane.pid");
+export const CONTROL_PLANE_PORT_FILE = path.join(defaultTamanduaDir(), "control-plane-port");
+export const CONTROL_PLANE_LOG_FILE = path.join(defaultTamanduaDir(), "control-plane.log");
 
 export interface DaemonctlPathOptions {
   /**
@@ -49,7 +47,7 @@ export interface DaemonctlPathOptions {
 // ── File path helpers ───────────────────────────────────────────────
 
 function getTamanduaDir(opts?: DaemonctlPathOptions): string {
-  return opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : TAMANDUA_DIR;
+  return opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : defaultTamanduaDir();
 }
 
 export function getPidFile(opts?: DaemonctlPathOptions): string {
@@ -92,7 +90,7 @@ export function getControlPlaneLogFile(opts?: DaemonctlPathOptions): string {
   return path.join(getTamanduaDir(opts), "control-plane.log");
 }
 
-function readLogTail(logPath: string = LOG_FILE, lines = STARTUP_ERROR_TAIL_LINES): string {
+function readLogTail(logPath: string = getLogFile(), lines = STARTUP_ERROR_TAIL_LINES): string {
   try {
     if (!fs.existsSync(logPath)) return "";
     const content = fs.readFileSync(logPath, "utf-8").trim();

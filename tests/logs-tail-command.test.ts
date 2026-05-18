@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -38,7 +39,7 @@ function spawnCli(args: string[], env: Record<string, string>): {
   getStderr: () => string;
 } {
   const child = spawn(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, ...env },
+    env: cleanChildEnv(env),
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -128,7 +129,7 @@ describe("tamandua logs-tail", () => {
     const runFile = path.join(env.stateDir, "events", `${runId}.jsonl`);
 
     // prefix expansion now routes through getWorkflowStatus, which needs a DB entry
-    const dbDir = path.join(env.homeDir, ".tamandua");
+    const dbDir = env.stateDir;
     const dbPath = path.join(dbDir, "tamandua.db");
     fs.mkdirSync(dbDir, { recursive: true });
     const db = new DatabaseSync(dbPath);
@@ -178,7 +179,7 @@ describe("tamandua logs-tail", () => {
   it("supports #<run-number> streams", async () => {
     const env = createTempEnv();
     const runId = "run-number-target";
-    const dbDir = path.join(env.homeDir, ".tamandua");
+    const dbDir = env.stateDir;
     const dbPath = path.join(dbDir, "tamandua.db");
     fs.mkdirSync(dbDir, { recursive: true });
 

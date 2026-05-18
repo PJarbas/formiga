@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseWorkflowRunArgs } from "../../dist/cli/workflow-run-args.js";
+import { cleanChildEnv } from "../../tests/helpers/test-env.ts";
 
 function makeTestEnv() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cli-test-"));
@@ -21,12 +22,9 @@ function cli(args: string[], env?: Record<string, string>) {
   try {
     const result = spawnSync("/bin/sh", [wrapperPath, ...args], {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: testEnv.homeDir,
+      env: cleanChildEnv({ HOME: testEnv.homeDir,
         TAMANDUA_STATE_DIR: testEnv.stateDir,
-        ...env,
-      },
+        ...env, }),
     });
     return { ...result, testEnv };
   } catch (err) {
@@ -260,11 +258,8 @@ describe("CLI entrypoint", () => {
 
       const output = execFileSync(symlinkPath, ["version"], {
         encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: homeDir,
-          TAMANDUA_STATE_DIR: stateDir,
-        },
+        env: cleanChildEnv({ HOME: homeDir,
+          TAMANDUA_STATE_DIR: stateDir, }),
       });
 
       assert.match(output, /^tamandua v/);

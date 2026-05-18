@@ -29,7 +29,10 @@ import { validateRunHarnessForScheduling } from "../installer/run-harness.js";
 
 export const DEFAULT_CONTROL_PORT = 3339;
 const DEFAULT_MAX_ACTIVE_TIMERS = 50;
-const SECRET_FILE = path.join(os.homedir(), ".tamandua", "daemon-secret");
+
+function defaultDaemonSecretFile(): string {
+  return path.join(process.env.HOME?.trim() || os.homedir(), ".tamandua", "daemon-secret");
+}
 
 export function getControlPort(): number {
   const raw = process.env.TAMANDUA_CONTROL_PORT;
@@ -48,7 +51,7 @@ export function getMaxActiveTimers(): number {
 }
 
 /** Race-safe secret creation. The first process to create the file wins. */
-export function ensureDaemonSecret(secretPath: string = SECRET_FILE): string {
+export function ensureDaemonSecret(secretPath: string = defaultDaemonSecretFile()): string {
   const dir = path.dirname(secretPath);
   fs.mkdirSync(dir, { recursive: true });
   try {
@@ -79,7 +82,7 @@ export function ensureDaemonSecret(secretPath: string = SECRET_FILE): string {
   return token;
 }
 
-export function readDaemonSecret(secretPath: string = SECRET_FILE): string | null {
+export function readDaemonSecret(secretPath: string = defaultDaemonSecretFile()): string | null {
   try {
     const value = fs.readFileSync(secretPath, "utf-8").trim();
     return value.length > 0 ? value : null;

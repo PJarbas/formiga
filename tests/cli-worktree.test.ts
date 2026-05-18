@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanChildEnv, reserveRandomPort } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -8,8 +9,6 @@ import { describe, it } from "node:test";
 import crypto from "node:crypto";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
-let nextControlPort = 34520;
-let nextDashboardPort = 35520;
 
 function runGit(args: string[], cwd: string): string | null {
   const result = spawnSync("git", args, {
@@ -21,20 +20,31 @@ function runGit(args: string[], cwd: string): string | null {
   return (result.stdout ?? "").trim();
 }
 
-function createTempEnv() {
+async function createTempEnv() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cli-wt-"));
   const homeDir = path.join(root, "home");
   const tamanduaDir = path.join(homeDir, ".tamandua");
+  const dbPath = path.join(tamanduaDir, "tamandua.db");
+  const worktreeRoot = path.join(tamanduaDir, "worktrees");
   fs.mkdirSync(tamanduaDir, { recursive: true });
-  const dashboardPort = nextDashboardPort++;
+  const dashboardPort = await reserveRandomPort();
+  let controlPort = await reserveRandomPort();
+  while (controlPort === dashboardPort) {
+    controlPort = await reserveRandomPort();
+  }
   fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
-  return { root, homeDir, tamanduaDir, controlPort: nextControlPort++, dashboardPort };
+  return { root, homeDir, tamanduaDir, dbPath, worktreeRoot, controlPort, dashboardPort };
 }
 
-function cliEnv(env: ReturnType<typeof createTempEnv>): Record<string, string> {
+type TestEnv = Awaited<ReturnType<typeof createTempEnv>>;
+
+function cliEnv(env: TestEnv): Record<string, string> {
   return {
     HOME: env.homeDir,
     TAMANDUA_CONTROL_PORT: String(env.controlPort),
+    TAMANDUA_DB_PATH: env.dbPath,
+    TAMANDUA_STATE_DIR: env.tamanduaDir,
+    TAMANDUA_WORKTREE_ROOT: env.worktreeRoot,
   };
 }
 
@@ -49,7 +59,7 @@ function assertCliSucceeded(
   );
 }
 
-async function startDashboard(env: ReturnType<typeof createTempEnv>): Promise<void> {
+async function startDashboard(env: TestEnv): Promise<void> {
   const result = await runCliToExit([
     "dashboard", "start", "--port", String(env.dashboardPort),
   ], cliEnv(env));
@@ -87,7 +97,7 @@ async function runCliToExit(
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      env: { ...process.env, ...env },
+      env: cleanChildEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "", stderr = "";
@@ -106,7 +116,7 @@ async function runCliUntilOutput(
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
-      env: { ...process.env, ...env },
+      env: cleanChildEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "", stderr = "", finished = false;
@@ -181,7 +191,7 @@ function seedRunRow(dbPath: string, runId: string, overrides?: {
 
 describe("CLI worktree run arguments", () => {
   it("accepts --worktree-origin-repository and --worktree-origin-ref for worktree workflows", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const workflowId = "cli-wt-run";
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
@@ -204,16 +214,13 @@ describe("CLI worktree run arguments", () => {
       assert.equal(context.worktree_origin_repository, originRepo);
       assert.equal(context.worktree_origin_ref, "main");
     } finally {
-      await runCliToExit(["dashboard", "stop"], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      }).catch(() => ({ stdout: "", stderr: "", code: null }));
+      await runCliToExit(["dashboard", "stop"], cliEnv(env)).catch(() => ({ stdout: "", stderr: "", code: null }));
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
     }
   });
 
   it("accepts inline worktree origin args for worktree workflows", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const workflowId = "cli-wt-run-inline";
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
@@ -237,16 +244,13 @@ describe("CLI worktree run arguments", () => {
       assert.equal(context.worktree_origin_repository, originRepo);
       assert.equal(context.worktree_origin_ref, "main");
     } finally {
-      await runCliToExit(["dashboard", "stop"], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      }).catch(() => ({ stdout: "", stderr: "", code: null }));
+      await runCliToExit(["dashboard", "stop"], cliEnv(env)).catch(() => ({ stdout: "", stderr: "", code: null }));
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
     }
   });
 
   it("allows --worktree-origin-repository without --worktree-origin-ref for worktree workflows", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const workflowId = "cli-wt-run-repo-only";
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
@@ -268,19 +272,16 @@ describe("CLI worktree run arguments", () => {
       assert.equal(context.worktree_origin_repository, originRepo);
       assert.ok(context.worktree_origin_ref, "expected worktree_origin_ref to be defaulted from the origin branch");
     } finally {
-      await runCliToExit(["dashboard", "stop"], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      }).catch(() => ({ stdout: "", stderr: "", code: null }));
+      await runCliToExit(["dashboard", "stop"], cliEnv(env)).catch(() => ({ stdout: "", stderr: "", code: null }));
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
     }
   });
 
   it("rejects missing value for --worktree-origin-repository", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const { stderr, code } = await runCliToExit(
-        ["workflow", "run", "test-wf", "Test", "--worktree-origin-repository"], { HOME: env.homeDir });
+        ["workflow", "run", "test-wf", "Test", "--worktree-origin-repository"], cliEnv(env));
       assert.equal(code, 1);
       assert.match(stderr, /Missing value for --worktree-origin-repository/);
     } finally {
@@ -289,7 +290,7 @@ describe("CLI worktree run arguments", () => {
   });
 
   it("rejects worktree origin args for direct workflows", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const workflowId = "cli-direct-run";
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "direct" });
@@ -299,10 +300,7 @@ describe("CLI worktree run arguments", () => {
       const { stderr, code } = await runCliToExit([
         "workflow", "run", workflowId, "Should fail",
         "--worktree-origin-repository", originRepo,
-      ], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      ], cliEnv(env));
 
       assert.equal(code, 1);
       assert.match(stderr, /--worktree-origin-repository is only valid for workflows with run\.workspace: worktree/i);
@@ -312,7 +310,7 @@ describe("CLI worktree run arguments", () => {
   });
 
   it("rejects --working-directory-for-harness for worktree workflows", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const workflowId = "cli-wt-reject-harness";
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
@@ -325,10 +323,7 @@ describe("CLI worktree run arguments", () => {
         "workflow", "run", workflowId, "Should fail",
         "--working-directory-for-harness", harnessDir,
         "--worktree-origin-repository", originRepo,
-      ], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      ], cliEnv(env));
 
       assert.equal(code, 1);
       assert.match(stderr, /--working-directory-for-harness is not valid for workflows with run\.workspace: worktree/i);
@@ -338,7 +333,7 @@ describe("CLI worktree run arguments", () => {
   });
 
   it("creates a managed worktree and seeds worktree context for worktree workflows", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const workflowId = "cli-wt-managed";
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
@@ -378,10 +373,7 @@ describe("CLI worktree run arguments", () => {
         assert.match(stdout, new RegExp(`Harness CWD: ${worktreeRow!.worktree_path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
       }
     } finally {
-      await runCliToExit(["dashboard", "stop"], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      }).catch(() => ({ stdout: "", stderr: "", code: null }));
+      await runCliToExit(["dashboard", "stop"], cliEnv(env)).catch(() => ({ stdout: "", stderr: "", code: null }));
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
     }
   });
@@ -389,10 +381,10 @@ describe("CLI worktree run arguments", () => {
 
 describe("CLI worktree list", () => {
   it("shows empty message when no worktrees exist", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       initDb(path.join(env.tamanduaDir, "tamandua.db"));
-      const { stdout } = await runCliToExit(["worktree", "list"], { HOME: env.homeDir });
+      const { stdout } = await runCliToExit(["worktree", "list"], cliEnv(env));
       assert.match(stdout, /No managed worktrees found/);
     } finally {
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
@@ -400,14 +392,14 @@ describe("CLI worktree list", () => {
   });
 
   it("lists managed worktrees", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
       const runId = crypto.randomUUID();
       seedRunRow(dbPath, runId);
       seedWorktreeRow(dbPath, runId, { worktreePath: "/tmp/tamandua-wt/fake-1", originRepo: "/home/project" });
-      const { stdout } = await runCliToExit(["worktree", "list"], { HOME: env.homeDir });
+      const { stdout } = await runCliToExit(["worktree", "list"], cliEnv(env));
       assert.match(stdout, /ready/);
       assert.match(stdout, new RegExp(runId.slice(0, 8)));
       assert.match(stdout, /keep/);
@@ -420,7 +412,7 @@ describe("CLI worktree list", () => {
 
 describe("CLI worktree status", () => {
   it("shows worktree details for a run", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
@@ -430,7 +422,7 @@ describe("CLI worktree status", () => {
         worktreePath: "/tmp/tamandua-wt/details", originRepo: "/home/user/repo",
         originRef: "feature/branch", originSha: "abc123def456", cleanupPolicy: "remove_on_success",
       });
-      const { stdout } = await runCliToExit(["worktree", "status", runId], { HOME: env.homeDir });
+      const { stdout } = await runCliToExit(["worktree", "status", runId], cliEnv(env));
       assert.match(stdout, /Run:\s+aaaaaaaa/);
       assert.match(stdout, /Status:\s+ready/);
       assert.match(stdout, /Origin repo:\s+\/home\/user\/repo/);
@@ -443,7 +435,7 @@ describe("CLI worktree status", () => {
   });
 
   it("shows none for missing ref and sha", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
@@ -457,7 +449,7 @@ describe("CLI worktree status", () => {
         VALUES (?, ?, ?, ?, NULL, NULL, 'main', 'ready', 'keep', datetime('now'))`).run(
         runId, "/tmp/origin", "/tmp/origin/.git", "/tmp/tamandua-wt/no-ref");
       db.close();
-      const { stdout } = await runCliToExit(["worktree", "status", runId], { HOME: env.homeDir });
+      const { stdout } = await runCliToExit(["worktree", "status", runId], cliEnv(env));
       assert.match(stdout, /Origin ref:\s+\(none\)/);
       assert.match(stdout, /Origin SHA:\s+\(none\)/);
     } finally {
@@ -466,13 +458,13 @@ describe("CLI worktree status", () => {
   });
 
   it("shows message for run with no managed worktree", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
       const runId = "cccccccc-dddd-eeee-ffff-000000000000";
       seedRunRow(dbPath, runId);
-      const { stdout } = await runCliToExit(["worktree", "status", runId], { HOME: env.homeDir });
+      const { stdout } = await runCliToExit(["worktree", "status", runId], cliEnv(env));
       assert.match(stdout, /No managed worktree/);
     } finally {
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
@@ -480,11 +472,11 @@ describe("CLI worktree status", () => {
   });
 
   it("errors when run does not exist", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       initDb(path.join(env.tamanduaDir, "tamandua.db"));
       const { stderr, code } = await runCliToExit(
-        ["worktree", "status", "nonexistent-run"], { HOME: env.homeDir });
+        ["worktree", "status", "nonexistent-run"], cliEnv(env));
       assert.equal(code, 1);
       assert.match(stderr, /No run found matching/);
     } finally {
@@ -495,7 +487,7 @@ describe("CLI worktree status", () => {
 
 describe("CLI worktree remove", () => {
   it("removes a managed worktree", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
@@ -506,7 +498,7 @@ describe("CLI worktree remove", () => {
       const runId = crypto.randomUUID();
       seedRunRow(dbPath, runId);
       seedWorktreeRow(dbPath, runId, { worktreePath, originRepo, originRef: "main" });
-      const { stdout, code } = await runCliToExit(["worktree", "remove", runId], { HOME: env.homeDir });
+      const { stdout, code } = await runCliToExit(["worktree", "remove", runId], cliEnv(env));
       assert.equal(code, 0);
       assert.match(stdout, /Removed managed worktree for run/);
       const db = new DatabaseSync(dbPath);
@@ -520,13 +512,13 @@ describe("CLI worktree remove", () => {
   });
 
   it("errors when run has no managed worktree", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
       const runId = crypto.randomUUID();
       seedRunRow(dbPath, runId);
-      const { stderr, code } = await runCliToExit(["worktree", "remove", runId], { HOME: env.homeDir });
+      const { stderr, code } = await runCliToExit(["worktree", "remove", runId], cliEnv(env));
       assert.equal(code, 1);
       assert.match(stderr, /has no managed worktree/);
     } finally {
@@ -537,7 +529,7 @@ describe("CLI worktree remove", () => {
 
 describe("CLI worktree prune", () => {
   it("prunes completed worktrees older than threshold", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
@@ -552,7 +544,7 @@ describe("CLI worktree prune", () => {
       db.prepare("UPDATE run_worktrees SET created_at = datetime('now', '-30 days') WHERE run_id = ?").run(runId);
       db.close();
       const { stdout, code } = await runCliToExit(
-        ["worktree", "prune", "--completed", "--older-than", "7d"], { HOME: env.homeDir });
+        ["worktree", "prune", "--completed", "--older-than", "7d"], cliEnv(env));
       assert.equal(code, 0);
       assert.match(stdout, /Pruned worktree/);
     } finally {
@@ -561,7 +553,7 @@ describe("CLI worktree prune", () => {
   });
 
   it("skips completed worktrees newer than threshold", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
@@ -573,7 +565,7 @@ describe("CLI worktree prune", () => {
       seedRunRow(dbPath, runId, { status: "completed" });
       seedWorktreeRow(dbPath, runId, { worktreePath, originRepo, originRef: "main" });
       const { stdout } = await runCliToExit(
-        ["worktree", "prune", "--completed", "--older-than", "7d"], { HOME: env.homeDir });
+        ["worktree", "prune", "--completed", "--older-than", "7d"], cliEnv(env));
       assert.match(stdout, /No worktrees to prune/);
     } finally {
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
@@ -581,7 +573,7 @@ describe("CLI worktree prune", () => {
   });
 
   it("skips worktrees for non-terminal runs", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       initDb(dbPath);
@@ -596,7 +588,7 @@ describe("CLI worktree prune", () => {
       db.prepare("UPDATE run_worktrees SET created_at = datetime('now', '-30 days') WHERE run_id = ?").run(runId);
       db.close();
       const { stdout } = await runCliToExit(
-        ["worktree", "prune", "--completed", "--older-than", "7d"], { HOME: env.homeDir });
+        ["worktree", "prune", "--completed", "--older-than", "7d"], cliEnv(env));
       assert.match(stdout, /No worktrees to prune/);
     } finally {
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
@@ -604,11 +596,11 @@ describe("CLI worktree prune", () => {
   });
 
   it("errors without --completed flag", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       initDb(path.join(env.tamanduaDir, "tamandua.db"));
       const { stderr, code } = await runCliToExit(
-        ["worktree", "prune", "--older-than", "7d"], { HOME: env.homeDir });
+        ["worktree", "prune", "--older-than", "7d"], cliEnv(env));
       assert.equal(code, 1);
       assert.match(stderr, /Missing --completed/);
     } finally {
@@ -617,11 +609,11 @@ describe("CLI worktree prune", () => {
   });
 
   it("errors without --older-than value", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       initDb(path.join(env.tamanduaDir, "tamandua.db"));
       const { stderr, code } = await runCliToExit(
-        ["worktree", "prune", "--completed"], { HOME: env.homeDir });
+        ["worktree", "prune", "--completed"], cliEnv(env));
       assert.equal(code, 1);
       assert.match(stderr, /Missing --older-than/);
     } finally {
@@ -632,11 +624,11 @@ describe("CLI worktree prune", () => {
 
 describe("CLI parseDuration", () => {
   it("rejects invalid duration format via prune", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       initDb(path.join(env.tamanduaDir, "tamandua.db"));
       const { stderr, code } = await runCliToExit(
-        ["worktree", "prune", "--completed", "--older-than", "invalid"], { HOME: env.homeDir });
+        ["worktree", "prune", "--completed", "--older-than", "invalid"], cliEnv(env));
       assert.equal(code, 1);
       assert.match(stderr, /Invalid duration format/);
     } finally {
@@ -647,7 +639,7 @@ describe("CLI parseDuration", () => {
 
 describe("CLI handlers surface operational errors instead of masking them as not-found", () => {
   it("workflow status surfaces SQLite errors instead of No run found matching", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       // Write garbage into the DB file so SQLite throws an operational error
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
@@ -655,7 +647,7 @@ describe("CLI handlers surface operational errors instead of masking them as not
       fs.writeFileSync(dbPath, "not a valid database", "utf-8");
 
       const { stdout, code } = await runCliToExit(
-        ["workflow", "status", "some-query"], { HOME: env.homeDir });
+        ["workflow", "status", "some-query"], cliEnv(env));
       // Must NOT mask the operational error as "No run found matching"
       assert.doesNotMatch(stdout, /No run found matching/);
       // The actual SQLite error message should be surfaced
@@ -666,14 +658,14 @@ describe("CLI handlers surface operational errors instead of masking them as not
   });
 
   it("worktree status surfaces operational errors instead of No run found matching", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       fs.mkdirSync(path.dirname(dbPath), { recursive: true });
       fs.writeFileSync(dbPath, "not a valid database", "utf-8");
 
       const { stderr, code } = await runCliToExit(
-        ["worktree", "status", "some-run-id"], { HOME: env.homeDir });
+        ["worktree", "status", "some-run-id"], cliEnv(env));
       assert.equal(code, 1);
       // Must NOT mask the operational error as "No run found matching"
       assert.doesNotMatch(stderr, /No run found matching/);
@@ -685,14 +677,14 @@ describe("CLI handlers surface operational errors instead of masking them as not
   });
 
   it("worktree remove surfaces operational errors instead of No run found matching", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       fs.mkdirSync(path.dirname(dbPath), { recursive: true });
       fs.writeFileSync(dbPath, "not a valid database", "utf-8");
 
       const { stderr, code } = await runCliToExit(
-        ["worktree", "remove", "some-run-id"], { HOME: env.homeDir });
+        ["worktree", "remove", "some-run-id"], cliEnv(env));
       assert.equal(code, 1);
       // Must NOT mask the operational error as "No run found matching"
       assert.doesNotMatch(stderr, /No run found matching/);
@@ -704,11 +696,11 @@ describe("CLI handlers surface operational errors instead of masking them as not
   });
 
   it("workflow status still prints not-found for genuinely missing runs", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       initDb(path.join(env.tamanduaDir, "tamandua.db"));
       const { stdout } = await runCliToExit(
-        ["workflow", "status", "nonexistent-run-query"], { HOME: env.homeDir });
+        ["workflow", "status", "nonexistent-run-query"], cliEnv(env));
       assert.match(stdout, /No run found matching/);
     } finally {
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch {}
@@ -716,11 +708,11 @@ describe("CLI handlers surface operational errors instead of masking them as not
   });
 
   it("worktree status still prints not-found for genuinely missing runs", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       initDb(path.join(env.tamanduaDir, "tamandua.db"));
       const { stderr, code } = await runCliToExit(
-        ["worktree", "status", "nonexistent-run"], { HOME: env.homeDir });
+        ["worktree", "status", "nonexistent-run"], cliEnv(env));
       assert.equal(code, 1);
       assert.match(stderr, /No run found matching/);
     } finally {
@@ -729,11 +721,11 @@ describe("CLI handlers surface operational errors instead of masking them as not
   });
 
   it("worktree remove still prints not-found for genuinely missing runs", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
       initDb(path.join(env.tamanduaDir, "tamandua.db"));
       const { stderr, code } = await runCliToExit(
-        ["worktree", "remove", "nonexistent-run"], { HOME: env.homeDir });
+        ["worktree", "remove", "nonexistent-run"], cliEnv(env));
       assert.equal(code, 1);
       assert.match(stderr, /No run found matching/);
     } finally {
@@ -744,9 +736,9 @@ describe("CLI handlers surface operational errors instead of masking them as not
 
 describe("CLI printUsage includes worktree commands", () => {
   it("shows worktree subcommands in --help output", async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     try {
-      const { stdout } = await runCliToExit([], { HOME: env.homeDir });
+      const { stdout } = await runCliToExit([], cliEnv(env));
       assert.match(stdout, /tamandua worktree list/);
       assert.match(stdout, /tamandua worktree status/);
       assert.match(stdout, /tamandua worktree remove/);

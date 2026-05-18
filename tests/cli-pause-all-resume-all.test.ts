@@ -12,6 +12,7 @@
  */
 
 import { describe, it, before, after } from "node:test";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -38,7 +39,7 @@ function runCli(args: string[], env: Record<string, string>): Promise<CliResult>
     let stderr = "";
 
     const child = spawn("node", ["--no-warnings", CLI_SCRIPT, ...args], {
-      env: { ...process.env, ...env },
+      env: cleanChildEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -282,11 +283,8 @@ describe("tamandua workflow pause-all CLI", { concurrency: 1 }, () => {
 
     try {
       daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
-        env: {
-          ...process.env,
-          HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort),
-        },
+        env: cleanChildEnv({ HOME: homeDir,
+          TAMANDUA_CONTROL_PORT: String(controlPort), }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       daemon.stdout?.resume();
@@ -362,11 +360,8 @@ describe("tamandua workflow pause-all CLI", { concurrency: 1 }, () => {
 
     try {
       daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
-        env: {
-          ...process.env,
-          HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort),
-        },
+        env: cleanChildEnv({ HOME: homeDir,
+          TAMANDUA_CONTROL_PORT: String(controlPort), }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       daemon.stdout?.resume();
@@ -474,11 +469,8 @@ describe("tamandua workflow resume-all CLI", { concurrency: 1 }, () => {
 
     try {
       daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
-        env: {
-          ...process.env,
-          HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort),
-        },
+        env: cleanChildEnv({ HOME: homeDir,
+          TAMANDUA_CONTROL_PORT: String(controlPort), }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       daemon.stdout?.resume();
@@ -589,11 +581,8 @@ describe("tamandua workflow pause-all / resume-all terminal protection", { concu
 
     try {
       daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
-        env: {
-          ...process.env,
-          HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort),
-        },
+        env: cleanChildEnv({ HOME: homeDir,
+          TAMANDUA_CONTROL_PORT: String(controlPort), }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       daemon.stdout?.resume();
@@ -668,11 +657,8 @@ describe("tamandua workflow pause-all / resume-all terminal protection", { concu
 
     try {
       daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
-        env: {
-          ...process.env,
-          HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort),
-        },
+        env: cleanChildEnv({ HOME: homeDir,
+          TAMANDUA_CONTROL_PORT: String(controlPort), }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       daemon.stdout?.resume();

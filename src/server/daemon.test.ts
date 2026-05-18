@@ -7,6 +7,7 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { cleanChildEnv } from "../../tests/helpers/test-env.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DAEMON_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "daemon.js");
@@ -22,11 +23,8 @@ function spawnDaemon(
 } {
   let output = "";
   const child = spawn("node", [DAEMON_SCRIPT, String(port), ...extraArgs], {
-    env: {
-      ...process.env,
-      HOME: homeDir,
-      TAMANDUA_CONTROL_PORT: String(controlPort),
-    },
+    env: cleanChildEnv({ HOME: homeDir,
+      TAMANDUA_CONTROL_PORT: String(controlPort), }),
     stdio: ["ignore", "pipe", "pipe"],
   });
 

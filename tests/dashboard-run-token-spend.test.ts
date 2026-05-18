@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -17,7 +18,7 @@ function createTempHome() {
 function runNodeScript(script: string, env: Record<string, string>) {
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: cleanChildEnv(env),
     encoding: "utf-8",
   });
 

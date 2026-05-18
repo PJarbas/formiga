@@ -20,6 +20,7 @@ describe("test isolation guard", () => {
   it("does not contain patterns that can touch the live daemon", () => {
     const testFiles = [
       ...collectTestFiles(path.join(process.cwd(), "tests")),
+      ...collectTestFiles(path.join(process.cwd(), "e2e-tests")),
       ...collectTestFiles(path.join(process.cwd(), "src")),
     ];
 
@@ -28,6 +29,7 @@ describe("test isolation guard", () => {
       /\bstopMcp\(\s*\);/,
       /\bstopControlPlane\(\s*\);/,
       /fs\.unlinkSync\(\s*(?:PID_FILE|MCP_PID_FILE|MCP_PORT_FILE|CONTROL_PLANE_PID_FILE|CONTROL_PLANE_PORT_FILE)\s*\)/,
+      /\.{3}process\.env/,
       /env\s*\?\s*\{\s*\.{3}process\.env/,
       /:\s*process\.env\s*[,}]/,
       /\b(?:canBind|fetch)\(\s*(?:`[^`]*(?:3334|3338|3339)|["'][^"']*(?:3334|3338|3339)|3334|3338|3339)/,
@@ -56,6 +58,7 @@ describe("test isolation guard", () => {
     // ~/.tamandua/tamandua.log. This regression test guards against that.
     const testFiles = [
       ...collectTestFiles(path.join(process.cwd(), "tests")),
+      ...collectTestFiles(path.join(process.cwd(), "e2e-tests")),
       ...collectTestFiles(path.join(process.cwd(), "src")),
     ];
 

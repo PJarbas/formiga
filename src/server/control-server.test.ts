@@ -6,6 +6,10 @@
  * it doesn't keep the test process alive.
  */
 import { describe, it, before, after, beforeEach, afterEach } from "node:test";
+import {
+  cleanChildEnv,
+  reserveDistinctRandomPorts,
+} from "../../tests/helpers/test-env.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -19,8 +23,8 @@ import { DEFAULT_CONTROL_PORT } from "../../dist/server/control-server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DAEMON_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "daemon.js");
-const DASHBOARD_PORT = 3344;
-const CONTROL_PORT = DEFAULT_CONTROL_PORT + 1000;
+let dashboardPort = 0;
+let controlPort = 0;
 
 interface JsonResponse {
   status: number;
@@ -45,7 +49,7 @@ async function jsonRequest(
       {
         method,
         hostname: "127.0.0.1",
-        port: CONTROL_PORT,
+        port: controlPort,
         path: pathName,
         headers,
       },
@@ -86,7 +90,7 @@ async function waitForControlUp(timeoutMs = 7000): Promise<void> {
     }
     await sleep(100);
   }
-  throw new Error(`control plane did not come up on port ${CONTROL_PORT}`);
+  throw new Error(`control plane did not come up on port ${controlPort}`);
 }
 
 async function waitForExit(child: ChildProcess, timeoutMs = 7000): Promise<number> {
@@ -124,18 +128,19 @@ describe("daemon control plane", { concurrency: 1 }, () => {
   let secret: string | undefined;
 
   before(async (t) => {
-    if (!(await canBind(DASHBOARD_PORT))) {
-      console.warn(`Port ${DASHBOARD_PORT} is in use; skipping control plane tests`);
+    [dashboardPort, controlPort] = await reserveDistinctRandomPorts(2);
+    if (!(await canBind(dashboardPort))) {
+      console.warn(`Port ${dashboardPort} is in use; skipping control plane tests`);
       return;
     }
-    if (!(await canBind(CONTROL_PORT))) {
-      console.warn(`Port ${CONTROL_PORT} is in use; skipping control plane tests`);
+    if (!(await canBind(controlPort))) {
+      console.warn(`Port ${controlPort} is in use; skipping control plane tests`);
       return;
     }
 
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-control-home-"));
-    daemon = spawn("node", [DAEMON_SCRIPT, String(DASHBOARD_PORT)], {
-      env: { ...process.env, HOME: tempHome, TAMANDUA_CONTROL_PORT: String(CONTROL_PORT) },
+    daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
+      env: cleanChildEnv({ HOME: tempHome, TAMANDUA_CONTROL_PORT: String(controlPort) }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     daemon.stdout?.resume();
@@ -855,6 +860,13 @@ describe("control-server unit exports", () => {
       assert.ok(token.length > 0);
       const saved = readDaemonSecret(secretPath);
       assert.equal(saved, token);
+    });
+
+    it("default secret path honors HOME assigned after module import", () => {
+      const secretPath = path.join(tempHome, ".tamandua", "daemon-secret");
+      const token = ensureDaemonSecret();
+      assert.ok(fs.existsSync(secretPath));
+      assert.equal(readDaemonSecret(), token);
     });
 
     it("returns existing secret when called again (idempotent)", () => {

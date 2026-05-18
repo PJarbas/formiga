@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { spawn, execSync } from "node:child_process";
 import { once } from "node:events";
 import { describe, it, after } from "node:test";
+import { cleanChildEnv } from "./helpers/test-env.ts";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
 const DEFAULT_MCP_PORT = 3338;
@@ -27,10 +28,7 @@ function createTempEnv(): { root: string; stateDir: string; homeDir: string } {
 
 async function runCliOnce(args: string[], env: Record<string, string>): Promise<CliResult> {
   const child = spawn(process.execPath, [cliPath, ...args], {
-    env: {
-      ...process.env,
-      ...env,
-    },
+    env: cleanChildEnv(env),
     stdio: ["ignore", "pipe", "pipe"],
   });
 
