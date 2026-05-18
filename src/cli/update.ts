@@ -299,12 +299,15 @@ export async function runUpdate(options: RunUpdateOptions = {}): Promise<UpdateR
 
   const afterHead = await readGitHead(sourcePath, runCommand);
   if (beforeHead === afterHead) {
-    output.log(`No source changes after git pull; already at ${shortHead(afterHead)}.`);
-    output.log("Skipping build, workflow install, and service restart.");
-    return { status: "no_change", sourcePath, head: afterHead };
+    if (!options.force) {
+      output.log(`No source changes after git pull; already at ${shortHead(afterHead)}.`);
+      output.log("Skipping build, workflow install, and service restart.");
+      return { status: "no_change", sourcePath, head: afterHead };
+    }
+    output.log(`No source changes after git pull (at ${shortHead(afterHead)}), but --force set; rebuilding anyway.`);
+  } else {
+    output.log(`Source updated: ${shortHead(beforeHead)} -> ${shortHead(afterHead)}.`);
   }
-
-  output.log(`Source updated: ${shortHead(beforeHead)} -> ${shortHead(afterHead)}.`);
   output.log("Running ./build-and-install...");
   await runCommand("./build-and-install", [], { cwd: sourcePath, stdio: "inherit" });
 

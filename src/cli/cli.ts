@@ -215,8 +215,9 @@ In order, it does this:
   3. Runs git pull in that checkout, using the checkout's current
      branch/remote config.
   4. Reads git HEAD again.
-  5. If HEAD did not change, it stops there: no build, no workflow
-     install, no service restart.
+  5. If HEAD did not change and --force is not set, it stops there: no
+     build, no workflow install, no service restart. With --force, it
+     continues to rebuild even without source changes.
   6. If HEAD changed, it runs ./build-and-install.
   7. Takes a snapshot of currently running Tamandua services: dashboard
      daemon, standalone MCP, and control plane.
@@ -230,7 +231,8 @@ In order, it does this:
       previous ports.
 
 Options:
-  --force    Continue update despite active runs (step 9).
+  --force    Continue update despite active runs (step 9). Also forces
+             rebuild/reinstall even without source changes (step 5).
 
 Examples:
   tamandua update             # Pull, rebuild, reinstall (blocks if active runs exist)

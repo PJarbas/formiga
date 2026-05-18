@@ -302,4 +302,85 @@ describe("tamandua update command helpers", () => {
       fs.rmSync(sourcePath, { recursive: true, force: true });
     }
   });
+
+  it("--force with no source changes still rebuilds, installs workflows, and cycles services", async () => {
+    const sourcePath = createSourceRoot();
+    const commands: string[] = [];
+    const serviceCalls: string[] = [];
+    const waitedPids: number[] = [];
+    const installed: string[] = [];
+    const { output, logs } = createOutput();
+
+    try {
+      const result = await runUpdate({
+        force: true,
+        sourcePath,
+        output,
+        runCommand: createRunCommand(["aaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaa"], commands),
+        services: createServices({
+          dashboard: { running: true, pid: 111111, port: 4401 },
+          mcp: { running: false, pid: null, port: 4402 },
+          controlPlane: { running: true, pid: 333333, port: 4403 },
+        }, serviceCalls),
+        checkActiveRuns: async () => [],
+        listWorkflows: async () => ["bug-fix", "feature-dev"],
+        installWorkflowById: async (workflowId) => {
+          installed.push(workflowId);
+        },
+        waitForProcessExit: async (pid) => {
+          waitedPids.push(pid);
+        },
+      });
+
+      assert.equal(result.status, "updated");
+      assert.deepEqual(commands, [
+        "git rev-parse HEAD",
+        "git pull",
+        "git rev-parse HEAD",
+        "./build-and-install",
+      ]);
+      assert.deepEqual(installed, ["bug-fix", "feature-dev"]);
+      assert.deepEqual(waitedPids, [111111, 333333]);
+      assert.deepEqual(serviceCalls, [
+        "snapshot",
+        "stopDashboard",
+        "stopControlPlane",
+        "startDashboard:4401",
+        "startControlPlane:4403",
+      ]);
+      assert.match(logs.join("\n"), /--force set; rebuilding/);
+      assert.match(logs.join("\n"), /Running \.\/build-and-install/);
+    } finally {
+      fs.rmSync(sourcePath, { recursive: true, force: true });
+    }
+  });
+
+  it("--force with no source changes returns updated not no_change", async () => {
+    const sourcePath = createSourceRoot();
+    const commands: string[] = [];
+    const { output } = createOutput();
+
+    try {
+      const result = await runUpdate({
+        force: true,
+        sourcePath,
+        output,
+        runCommand: createRunCommand(["aaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaa"], commands),
+        services: createServices({
+          dashboard: { running: false, pid: null, port: 4501 },
+          mcp: { running: false, pid: null, port: 4502 },
+          controlPlane: { running: false, pid: null, port: 4503 },
+        }),
+        checkActiveRuns: async () => [],
+        listWorkflows: async () => ["feature-dev"],
+        installWorkflowById: async () => {},
+        waitForProcessExit: async () => {},
+      });
+
+      assert.equal(result.status, "updated");
+      assert.notDeepEqual(result.status, "no_change");
+    } finally {
+      fs.rmSync(sourcePath, { recursive: true, force: true });
+    }
+  });
 });
