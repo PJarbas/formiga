@@ -31,6 +31,31 @@ function createTempEnv() {
   return { root, homeDir, tamanduaDir, controlPort: nextControlPort++, dashboardPort };
 }
 
+function cliEnv(env: ReturnType<typeof createTempEnv>): Record<string, string> {
+  return {
+    HOME: env.homeDir,
+    TAMANDUA_CONTROL_PORT: String(env.controlPort),
+  };
+}
+
+function assertCliSucceeded(
+  result: { stdout: string; stderr: string; code: number | null },
+  command: string,
+): void {
+  assert.equal(
+    result.code,
+    0,
+    `${command} failed with exit code ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  );
+}
+
+async function startDashboard(env: ReturnType<typeof createTempEnv>): Promise<void> {
+  const result = await runCliToExit([
+    "dashboard", "start", "--port", String(env.dashboardPort),
+  ], cliEnv(env));
+  assertCliSucceeded(result, "tamandua dashboard start");
+}
+
 function createGitRepo(dirPath: string): void {
   fs.mkdirSync(dirPath, { recursive: true });
   runGit(["init", "--initial-branch=main"], dirPath);
@@ -162,18 +187,13 @@ describe("CLI worktree run arguments", () => {
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
       const originRepo = path.join(env.root, "origin");
       createGitRepo(originRepo);
-      await runCliToExit(["dashboard", "start"], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      await startDashboard(env);
 
-      await runCliToExit([
+      const result = await runCliToExit([
         "workflow", "run", workflowId, "Test worktree run",
         "--worktree-origin-repository", originRepo, "--worktree-origin-ref", "main",
-      ], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      ], cliEnv(env));
+      assertCliSucceeded(result, "tamandua workflow run cli-wt-run");
 
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       const db = new DatabaseSync(dbPath);
@@ -199,19 +219,14 @@ describe("CLI worktree run arguments", () => {
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
       const originRepo = path.join(env.root, "origin");
       createGitRepo(originRepo);
-      await runCliToExit(["dashboard", "start"], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      await startDashboard(env);
 
-      await runCliToExit([
+      const result = await runCliToExit([
         "workflow", "run", workflowId,
         `--worktree-origin-repository=${originRepo}`, "--worktree-origin-ref=main",
         "Test worktree run with inline args",
-      ], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      ], cliEnv(env));
+      assertCliSucceeded(result, "tamandua workflow run cli-wt-run-inline");
 
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       const db = new DatabaseSync(dbPath);
@@ -237,17 +252,12 @@ describe("CLI worktree run arguments", () => {
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
       const originRepo = path.join(env.root, "origin");
       createGitRepo(originRepo);
-      await runCliToExit(["dashboard", "start"], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      await startDashboard(env);
 
-      await runCliToExit([
+      const result = await runCliToExit([
         "workflow", "run", workflowId, "Test repo only", "--worktree-origin-repository", originRepo,
-      ], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      ], cliEnv(env));
+      assertCliSucceeded(result, "tamandua workflow run cli-wt-run-repo-only");
 
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       const db = new DatabaseSync(dbPath);
@@ -334,18 +344,14 @@ describe("CLI worktree run arguments", () => {
       writeMinimalWorkflow(env.homeDir, workflowId, { workspaceMode: "worktree" });
       const originRepo = path.join(env.root, "origin");
       createGitRepo(originRepo);
-      await runCliToExit(["dashboard", "start"], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      await startDashboard(env);
 
-      const { stdout } = await runCliToExit([
+      const runResult = await runCliToExit([
         "workflow", "run", workflowId, "Create managed worktree",
         "--worktree-origin-repository", originRepo,
-      ], {
-        HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
-      });
+      ], cliEnv(env));
+      assertCliSucceeded(runResult, "tamandua workflow run cli-wt-managed");
+      const { stdout } = runResult;
 
       const dbPath = path.join(env.tamanduaDir, "tamandua.db");
       const db = new DatabaseSync(dbPath);
