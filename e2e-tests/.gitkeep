@@ -1,3 +1,0 @@
-# End-to-end test placeholders are stored here.
-# These tests are separate from the main test suite (tests/ + src/**/*.test.ts)
-# and are run via ./run-all-e2e-tests.
