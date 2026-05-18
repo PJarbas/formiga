@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveTamanduaCli, resolveWorkflowWorkspaceDir } from "./paths.js";
-import type { WorkflowSpec, WorkflowAgent } from "./types.js";
+import type { WorkflowSpec, WorkflowAgent, HarnessType } from "./types.js";
 import { logger } from "../lib/logger.js";
 import { getRoleTimeoutSeconds, inferRole } from "./install.js";
 import { formatPiCommandPreview } from "./pi-command-preview.js";
@@ -66,6 +66,8 @@ export interface CronJobInfo {
   timeoutSeconds?: number;
   /** Working directory used as cwd for `pi --print` invocations. */
   workingDirectoryForHarness?: string;
+  /** Harness binary to use for agent invocations ("pi" or "hermes"). */
+  harnessType?: HarnessType;
   createdAt: string;
 }
 
@@ -113,6 +115,39 @@ export async function findPiBinary(): Promise<string> {
 
   throw new Error(
     "pi binary not found in PATH. Install pi (https://github.com/anthropics/pi) or set TAMANDUA_PI_BINARY."
+  );
+}
+
+// ── hermes binary discovery ───────────────────────────────────────
+
+export function findHermesBinary(): string {
+  // Prefer explicit env override
+  const envHermes = process.env.TAMANDUA_HERMES_BINARY?.trim();
+  if (envHermes) {
+    try {
+      fs.accessSync(envHermes, fs.constants.X_OK);
+      return envHermes;
+    } catch {
+      throw new Error(
+        `TAMANDUA_HERMES_BINARY set but not executable: ${envHermes}`
+      );
+    }
+  }
+
+  // Search PATH
+  const pathDirs = (process.env.PATH ?? "").split(path.delimiter);
+  for (const dir of pathDirs) {
+    const candidate = path.join(dir, "hermes");
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // not found in this dir, keep looking
+    }
+  }
+
+  throw new Error(
+    "hermes binary not found in PATH. Install hermes or set TAMANDUA_HERMES_BINARY."
   );
 }
 
@@ -325,6 +360,191 @@ export async function runPi(
   });
 
   return filteredStdout.trim();
+}
+
+// ── Hermes execution ──────────────────────────────────────────────
+
+export async function runHermes(
+  prompt: string,
+  options: RunPiOptions = {},
+): Promise<string> {
+  const timeoutMs = (options.timeout ?? 60) * 1000;
+  const hermesPath = await findHermesBinary();
+
+  const childEnv: Record<string, string | undefined> = {
+    ...process.env as Record<string, string | undefined>,
+    ...(options.env ?? {}),
+  };
+
+  const startedAt = Date.now();
+
+  // Hermes single-shot invocation:
+  // -q <prompt> delivers the task in single message mode.
+  // --max-turns 8192 gives the agent plenty of room to complete the work.
+  // --yolo skips permission confirmations (hermes equivalent of pi -y).
+  // -Q suppresses banner/spinner (but NOT session_id).
+  // --ignore-user-config --ignore-rules ensures a clean environment.
+  const args = [
+    "chat",
+    "--max-turns", "8192",
+    "--yolo",
+    "-Q",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "-q", prompt,
+  ];
+
+  logger.info("hermes pre-launch", {
+    harness: "hermes",
+    hermesPath,
+    promptLength: Buffer.byteLength(prompt, "utf-8"),
+    timeoutMs,
+    workdir: options.workdir,
+  });
+
+  // Spawn hermes in its own process group for clean termination.
+  const child = spawn(hermesPath, args, {
+    cwd: options.workdir ?? process.cwd(),
+    env: childEnv,
+    stdio: ["pipe", "pipe", "pipe"],
+    detached: true,
+  });
+
+  const childPid = child.pid;
+  const pgid = childPid ?? 0;
+
+  if (childPid && options.onSpawn) {
+    try {
+      options.onSpawn({ pid: childPid, pgid });
+    } catch (err) {
+      logger.warn("hermes onSpawn callback threw", { error: String(err) });
+    }
+  }
+
+  logger.info("hermes launched", {
+    harness: "hermes",
+    pid: childPid ?? null,
+    pgid,
+    timeoutMs,
+    workdir: options.workdir,
+  });
+
+  // End stdin immediately — hermes reads from args (-q).
+  child.stdin?.end();
+
+  // Collect stderr (bounded).
+  let stderrPieces: string[] = [];
+  let stderrBytes = 0;
+  const MAX_STDERR_BYTES = 10 * 1024 * 1024;
+  child.stderr?.on("data", (chunk: Buffer) => {
+    const str = chunk.toString("utf-8");
+    if (stderrBytes + Buffer.byteLength(str, "utf-8") <= MAX_STDERR_BYTES) {
+      stderrPieces.push(str);
+      stderrBytes += Buffer.byteLength(str, "utf-8");
+    }
+  });
+
+  // Collect stdout fully (hermes produces plain text, not JSON events).
+  let stdoutPieces: string[] = [];
+  let stdoutBytes = 0;
+  const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
+  child.stdout?.on("data", (chunk: Buffer) => {
+    const str = chunk.toString("utf-8");
+    if (stdoutBytes + Buffer.byteLength(str, "utf-8") <= MAX_STDOUT_BYTES) {
+      stdoutPieces.push(str);
+      stdoutBytes += Buffer.byteLength(str, "utf-8");
+    }
+  });
+
+  // Wait for child exit, with timeout guard.
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (pgid) {
+        safeKillPgid(pgid, "SIGTERM");
+        setTimeout(() => safeKillPgid(pgid, "SIGKILL"), 5000).unref();
+      } else {
+        try { child.kill("SIGKILL"); } catch { /* best effort */ }
+      }
+      reject(new Error(`hermes timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      if (code === 0 || code === null) {
+        resolve();
+      } else {
+        const failureDurationMs = Date.now() - startedAt;
+        const failureStderr = stderrPieces.join("");
+        const failureStderrMeta = buildStreamLogMetadata(failureStderr);
+        logger.error("hermes execution failed", {
+          harness: "hermes",
+          pid: childPid ?? null,
+          pgid,
+          exitCode: code,
+          signal,
+          durationMs: failureDurationMs,
+          stderrBytes: failureStderrMeta.bytes,
+          stderrPreview: failureStderrMeta.preview,
+          stderrTruncated: failureStderrMeta.truncated,
+        });
+        const stderrSuffix = failureStderr ? `\nstderr: ${failureStderr}` : "";
+        reject(new Error(`hermes failed: exited with code ${code}${signal ? ` (signal ${signal})` : ""}${stderrSuffix}`));
+      }
+    });
+  });
+
+  const durationMs = Date.now() - startedAt;
+  const rawStdout = stdoutPieces.join("");
+  const stderrOut = stderrPieces.join("");
+  const stderrMeta = buildStreamLogMetadata(stderrOut);
+
+  if (stderrMeta.preview) {
+    logger.warn("hermes stderr", {
+      harness: "hermes",
+      pid: childPid ?? null,
+      stderrBytes: stderrMeta.bytes,
+      stderrPreview: stderrMeta.preview,
+      stderrTruncated: stderrMeta.truncated,
+    });
+  }
+
+  // Filter out session_id lines. Hermes appends a session identifier
+  // (e.g. "session_id: 20260518_103004_cdae11") at the end of stdout.
+  // Remove it so the scheduler sees clean output.
+  const filteredStdout = rawStdout
+    .split("\n")
+    .filter((line) => !/^session_id:\s*\S+/.test(line.trim()))
+    .join("\n")
+    .trim();
+
+  const stdoutMeta = buildStreamLogMetadata(filteredStdout);
+
+  logger.info("hermes completed", {
+    harness: "hermes",
+    pid: childPid ?? null,
+    pgid,
+    durationMs,
+    exitCode: child.exitCode,
+    signal: child.signalCode,
+    stdoutBytes: stdoutMeta.bytes,
+    stdoutPreview: stdoutMeta.preview,
+    stdoutTruncated: stdoutMeta.truncated,
+    stderrBytes: stderrMeta.bytes,
+    hasStderr: stderrMeta.bytes > 0,
+  });
+
+  return filteredStdout;
 }
 
 // ── Prompt builders ─────────────────────────────────────────────────
@@ -1034,7 +1254,7 @@ async function attributePollingRoundTokenUsage(
   }
 }
 
-function buildPollingRoundContext(
+export function buildPollingRoundContext(
   job: CronJobInfo,
   agent: WorkflowAgent,
   timeoutSeconds: number,
@@ -1053,6 +1273,7 @@ function buildPollingRoundContext(
     workdir: workingDirectoryForHarness,
     workingDirectoryForHarness,
     model,
+    harnessType: job.harnessType ?? "pi",
   };
 }
 
@@ -1164,22 +1385,41 @@ export async function executePollingRound(
       agentPersonaInstructions,
     );
 
+    const harnessType = job.harnessType ?? "pi";
+
     logger.info("Polling round start", context);
 
-    const output = await runPi(
-      ["--print", "--mode", "json", "--no-session", pollingPrompt],
-      {
+    const onSpawn = ({ pid, pgid }: { pid: number; pgid: number }) => {
+      inFlightChildren.set(job.id, { pid, pgid, killed: false });
+    };
+
+    let output: string;
+    if (harnessType === "hermes") {
+      const hermesPath = findHermesBinary();
+      output = await runHermes(pollingPrompt, {
         timeout,
         workdir: workingDirectoryForHarness,
         env: {
           TAMANDUA_WORKER_JOB_ID: job.id,
           TAMANDUA_WORKER_PID: String(process.pid),
+          TAMANDUA_HERMES_BINARY: hermesPath,
         },
-        onSpawn: ({ pid, pgid }) => {
-          inFlightChildren.set(job.id, { pid, pgid, killed: false });
+        onSpawn,
+      });
+    } else {
+      output = await runPi(
+        ["--print", "--mode", "json", "--no-session", pollingPrompt],
+        {
+          timeout,
+          workdir: workingDirectoryForHarness,
+          env: {
+            TAMANDUA_WORKER_JOB_ID: job.id,
+            TAMANDUA_WORKER_PID: String(process.pid),
+          },
+          onSpawn,
         },
-      },
-    );
+      );
+    }
 
     const metadata = parsePollingRoundMetadata(output);
     const outputSummary = summarizePollingRoundOutput(metadata.assistantOutput || output);
@@ -1310,6 +1550,22 @@ export async function createAgentCronJob(
 
   const fullAgentId = agent.id.startsWith(`${workflowId}_`) ? agent.id : `${workflowId}_${agent.id}`;
 
+  // Read harness_type from run context; default to "pi" if not set.
+  let harnessType: HarnessType = "pi";
+  try {
+    const { getDb } = await import("../db.js");
+    const db = getDb();
+    const runRow = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string } | undefined;
+    if (runRow) {
+      const ctx = JSON.parse(runRow.context) as Record<string, unknown>;
+      if (ctx.harness_type === "hermes") {
+        harnessType = "hermes";
+      }
+    }
+  } catch {
+    // If we can't read the context, default to "pi"
+  }
+
   const jobInfo: CronJobInfo = {
     id,
     workflowId,
@@ -1319,6 +1575,7 @@ export async function createAgentCronJob(
     sessionLabel: `${agent.id}-cron`,
     timeoutSeconds,
     workingDirectoryForHarness,
+    harnessType,
     createdAt: new Date().toISOString(),
   };
 

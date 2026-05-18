@@ -39,6 +39,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { readVersionStatus } from "../lib/version-check.js";
 import { parseWorkflowRunArgs } from "./workflow-run-args.js";
+import type { HarnessType } from "../installer/types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -853,6 +854,12 @@ Options:
   --worktree-origin-ref <ref>
       Git ref (branch, tag, or SHA) to check out in the worktree.
       Defaults to the current branch.
+  --pi-as-harness
+      Use pi as the agent harness (this is the default).
+      Mutually exclusive with --hermes-as-harness.
+  --hermes-as-harness
+      Use hermes as the agent harness instead of pi.
+      Mutually exclusive with --pi-as-harness.
 
 Examples:
   tamandua workflow run feature-dev-merge "Add dark mode toggle"
@@ -1049,7 +1056,9 @@ function getUsageText(): string {
     "tamandua workflow run <name> <task> [--no-hurry-please-save-tokens-mode]",
     "                                      [--working-directory-for-harness <dir>]",
     "                                      [--worktree-origin-repository <dir>]",
-    "                                      [--worktree-origin-ref <ref>]  Start a workflow run",
+    "                                      [--worktree-origin-ref <ref>]",
+    "                                      [--pi-as-harness | --hermes-as-harness]",
+    "                                      Start a workflow run",
     "", "tamandua worktree list                List managed worktrees",
     "tamandua worktree status <run-id>     Show worktree details for a run",
     "tamandua worktree remove <run-id>     Remove managed worktree [--force]",
@@ -1859,6 +1868,11 @@ async function main() {
     }
 
     if (!runArgs.taskTitle) { process.stderr.write("Missing task description.\n"); process.exit(1); }
+    let harnessType: HarnessType | undefined;
+    if (runArgs.harnessAs !== undefined) {
+      harnessType = runArgs.harnessAs as HarnessType;
+    }
+
     const result = await runWorkflow({
       workflowId: workflowName,
       taskTitle: runArgs.taskTitle,
@@ -1866,6 +1880,7 @@ async function main() {
       worktreeOriginRepository: runArgs.worktreeOriginRepository,
       worktreeOriginRef: runArgs.worktreeOriginRef,
       noHurrySaveTokensMode: runArgs.noHurrySaveTokensMode,
+      harnessType,
     });
     console.log(`Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}\nHarness CWD: ${result.workingDirectoryForHarness}`);
     return;

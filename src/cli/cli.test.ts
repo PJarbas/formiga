@@ -44,6 +44,7 @@ describe("parseWorkflowRunArgs", () => {
       worktreeOriginRepository: undefined,
       worktreeOriginRef: undefined,
       noHurrySaveTokensMode: undefined,
+      harnessAs: undefined,
     });
   });
 
@@ -165,6 +166,66 @@ describe("parseWorkflowRunArgs", () => {
     const result = parseWorkflowRunArgs(["--working-directory-for-harness=/tmp"]);
     assert.equal(result.taskTitle, "");
     assert.equal(result.workingDirectoryForHarness, "/tmp");
+  });
+
+  it("parses --pi-as-harness flag", () => {
+    const result = parseWorkflowRunArgs(["--pi-as-harness", "do the task"]);
+    assert.equal(result.taskTitle, "do the task");
+    assert.equal(result.harnessAs, "pi");
+  });
+
+  it("parses --hermes-as-harness flag", () => {
+    const result = parseWorkflowRunArgs(["--hermes-as-harness", "do the task"]);
+    assert.equal(result.taskTitle, "do the task");
+    assert.equal(result.harnessAs, "hermes");
+  });
+
+  it("does not set harnessAs when neither flag present", () => {
+    const result = parseWorkflowRunArgs(["do the task"]);
+    assert.equal(result.harnessAs, undefined);
+  });
+
+  it("throws when both --pi-as-harness and --hermes-as-harness specified", () => {
+    assert.throws(
+      () => parseWorkflowRunArgs(["--pi-as-harness", "--hermes-as-harness", "task"]),
+      /Cannot specify both --pi-as-harness and --hermes-as-harness/,
+    );
+  });
+
+  it("throws when both flags in reverse order", () => {
+    assert.throws(
+      () => parseWorkflowRunArgs(["--hermes-as-harness", "--pi-as-harness", "task"]),
+      /Cannot specify both --pi-as-harness and --hermes-as-harness/,
+    );
+  });
+
+  it("parses hermes harness alongside other flags", () => {
+    const result = parseWorkflowRunArgs([
+      "--hermes-as-harness",
+      "--no-hurry-please-save-tokens-mode",
+      "--working-directory-for-harness",
+      "/work",
+      "build feature",
+    ]);
+    assert.equal(result.taskTitle, "build feature");
+    assert.equal(result.harnessAs, "hermes");
+    assert.equal(result.noHurrySaveTokensMode, true);
+    assert.equal(result.workingDirectoryForHarness, "/work");
+  });
+
+  it("parses pi harness alongside other flags", () => {
+    const result = parseWorkflowRunArgs([
+      "--pi-as-harness",
+      "--worktree-origin-repository",
+      "/repo",
+      "--worktree-origin-ref",
+      "main",
+      "implement feature",
+    ]);
+    assert.equal(result.taskTitle, "implement feature");
+    assert.equal(result.harnessAs, "pi");
+    assert.equal(result.worktreeOriginRepository, "/repo");
+    assert.equal(result.worktreeOriginRef, "main");
   });
 });
 

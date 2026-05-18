@@ -250,6 +250,82 @@ describe("validateRunHarnessForScheduling", () => {
     }
   });
 
+  it("throws when harness_type is 'hermes' and hermes binary not found", () => {
+    const workdir = path.join(tempDir, "work");
+    fs.mkdirSync(workdir, { recursive: true });
+    // Unset TAMANDUA_HERMES_BINARY so PATH search fails
+    delete process.env.TAMANDUA_HERMES_BINARY;
+    // Save and clear PATH to guarantee hermes not found
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = tempDir; // empty dir, no hermes
+      assert.throws(
+        () => validateRunHarnessForScheduling("run-hermes-missing", JSON.stringify({
+          working_directory_for_harness: workdir,
+          harness_type: "hermes",
+        })),
+        /hermes is not available/,
+      );
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("succeeds when harness_type is 'hermes' and hermes binary is available via env var", () => {
+    const workdir = path.join(tempDir, "work");
+    fs.mkdirSync(workdir, { recursive: true });
+    const hermesPath = path.join(tempDir, "hermes-mock");
+    fs.writeFileSync(hermesPath, "#!/bin/sh\necho ok\n", { mode: 0o755 });
+
+    const saved = process.env.TAMANDUA_HERMES_BINARY;
+    try {
+      process.env.TAMANDUA_HERMES_BINARY = hermesPath;
+      const result = validateRunHarnessForScheduling("run-hermes-ok", JSON.stringify({
+        working_directory_for_harness: workdir,
+        harness_type: "hermes",
+      }));
+      assert.equal(result.workingDirectoryForHarness, workdir);
+    } finally {
+      if (saved === undefined) delete process.env.TAMANDUA_HERMES_BINARY;
+      else process.env.TAMANDUA_HERMES_BINARY = saved;
+    }
+  });
+
+  it("does not check hermes binary when harness_type is 'pi'", () => {
+    const workdir = path.join(tempDir, "work");
+    fs.mkdirSync(workdir, { recursive: true });
+    // Even with hermes missing, "pi" harness should succeed
+    delete process.env.TAMANDUA_HERMES_BINARY;
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = tempDir;
+      const result = validateRunHarnessForScheduling("run-pi", JSON.stringify({
+        working_directory_for_harness: workdir,
+        harness_type: "pi",
+      }));
+      assert.equal(result.workingDirectoryForHarness, workdir);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("does not check hermes binary when harness_type is not present", () => {
+    const workdir = path.join(tempDir, "work");
+    fs.mkdirSync(workdir, { recursive: true });
+    // No harness_type — should default to pi, no hermes check
+    delete process.env.TAMANDUA_HERMES_BINARY;
+    const savedPath = process.env.PATH;
+    try {
+      process.env.PATH = tempDir;
+      const result = validateRunHarnessForScheduling("run-noharness", JSON.stringify({
+        working_directory_for_harness: workdir,
+      }));
+      assert.equal(result.workingDirectoryForHarness, workdir);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
   it("direct workflow branch-mismatch validation is unchanged", () => {
     const workdir = path.join(tempDir, "direct-work");
     fs.mkdirSync(workdir, { recursive: true });

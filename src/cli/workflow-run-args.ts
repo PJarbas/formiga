@@ -4,6 +4,7 @@ export interface WorkflowRunArgs {
   worktreeOriginRepository?: string;
   worktreeOriginRef?: string;
   noHurrySaveTokensMode?: boolean;
+  harnessAs?: "pi" | "hermes";
 }
 
 export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
@@ -12,12 +13,33 @@ export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
   let worktreeOriginRepository: string | undefined;
   let worktreeOriginRef: string | undefined;
   let noHurrySaveTokensMode: boolean | undefined;
+  let harnessAs: "pi" | "hermes" | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
 
     if (token === "--no-hurry-please-save-tokens-mode") {
       noHurrySaveTokensMode = true;
+      continue;
+    }
+
+    if (token === "--pi-as-harness") {
+      if (harnessAs !== undefined) {
+        throw new Error(
+          "Cannot specify both --pi-as-harness and --hermes-as-harness. Choose one harness.",
+        );
+      }
+      harnessAs = "pi";
+      continue;
+    }
+
+    if (token === "--hermes-as-harness") {
+      if (harnessAs !== undefined) {
+        throw new Error(
+          "Cannot specify both --pi-as-harness and --hermes-as-harness. Choose one harness.",
+        );
+      }
+      harnessAs = "hermes";
       continue;
     }
 
@@ -90,5 +112,6 @@ export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
     worktreeOriginRepository,
     worktreeOriginRef,
     noHurrySaveTokensMode,
+    harnessAs,
   };
 }

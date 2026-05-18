@@ -316,5 +316,106 @@ describe("runWorkflow", () => {
       assert.equal(ctx.task, "Test combined context");
       assert.equal(ctx.workspace_mode, "direct");
     });
+
+    // ── Harness type context tests ──
+
+    it("stores harness_type 'pi' by default when harnessType is not provided", async () => {
+      const workflowId = "test-ctx-harness-default";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+
+      try {
+        await runWorkflow({
+          workflowId,
+          taskTitle: "Test default harness type context",
+        });
+      } catch {
+        // Expected: daemon registration fails in tests
+      }
+
+      const { getDb } = await import("../../dist/db.js");
+      const db = getDb();
+      const rows = db.prepare(
+        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).all(workflowId) as { context: string }[];
+      assert.ok(rows.length > 0, "run record should exist");
+      const ctx = JSON.parse(rows[0].context);
+      assert.equal(ctx.harness_type, "pi");
+    });
+
+    it("stores harness_type 'hermes' when harnessType is explicitly 'hermes'", async () => {
+      const workflowId = "test-ctx-harness-hermes";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+
+      try {
+        await runWorkflow({
+          workflowId,
+          taskTitle: "Test hermes harness type context",
+          harnessType: "hermes",
+        });
+      } catch {
+        // Expected: daemon registration fails in tests
+      }
+
+      const { getDb } = await import("../../dist/db.js");
+      const db = getDb();
+      const rows = db.prepare(
+        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).all(workflowId) as { context: string }[];
+      assert.ok(rows.length > 0, "run record should exist");
+      const ctx = JSON.parse(rows[0].context);
+      assert.equal(ctx.harness_type, "hermes");
+    });
+
+    it("stores harness_type 'pi' when harnessType is explicitly 'pi'", async () => {
+      const workflowId = "test-ctx-harness-explicit-pi";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+
+      try {
+        await runWorkflow({
+          workflowId,
+          taskTitle: "Test explicit pi harness type context",
+          harnessType: "pi",
+        });
+      } catch {
+        // Expected: daemon registration fails in tests
+      }
+
+      const { getDb } = await import("../../dist/db.js");
+      const db = getDb();
+      const rows = db.prepare(
+        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).all(workflowId) as { context: string }[];
+      assert.ok(rows.length > 0, "run record should exist");
+      const ctx = JSON.parse(rows[0].context);
+      assert.equal(ctx.harness_type, "pi");
+    });
+
+    it("stores harness_type alongside other context fields", async () => {
+      const workflowId = "test-ctx-harness-combined";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+
+      try {
+        await runWorkflow({
+          workflowId,
+          taskTitle: "Test harness with other context",
+          noHurrySaveTokensMode: true,
+          harnessType: "hermes",
+        });
+      } catch {
+        // Expected: daemon registration fails in tests
+      }
+
+      const { getDb } = await import("../../dist/db.js");
+      const db = getDb();
+      const rows = db.prepare(
+        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).all(workflowId) as { context: string }[];
+      assert.ok(rows.length > 0, "run record should exist");
+      const ctx = JSON.parse(rows[0].context);
+      assert.equal(ctx.harness_type, "hermes");
+      assert.equal(ctx.no_hurry_save_tokens_mode, "true");
+      assert.equal(ctx.task, "Test harness with other context");
+      assert.equal(ctx.workspace_mode, "direct");
+    });
   });
 });

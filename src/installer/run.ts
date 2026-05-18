@@ -15,6 +15,7 @@ import {
   validateRunHarnessForScheduling,
 } from "./run-harness.js";
 import { createRunWorktree, type ManagedRunWorktree } from "./worktree-manager.js";
+import type { HarnessType } from "./types.js";
 
 export interface RunWorkflowParams {
   workflowId: string;
@@ -30,6 +31,8 @@ export interface RunWorkflowParams {
   worktreeOriginRef?: string;
   /** When true, reduces polling frequency to save tokens (15-min floor, 15-min default) */
   noHurrySaveTokensMode?: boolean;
+  /** Harness binary to use for agent invocations (default "pi") */
+  harnessType?: HarnessType;
 }
 
 export interface RunWorkflowResult {
@@ -63,6 +66,7 @@ export async function runWorkflow(
     worktreeOriginRepository,
     worktreeOriginRef,
     noHurrySaveTokensMode,
+    harnessType,
   } = params;
 
   // Load the workflow spec from the installed workflow directory
@@ -89,6 +93,7 @@ export async function runWorkflow(
     ...context,
     workspace_mode: workspaceMode,
     no_hurry_save_tokens_mode: String(noHurrySaveTokensMode ?? false),
+    harness_type: harnessType ?? "pi",
   };
 
   if (workspaceMode === "direct") {

@@ -1,3 +1,5 @@
+export type HarnessType = "pi" | "hermes";
+
 export type WorkflowAgentFiles = {
   baseDir: string;
   files: Record<string, string>;
