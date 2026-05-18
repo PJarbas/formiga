@@ -75,6 +75,24 @@ describe("runWorkflow", () => {
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
+  describe("working directory validation", () => {
+    it("rejects when working directory exists but is a file, not a directory", async () => {
+      const workflowId = "test-wd-file";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      const filePath = path.join(tempHome, "test-workdir-file");
+      fs.writeFileSync(filePath, "not a directory", "utf-8");
+
+      await assert.rejects(
+        runWorkflow({
+          workflowId,
+          taskTitle: "Test working directory is a file",
+          workingDirectoryForHarness: filePath,
+        }),
+        /working-directory-for-harness must be a directory/,
+      );
+    });
+  });
+
   describe("workspace mode validation", () => {
     it("rejects invalid run.workspace value with clear error", () => {
       const workflowId = "test-invalid-ws";

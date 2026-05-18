@@ -1688,6 +1688,304 @@ function installWorkflowInHome(homeDir: string, workflowId: string): void {
   fs.copyFileSync(srcYml, path.join(workflowDir, "workflow.yml"));
 }
 
+describe("dashboard cancel API", () => {
+  it("POST /api/runs/:id/cancel returns 200 for a paused run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-paused-cancel";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 1, 'wf-1', 'task', 'paused', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+    // Add a waiting step to verify it gets canceled
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at)
+      VALUES ('step-1', ?, 's1', 'agent-a', 0, 'do thing', '{}', 'waiting', '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      assert.equal(response.status, 200);
+
+      const body = await response.json() as { canceled: boolean; runId: string };
+      assert.equal(body.canceled, true);
+      assert.equal(body.runId, runId);
+
+      // Verify run status changed in DB
+      const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+      assert.equal(run.status, "canceled");
+
+      // Verify step was canceled
+      const step = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-1") as { status: string };
+      assert.equal(step.status, "canceled");
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /api/runs/:id/cancel returns 200 for a running run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-running-cancel";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 1, 'wf-1', 'task', 'running', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+    // Add running and pending steps
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at)
+      VALUES ('step-r1', ?, 's1', 'agent-a', 0, 'do thing', '{}', 'running', '2026-01-01', '2026-01-01')
+    `).run(runId);
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at)
+      VALUES ('step-r2', ?, 's2', 'agent-b', 1, 'do thing 2', '{}', 'pending', '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      assert.equal(response.status, 200);
+
+      const body = await response.json() as { canceled: boolean; runId: string };
+      assert.equal(body.canceled, true);
+      assert.equal(body.runId, runId);
+
+      // Verify run status changed
+      const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+      assert.equal(run.status, "canceled");
+
+      // Verify both steps were canceled
+      const step1 = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-r1") as { status: string };
+      const step2 = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-r2") as { status: string };
+      assert.equal(step1.status, "canceled");
+      assert.equal(step2.status, "canceled");
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /api/runs/:id/cancel returns 404 for a nonexistent run", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/nonexistent-id/cancel`, { method: "POST" });
+      assert.equal(response.status, 404);
+
+      const body = await response.json() as { error: string };
+      assert.match(body.error, /Run not found/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("POST /api/runs/:id/cancel returns 409 for a completed run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-completed-cancel";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 1, 'wf-1', 'task', 'completed', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      assert.equal(response.status, 409);
+
+      const body = await response.json() as { error: string };
+      assert.match(body.error, /Cannot cancel run in completed state/);
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /api/runs/:id/cancel returns 409 for a failed run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-failed-cancel";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 1, 'wf-1', 'task', 'failed', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      assert.equal(response.status, 409);
+
+      const body = await response.json() as { error: string };
+      assert.match(body.error, /Cannot cancel run in failed state/);
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /api/runs/:id/cancel returns 409 for an already canceled run", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-already-canceled";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 1, 'wf-1', 'task', 'canceled', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      assert.equal(response.status, 409);
+
+      const body = await response.json() as { error: string };
+      assert.match(body.error, /Cannot cancel run in canceled state/);
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /api/runs/:id/cancel cancels only waiting/pending/running steps, leaves done/failed untouched", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    const runId = "run-mixed-cancel";
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 1, 'wf-1', 'task', 'running', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    // Done step — should remain done
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at)
+      VALUES ('s-done', ?, 's1', 'agent-a', 0, 'done task', '{}', 'done', '2026-01-01', '2026-01-01')
+    `).run(runId);
+    // Failed step — should remain failed
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at)
+      VALUES ('s-failed', ?, 's2', 'agent-b', 1, 'failed task', '{}', 'failed', '2026-01-01', '2026-01-01')
+    `).run(runId);
+    // Waiting step — should be canceled
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at)
+      VALUES ('s-waiting', ?, 's3', 'agent-c', 2, 'waiting task', '{}', 'waiting', '2026-01-01', '2026-01-01')
+    `).run(runId);
+    // Pending step — should be canceled
+    db.prepare(`
+      INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at)
+      VALUES ('s-pending', ?, 's4', 'agent-d', 3, 'pending task', '{}', 'pending', '2026-01-01', '2026-01-01')
+    `).run(runId);
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      assert.equal(response.status, 200);
+
+      // Done step unchanged
+      const sDone = db.prepare("SELECT status FROM steps WHERE id = ?").get("s-done") as { status: string };
+      assert.equal(sDone.status, "done");
+
+      // Failed step unchanged
+      const sFailed = db.prepare("SELECT status FROM steps WHERE id = ?").get("s-failed") as { status: string };
+      assert.equal(sFailed.status, "failed");
+
+      // Waiting step canceled
+      const sWaiting = db.prepare("SELECT status FROM steps WHERE id = ?").get("s-waiting") as { status: string };
+      assert.equal(sWaiting.status, "canceled");
+
+      // Pending step canceled
+      const sPending = db.prepare("SELECT status FROM steps WHERE id = ?").get("s-pending") as { status: string };
+      assert.equal(sPending.status, "canceled");
+
+      // Run status canceled
+      const run = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string };
+      assert.equal(run.status, "canceled");
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("dashboard relaunch integration", () => {
   it("relaunches a failed run and preserves workflow_id, task, workspace settings, notify_url (direct mode, with task override)", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-relaunch-integration-"));
@@ -1929,6 +2227,185 @@ describe("dashboard relaunch integration", () => {
       if (previousControlPort === undefined) delete process.env.TAMANDUA_CONTROL_PORT;
       else process.env.TAMANDUA_CONTROL_PORT = previousControlPort;
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("dashboard cancel UI", () => {
+  it("renders Cancel button CSS class with red hover color", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      assert.match(html, /\.action-btn\.cancel-btn/);
+      assert.match(html, /#f85149/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("renders Cancel button in actions column for paused runs", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      // Cancel button should be in the renderRuns template within the paused branch
+      assert.match(html, /✕ Cancel/);
+      assert.match(html, /cancel-btn/);
+      assert.match(html, /handleCancel\(/);
+
+      // Verify it's specifically inside the paused conditional
+      const pausedMatch = html.match(/r\.status === 'paused' \? `([^`]*Cancel[^`]*)`/);
+      assert.ok(pausedMatch, "Cancel button must be inside r.status === 'paused' conditional");
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("does NOT render Cancel button for running run, only for paused", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      // Verify the Cancel button is only rendered inside the paused branch
+      // Extract the renderRuns template and check the condition
+      const renderMatch = html.match(/r\.status === 'paused' \? `([^`]*Cancel[^`]*)`/);
+      assert.ok(renderMatch, "Cancel button must be inside r.status === 'paused' conditional");
+
+      // Verify there's NO Cancel button in the running branch
+      const runningMatch = html.match(/r\.status === 'running' \? `([^`]*)`/);
+      if (runningMatch) {
+        assert.doesNotMatch(runningMatch[1], /✕ Cancel/);
+      }
+
+      // Verify there's NO Cancel button in the failed/canceled branch
+      const terminalMatch = html.match(/\(r\.status === 'failed' \|\| r\.status === 'canceled'\) \? `([^`]*)`/);
+      if (terminalMatch) {
+        assert.doesNotMatch(terminalMatch[1], /✕ Cancel/);
+      }
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("does NOT render Cancel button for completed, failed, or canceled runs", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      // Verify that none of the non-paused branches include "✕ Cancel"
+      // Running branch
+      const runningMatch = html.match(/r\.status === 'running' \? `([^`]*)`/);
+      if (runningMatch) {
+        assert.doesNotMatch(runningMatch[1], /✕ Cancel/);
+      }
+
+      // Failed/canceled branch
+      const terminalMatch = html.match(/\(r\.status === 'failed' \|\| r\.status === 'canceled'\) \? `([^`]*)`/);
+      if (terminalMatch) {
+        assert.doesNotMatch(terminalMatch[1], /✕ Cancel/);
+      }
+
+      // But it IS present in the paused branch
+      const pausedMatch = html.match(/r\.status === 'paused' \? `([^`]*Cancel[^`]*)`/);
+      assert.ok(pausedMatch, "Cancel button must exist in paused branch");
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("includes cancelRun and handleCancel JS functions", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      assert.match(html, /async function cancelRun\(/);
+      assert.match(html, /function handleCancel\(/);
+      assert.match(html, /\/api\/runs\/.*\/cancel/);
+      assert.match(html, /cancelRun\(id\)\.then\(refreshAll\)/);
+      assert.match(html, /Cancel failed/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("Cancel button is placed to the right of Resume button for paused runs", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const homeDir = path.join(root, "home");
+    fs.mkdirSync(homeDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+      VALUES (?, 1, 'wf-1', 'task', 'paused', '{}', 0, '2026-01-01', '2026-01-01')
+    `).run("run-paused-order");
+
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      // Resume button should appear before Cancel button
+      const resumeIndex = html.indexOf("▶ Resume");
+      const cancelIndex = html.indexOf("✕ Cancel");
+      assert.ok(resumeIndex >= 0, "Resume button not found");
+      assert.ok(cancelIndex >= 0, "Cancel button not found");
+      assert.ok(resumeIndex < cancelIndex, "Cancel button should be to the right of Resume button");
+    } finally {
+      await stopDashboard(server);
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("existing pause/resume buttons still present alongside Cancel button", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+
+      assert.match(html, /\.action-btn\.pause-btn/);
+      assert.match(html, /\.action-btn\.resume-btn/);
+      assert.match(html, /\.action-btn\.cancel-btn/);
+      assert.match(html, /handlePause\(/);
+      assert.match(html, /handleResume\(/);
+      assert.match(html, /handleCancel\(/);
+    } finally {
+      await stopDashboard(server);
     }
   });
 });

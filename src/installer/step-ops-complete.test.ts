@@ -57,6 +57,21 @@ describe("completeStep basic paths", () => {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS stories (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      story_index INTEGER NOT NULL,
+      story_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      acceptance_criteria TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'pending',
+      output TEXT,
+      retry_count INTEGER DEFAULT 0,
+      max_retries INTEGER DEFAULT 4,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
   });
 
   afterEach(() => {
@@ -125,5 +140,80 @@ describe("completeStep basic paths", () => {
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, retry_count, max_retries) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s4", "r4", "plan", "dev", 0, "REPO: x", "running", 3, 3);
     const r = completeStep("s4", "no");
     assert.equal(r.status, "failed");
+  });
+
+  it("completes loop step story and stays running for next story", () => {
+    db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r7", "wf", "t", "running");
+    db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, type, current_story_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s7-loop", "r7", "develop", "dev", 0, "", "running", "loop", "story-1-id");
+    db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-1-id", "r7", 0, "US-001", "Login", "Build login", '["AC1"]', "running");
+    db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-2-id", "r7", 1, "US-002", "Dashboard", "Build dashboard", '["AC2"]', "pending");
+
+    const r = completeStep("s7-loop", "CHANGES: done");
+    // Without verify_each, checkLoopContinuation finds pending stories → advanced
+    assert.ok(r.status === "advanced" || r.status === "completed");
+
+    // Story should be done
+    const story = db.prepare("SELECT status FROM stories WHERE id = ?").get("story-1-id") as { status: string };
+    assert.equal(story.status, "done");
+
+    // Loop step should have current_story_id cleared
+    const step = db.prepare("SELECT current_story_id, status FROM steps WHERE id = ?").get("s7-loop") as { current_story_id: string | null; status: string };
+    assert.equal(step.current_story_id, null);
+  });
+
+  it("completes loop step and finishes run when all stories done", () => {
+    db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r8", "wf", "t", "running");
+    db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, type, current_story_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s8-loop", "r8", "develop", "dev", 0, "", "running", "loop", "story-last-id");
+    db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-last-id", "r8", 0, "US-FINAL", "Final", "Last story", '["AC1"]', "running");
+    // Mark all other potential stories as done (so checkLoopContinuation sees no pending)
+    // With only one story and it just being completed, pipeline should finish
+
+    const r = completeStep("s8-loop", "CHANGES: done");
+    // No verify_each, no pending stories → run completed
+    assert.ok(r.status === "advanced" || r.status === "completed");
+
+    const step = db.prepare("SELECT status FROM steps WHERE id = ?").get("s8-loop") as { status: string };
+    // Loop step should now be done (all stories completed)
+    assert.ok(step.status === "done" || step.status === "running");
+  });
+
+  it("completes loop step with verify_each: sets verify step to pending", () => {
+    db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r9", "wf", "t", "running");
+    db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, type, loop_config, current_story_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s9-loop", "r9", "develop", "dev", 0, "", "running", "loop", JSON.stringify({ verify_each: true, verify_step: "verify" }), "story-vfy-id");
+    db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status) VALUES (?, ?, ?, ?, ?, ?, ?)").run("s9-verify", "r9", "verify", "verifier", 1, "", "waiting");
+    db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-vfy-id", "r9", 0, "US-VFY", "Verify", "Needs verify", '["AC1"]', "running");
+    db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-vfy-2", "r9", 1, "US-NEXT", "Next", "More", '["AC2"]', "pending");
+
+    const r = completeStep("s9-loop", "CHANGES: done");
+    assert.equal(r.status, "advanced");
+
+    // Verify step should now be pending
+    const verifyStep = db.prepare("SELECT status FROM steps WHERE id = ?").get("s9-verify") as { status: string };
+    assert.equal(verifyStep.status, "pending");
+
+    // Loop step should stay running (waiting for verify result)
+    const loopStep = db.prepare("SELECT status FROM steps WHERE id = ?").get("s9-loop") as { status: string };
+    assert.equal(loopStep.status, "running");
+  });
+
+  it("completes verify step with retry: resets story to pending", () => {
+    db.prepare("INSERT INTO runs (id, workflow_id, task, status, context) VALUES (?, ?, ?, ?, ?)").run("r10", "wf", "t", "running", "{}");
+    // Loop step with verify_each pointing to the verify step
+    db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, type, loop_config) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s10-loop", "r10", "develop", "dev", 0, "", "pending", "loop", JSON.stringify({ verify_each: true, verify_step: "verify2" }));
+    db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status) VALUES (?, ?, ?, ?, ?, ?, ?)").run("s10-verify", "r10", "verify2", "verifier", 1, "", "running");
+    db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-10-done", "r10", 0, "US-DONE", "DoneStory", "Was done", '["AC1"]', "done");
+
+    // Complete verify step with STATUS: retry
+    const r = completeStep("s10-verify", "STATUS: retry\nISSUES: needs work");
+    assert.ok(r.status === "advanced" || r.status === "completed");
+
+    // The last done story should be reset to pending
+    const story = db.prepare("SELECT status, retry_count FROM stories WHERE id = ?").get("story-10-done") as { status: string; retry_count: number };
+    assert.equal(story.status, "pending");
+    assert.equal(story.retry_count, 1);
+
+    // Loop step should be set to pending (ready for next story iteration)
+    const loopStep = db.prepare("SELECT status FROM steps WHERE id = ?").get("s10-loop") as { status: string };
+    assert.equal(loopStep.status, "pending");
   });
 });

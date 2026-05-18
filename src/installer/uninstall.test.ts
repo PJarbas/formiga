@@ -118,6 +118,38 @@ describe("uninstall", () => {
     assert.equal(runsA[0]!.id, "r1");
   });
 
+  describe("uninstallWorkflow", () => {
+    it("refuses when workflow has active (running) runs", async () => {
+      // Create a workflow directory so resolveWorkflowDir succeeds
+      const wfDir = path.join(tempDir, ".tamandua", "workflows", "wf-active");
+      fs.mkdirSync(wfDir, { recursive: true });
+
+      // Insert an active run for this workflow
+      db.prepare(
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
+      ).run("r-active-1", "wf-active", "active task", "running", "{}");
+
+      await assert.rejects(
+        uninstallWorkflow("wf-active"),
+        /Cannot uninstall workflow "wf-active"/,
+      );
+    });
+
+    it("refuses when workflow has active (paused) runs", async () => {
+      const wfDir = path.join(tempDir, ".tamandua", "workflows", "wf-paused");
+      fs.mkdirSync(wfDir, { recursive: true });
+
+      db.prepare(
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
+      ).run("r-paused-1", "wf-paused", "paused task", "paused", "{}");
+
+      await assert.rejects(
+        uninstallWorkflow("wf-paused"),
+        /Cannot uninstall workflow "wf-paused"/,
+      );
+    });
+  });
+
   describe("uninstallAllWorkflows", () => {
     it("returns empty array when no workflows dir exists", async () => {
       const results = await uninstallAllWorkflows();

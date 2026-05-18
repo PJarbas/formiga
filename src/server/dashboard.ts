@@ -23,6 +23,7 @@ import { getMcpStatus } from "./daemonctl.js";
 import { buildKanbanSnapshot, buildKanbanCardDetail } from "./kanban-data.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 import { runWorkflow } from "../installer/run.js";
+import { stopWorkflow } from "../installer/status.js";
 import { readVersionStatus } from "../lib/version-check.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -388,6 +389,45 @@ async function handleResumeRun(
   }
 }
 
+async function handleCancelRun(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): Promise<void> {
+  try {
+    const db = getDb();
+
+    const run = db.prepare("SELECT id, status FROM runs WHERE id = ?").get(runId) as
+      | { id: string; status: string }
+      | undefined;
+
+    if (!run) {
+      errorResponse(res, `Run not found: ${runId}`, 404);
+      return;
+    }
+
+    if (run.status !== "running" && run.status !== "paused") {
+      errorResponse(
+        res,
+        `Cannot cancel run in ${run.status} state`,
+        409,
+      );
+      return;
+    }
+
+    const result = await stopWorkflow(runId);
+
+    if (result.ok) {
+      jsonResponse(res, { canceled: true, runId });
+      return;
+    }
+
+    errorResponse(res, "Failed to cancel run", 500);
+  } catch (err) {
+    errorResponse(res, `Failed to cancel run: ${(err as Error).message}`);
+  }
+}
+
 async function handleRelaunchRun(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -623,6 +663,13 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   const resumeMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/resume$/);
   if (method === "POST" && resumeMatch) {
     handleResumeRun(req, res, resumeMatch[1]);
+    return;
+  }
+
+  // POST /api/runs/:id/cancel
+  const cancelMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/cancel$/);
+  if (method === "POST" && cancelMatch) {
+    handleCancelRun(req, res, cancelMatch[1]);
     return;
   }
 

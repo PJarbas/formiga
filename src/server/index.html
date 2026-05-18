@@ -187,6 +187,7 @@
     .action-btn.pause-btn:hover { border-color: #d29922; color: #d29922; }
     .action-btn.resume-btn:hover { border-color: #3fb950; color: #3fb950; }
     .action-btn.relaunch-btn:hover { border-color: #f0883e; color: #f0883e; }
+    .action-btn.cancel-btn:hover { border-color: #f85149; color: #f85149; }
     .modal-overlay {
       display: none;
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -513,7 +514,7 @@
           <td class="num" style="font-size:11px">${timeAgo(r.updated_at)}</td>
           <td class="actions">
             ${r.status === 'running' ? `<button class="action-btn pause-btn" onclick="event.preventDefault(); handlePause('${r.id}')">⏸ Pause</button>` : ''}
-            ${r.status === 'paused' ? `<button class="action-btn resume-btn" onclick="event.preventDefault(); handleResume('${r.id}')">▶ Resume</button>` : ''}
+            ${r.status === 'paused' ? `<button class="action-btn resume-btn" onclick="event.preventDefault(); handleResume('${r.id}')">▶ Resume</button> <button class="action-btn cancel-btn" onclick="event.preventDefault(); handleCancel('${r.id}')">✕ Cancel</button>` : ''}
             ${(r.status === 'failed' || r.status === 'canceled') ? `<button class="action-btn relaunch-btn" onclick="event.preventDefault(); openRelaunchModal('${r.id}')">🔄 Relaunch</button>` : ''}
           </td>
           <td><a class="kanban-link" href="/runs/${encodeURIComponent(r.id)}/kanban" aria-label="Open kanban for run ${esc(r.id)}">Kanban &rarr;</a></td>
@@ -652,6 +653,18 @@
 
     function handleResume(id) {
       resumeRun(id).then(refreshAll).catch(e => alert('Resume failed: ' + e.message));
+    }
+
+    async function cancelRun(id) {
+      const res = await fetch(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Failed to cancel (${res.status})`);
+      }
+    }
+
+    function handleCancel(id) {
+      cancelRun(id).then(refreshAll).catch(e => alert('Cancel failed: ' + e.message));
     }
 
     async function pauseAllRuns(drain) {
