@@ -188,14 +188,45 @@ Tests are safe for parallel execution with `node --test tests/*.test.ts src/**/*
 
 ### End-to-End Tests
 
-End-to-end tests live under `e2e-tests/` and exercise real tamandua workflow runs
-with multiple agents in full pipelines. They are separate from the regular test suite.
+End-to-end tests live under `e2e-tests/`. There are **two kinds**, and the
+distinction is critical:
 
-- **Agents must NOT run e2e tests by default.** Only run the regular test suite
-  (`./run-all-tests` or `npm test`) when fulfilling development duties.
-- Run e2e tests only when explicitly asked: `./run-all-e2e-tests`
-- E2e tests are NOT included in `npm test`
-- E2e tests are NOT compiled by `tsconfig.json` (they live outside `src/`)
+| Test | Script | What it does | Duration |
+|------|--------|--------------|----------|
+| **Smoke (state-machine)** | `./run-all-smoke-e2e-tests` | Exercises workflow state machine, pipeline wiring, and step lifecycle using manual `step claim` / `step complete` with canned outputs. No real agents, models, or schedulers. | ~10–15 seconds |
+| **Real (full pipeline)** | `./run-all-real-e2e-tests` | Launches actual Tamandua workflows that run through the full daemon → scheduler → pi agent pipeline. Uses real model invocations, real worktree creation, real git merges. | 30+ minutes per workflow |
+
+`./run-all-e2e-tests` is the convenience alias — it runs the **smoke test only**
+(fast, no tokens). It does NOT run the real e2e test.
+
+#### Real End-to-End Test — Cost and Duration
+
+The real e2e test (`./run-all-real-e2e-tests`) is **expensive**:
+- **Tokens:** Spends real API tokens on model invocations (pi agents process
+the full workflow autonomously — planning, implementing, verifying, testing,
+and merging).
+- **Time:** Expect 30–60 minutes for the full sequential run (feature-dev-merge
++ bug-fix-merge workflows).
+- **System resources:** Creates real worktrees, runs npm install, executes
+tests, and performs git merges.
+
+#### Agent Default Behavior (READ THIS)
+
+- **AGENTS MUST NOT RUN REAL E2E TESTS BY DEFAULT.** Only run `./run-all-tests`
+or `npm test` when fulfilling routine development duties.
+- If running e2e tests is required, run `./run-all-e2e-tests` (smoke only, fast).
+- **Only run `./run-all-real-e2e-tests` when explicitly asked** — it spends
+real tokens and takes 30+ minutes. Never infer or assume it should be run.
+
+#### When Each Test Should Be Used
+
+- **Smoke e2e:** Use during development to validate state machine changes,
+step lifecycle logic, pipeline wiring fixes. Fast enough for every commit.
+- **Real e2e:** Use when validating the full daemon/scheduler/agent pipeline
+end-to-end, after major infrastructure changes, or when explicitly told to.
+- **Neither is included in `npm test`** — both live under `e2e-tests/` and are
+separate from the regular suite.
+- **Neither is compiled by `tsconfig.json`** — they live outside `src/`.
 
 ### Parallel Test Safety
 

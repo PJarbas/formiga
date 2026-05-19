@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+##############################################################################
+# WARNING: THIS IS A SLOW, EXPENSIVE E2E TEST — USE DELIBERATELY
+##############################################################################
+# This script runs the REAL Tamandua end-to-end workflow tests.
+#
+# COST/TIME WARNING:
+#   - Invokes REAL Tamandua agents with REAL model invocations
+#   - Spends REAL API tokens (may cost money)
+#   - Expected runtime: 30+ minutes per workflow (2 workflows tested)
+#   - Runs a full daemon + scheduler + agent pipeline end-to-end
+#
+# When to use:
+#   - Verifying the full Tamandua pipeline works end-to-end
+#   - Validating daemon, scheduler, agent, step execution, and merge
+#   - After major changes to the agent polling/scheduling infrastructure
+#
+# When NOT to use:
+#   - During routine development (use ./run-all-tests instead)
+#   - As part of CI (use ./run-all-smoke-e2e-tests instead)
+#   - Unless you explicitly understand the cost and time commitment
+#
+# Agents: DO NOT run this test by default. Only run when explicitly asked.
+##############################################################################
+# Output is streamed to the terminal AND tee'd to a log file for inspection.
+# Exit code matches the underlying `node --test` exit code.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+LOG="${TAMANDUA_REAL_E2E_LOG:-e2e-real-test-output.log}"
+
+npm run build
+node --test e2e-tests/workflows-e2e.test.ts 2>&1 | tee "$LOG"
+exit "${PIPESTATUS[1]}"

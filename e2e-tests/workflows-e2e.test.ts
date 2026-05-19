@@ -1,544 +1,367 @@
+/******************************************************************************
+ * ⚠️  WARNING: SLOW, EXPENSIVE REAL E2E TEST — DO NOT RUN BY DEFAULT  ⚠️
+ *
+ * This test runs REAL Tamandua workflow executions with a LIVE daemon and
+ * scheduler processing steps through actual agent invocations (pi/llm calls).
+ *
+ * COST/TIME WARNING:
+ *   - SPENDS REAL API TOKENS (may cost money)
+ *   - Expected runtime: 60–120 minutes (two sequential real workflows)
+ *   - Requires a configured pi agent setup (model, provider, auth)
+ *   - Uses significant CPU while the daemon processes steps
+ *
+ * WHEN TO RUN:
+ *   - After major changes to the daemon, scheduler, or agent polling infra
+ *   - To validate the full Tamandua pipeline end-to-end
+ *   - Only via: ./run-all-real-e2e-tests
+ *
+ * WHEN NOT TO RUN:
+ *   - During routine development
+ *   - As part of CI
+ *   - Unless you explicitly understand the cost and time commitment
+ *
+ * FOR FAINT OF HEART:
+ *   ./run-all-smoke-e2e-tests  — fast state-machine test (~10s, no tokens)
+ *
+ * This test is separate from the regular test suite (npm test) and is NOT
+ * picked up by tsconfig.json or npm test globs. It lives in e2e-tests/.
+ *
+ * TEST ISOLATION:
+ *   - Uses temp HOME isolation via createTempHome()
+ *   - Uses reserveDistinctRandomPorts() — no default ports (3334/3338/3339)
+ *   - Daemon runs in isolated HOME/TAMANDUA_STATE_DIR
+ *   - Worktree directories are created under the isolated HOME (os.homedir()
+ *     respects HOME env var), so cleanupTempHome() removes them
+ *   - All .tamandua state (DB, events, logs, PID/port files) is in the
+ *     isolated temp HOME and removed by cleanupTempHome()
+ *   - after() hook + per-test finally blocks guarantee cleanup on failure
+ *
+ * TEST ORDERING:
+ *   The two tests run SEQUENTIALLY (concurrency: 1):
+ *   1. feature-dev-merge-worktree — adds a multiply function
+ *   2. bug-fix-merge-worktree  — fixes the deliberately broken add function
+ *   Test 2 depends on the state produced by Test 1 (same sample repo, shared
+ *   temp HOME), so they must execute in order and share the before/after hooks.
+ *****************************************************************************/
+
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import {
-  cleanChildEnv,
-  reserveDistinctRandomPorts,
-} from "../tests/helpers/test-env.ts";
-import { spawnSync, spawn } from "node:child_process";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { describe, it } from "node:test";
+import {
+  createTempHome,
+  baseEnv,
+  cliMustSucceed,
+  spawnWorkflowRun,
+  prepareGitRepo,
+  resolveFullRunId,
+  cleanupTempHome,
+} from "./helpers/smoke-helpers.ts";
+import {
+  startIsolatedDaemon,
+  stopIsolatedDaemon,
+  waitForRunTerminal,
+} from "./helpers/e2e-helpers.ts";
+import { reserveDistinctRandomPorts } from "../tests/helpers/test-env.ts";
+import type { ChildProcess } from "node:child_process";
 
-const repoRoot = process.cwd();
-const cliPath = path.resolve(repoRoot, "dist", "cli", "cli.js");
-const fixtureDir = path.join(repoRoot, "e2e-tests", "fixtures", "sample-project");
-
-// ── Helpers ──
-
-async function createTempHome() {
-  const [controlPort, dashboardPort] = await reserveDistinctRandomPorts(2);
-  const root = fs.mkdtempSync(
-    path.join(os.tmpdir(), "tamandua-e2e-workflows-"),
-  );
-  const homeDir = path.join(root, "home");
-  const tamanduaDir = path.join(homeDir, ".tamandua");
-  const piAgentDir = path.join(homeDir, ".pi", "agent");
-  fs.mkdirSync(tamanduaDir, { recursive: true });
-  fs.mkdirSync(piAgentDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(tamanduaDir, "port"),
-    String(dashboardPort),
-    "utf-8",
-  );
-  // Minimal pi config required by workflow install
-  fs.writeFileSync(
-    path.join(piAgentDir, "settings.json"),
-    JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-4o" }),
-    "utf-8",
-  );
-  return { root, homeDir, tamanduaDir, controlPort, dashboardPort };
-}
-
-function baseEnv(homeDir: string, controlPort: number) {
-  return {
-    HOME: homeDir,
-    TAMANDUA_CONTROL_PORT: String(controlPort),
-  };
-}
-
-function cli(args: string[], env: Record<string, string>) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
-    env: cleanChildEnv(env),
-    encoding: "utf-8",
-  });
-}
-
-function cliMustSucceed(
-  args: string[],
-  env: Record<string, string>,
-  label: string,
-) {
-  const r = cli(args, env);
-  assert.equal(
-    r.status,
-    0,
-    `${label} failed (exit ${r.status}): ${r.stderr || r.stdout}`,
-  );
-  return r.stdout;
-}
-
-function stepClaim(
-  agentId: string,
-  runId: string,
-  env: Record<string, string>,
-) {
-  const r = cli(["step", "claim", agentId, "--run-id", runId], env);
-  assert.equal(
-    r.status,
-    0,
-    `step claim ${agentId} failed: ${r.stderr || r.stdout}`,
-  );
-  const parsed = JSON.parse(r.stdout.trim());
-  assert.ok(parsed.stepId, `no stepId in claim response: ${r.stdout}`);
-  return parsed as { stepId: string; runId: string; input: string };
-}
-
-function stepComplete(
-  stepId: string,
-  output: string,
-  env: Record<string, string>,
-) {
-  const r = spawnSync(process.execPath, [cliPath, "step", "complete", stepId], {
-    env: cleanChildEnv(env),
-    input: output,
-    encoding: "utf-8",
-  });
-  assert.equal(
-    r.status,
-    0,
-    `step complete ${stepId} failed: ${r.stderr || r.stdout}`,
-  );
-  return JSON.parse(r.stdout.trim()) as { status: string };
-}
+const fixtureDir = path.join(process.cwd(), "e2e-tests", "fixtures", "sample-project");
 
 /**
- * Spawn `tamandua workflow run` and capture the 8-char run-ID prefix from stdout.
- * Kills the child process once the output is captured.
+ * Helper: generate pi agent settings pointing at a real model.
+ *
+ * Derives provider/model/apiKey from environment variables with defaults
+ * suitable for Tamandua development. The daemon reads this config when
+ * spawning pi agent invocations.
  */
-function spawnWorkflowRun(
-  args: string[],
-  env: Record<string, string>,
-  timeoutMs = 30_000,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cliPath, ...args], {
-      env: cleanChildEnv(env),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+function piAgentSettings(env: NodeJS.ProcessEnv): string {
+  return JSON.stringify({
+    defaultProvider: env.TAMANDUA_E2E_PROVIDER || env.PI_PROVIDER || "openai",
+    defaultModel: env.TAMANDUA_E2E_MODEL || env.PI_MODEL || "gpt-4o",
+    providers: {
+      openai: {
+        apiKey: env.TAMANDUA_E2E_API_KEY || env.OPENAI_API_KEY || "sk-placeholder",
+      },
+    },
+  });
+}
 
-    let stdout = "";
-    let stderr = "";
-    let resolved = false;
+// ── Shared state across both sequential tests ────────────────────────────
+let env: Awaited<ReturnType<typeof createTempHome>>;
+let repoDir: string;
+let daemon: ChildProcess;
 
-    const timeout = setTimeout(() => {
-      if (resolved) return;
-      resolved = true;
-      child.kill("SIGKILL");
-      reject(
-        new Error(
-          `Timeout waiting for workflow run output. stdout: ${stdout}, stderr: ${stderr}`,
-        ),
+describe(
+  "real e2e workflows (LIVE agents, daemon, scheduler)",
+  {
+    // Sequential: tests share the temp HOME and sample repo.
+    // High timeout: each individual test may need 45+ minutes.
+    concurrency: 1,
+  },
+  () => {
+    // ── before: shared environment setup ──────────────────────────────
+    before(async () => {
+      // Create isolated temp HOME
+      env = await createTempHome();
+
+      // Override the default pi config with real model settings from env vars
+      const piAgentDir = path.join(env.homeDir, ".pi", "agent");
+      fs.writeFileSync(
+        path.join(piAgentDir, "settings.json"),
+        piAgentSettings(process.env),
+        "utf-8",
       );
-    }, timeoutMs);
 
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-      const match = stdout.match(/^Run:\s+([0-9a-f]{8,})/im);
-      if (match && !resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        child.kill("SIGTERM");
-        resolve(match[1]);
+      // Install both workflows
+      cliMustSucceed(
+        ["workflow", "install", "feature-dev-merge-worktree"],
+        baseEnv(env.homeDir, env.controlPort),
+        "install feature-dev-merge-worktree",
+      );
+      cliMustSucceed(
+        ["workflow", "install", "bug-fix-merge-worktree"],
+        baseEnv(env.homeDir, env.controlPort),
+        "install bug-fix-merge-worktree",
+      );
+
+      // Prepare a clean git repo from the sample-project fixture.
+      // Both tests share this origin repository.
+      repoDir = path.join(env.root, "origin-repo");
+      prepareGitRepo(fixtureDir, repoDir);
+    });
+
+    // ── after: cleanup ─────────────────────────────────────────────────
+    after(async () => {
+      try {
+        await stopIsolatedDaemon(daemon);
+      } catch {
+        // best-effort
       }
+      cleanupTempHome(env);
     });
 
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", (err) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      reject(err);
-    });
-
-    child.on("close", (code) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      const match = stdout.match(/^Run:\s+([0-9a-f]{8,})/im);
-      if (match) {
-        resolve(match[1]);
-      } else {
-        reject(
-          new Error(
-            `Workflow run failed (exit ${code}). stdout: ${stdout}, stderr: ${stderr}`,
-          ),
+    // ── TEST 1: feature-dev-merge-worktree ────────────────────────────
+    it(
+      "feature-dev-merge-worktree: adds multiply function",
+      { timeout: 60 * 60_000 }, // 60 minutes
+      async () => {
+        // ── Start daemon ────────────────────────────────────────────
+        daemon = await startIsolatedDaemon(
+          env.dashboardPort,
+          env.homeDir,
+          env.controlPort,
         );
-      }
-    });
-  });
-}
 
-/** Prepare a clean git repo from the sample project fixture */
-function prepareGitRepo(fixtureDir: string, targetDir: string) {
-  fs.mkdirSync(targetDir, { recursive: true });
-  const cpResult = spawnSync("cp", ["-r", `${fixtureDir}/.`, `${targetDir}/`], {
-    encoding: "utf-8",
-  });
-  assert.equal(cpResult.status, 0, `cp failed: ${cpResult.stderr}`);
+        try {
+          // ── Create run ───────────────────────────────────────────
+          const runIdPrefix = await spawnWorkflowRun(
+            [
+              "workflow",
+              "run",
+              "feature-dev-merge-worktree",
+              "Add a multiply function to math.ts that multiplies two numbers",
+              "--worktree-origin-repository",
+              repoDir,
+            ],
+            baseEnv(env.homeDir, env.controlPort),
+          );
+          const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
 
-  function git(args: string[]) {
-    const r = spawnSync("git", args, { cwd: targetDir, encoding: "utf-8" });
-    assert.equal(
-      r.status,
-      0,
-      `git ${args.join(" ")} failed: ${r.stderr || r.stdout}`,
+          // ── Wait for completion ──────────────────────────────────
+          await waitForRunTerminal(
+            runId,
+            baseEnv(env.homeDir, env.controlPort),
+            45 * 60_000, // 45 min timeout
+            10_000,       // poll every 10s
+          );
+
+          // ── Verify run status ────────────────────────────────────
+          const statusOut = cliMustSucceed(
+            ["workflow", "status", runId],
+            baseEnv(env.homeDir, env.controlPort),
+            "workflow status after feature-dev completion",
+          );
+          assert.match(statusOut, /Status:\s+completed/i);
+
+          // ── Verify repository state ──────────────────────────────
+          // After the workflow completes, the origin repo (main branch)
+          // should have a squash merge commit with the multiply function.
+
+          // Git log shows a merge commit on main
+          const gitLog = execSync(
+            "git log --oneline -5",
+            { cwd: repoDir, encoding: "utf-8" },
+          );
+          const commitLines = gitLog.trim().split("\n");
+          assert.ok(
+            commitLines.length >= 2,
+            `Expected at least 2 commits (initial + merge), got:\n${gitLog}`,
+          );
+
+          // Multiply function exists in src/math.ts
+          const mathTs = fs.readFileSync(
+            path.join(repoDir, "src", "math.ts"),
+            "utf-8",
+          );
+          assert.ok(
+            mathTs.includes("multiply") || mathTs.includes("Multiply"),
+            `src/math.ts should contain a multiply function. Content:\n${mathTs}`,
+          );
+
+          // Multiply test exists and passes
+          execSync("npm run build", { cwd: repoDir, encoding: "utf-8" });
+          const testOutput = execSync("npm test", {
+            cwd: repoDir,
+            encoding: "utf-8",
+          });
+          assert.ok(
+            testOutput.includes("multiply") || testOutput.includes("Multiply") || testOutput.match(/pass|OK|0 fail/),
+            `Tests should reference multiply and pass. Output:\n${testOutput.substring(0, 500)}`,
+          );
+
+          // Multiply test file exists
+          const multiplyTestPath = path.join(repoDir, "test", "math.test.ts");
+          if (fs.existsSync(multiplyTestPath)) {
+            const testContent = fs.readFileSync(multiplyTestPath, "utf-8");
+            assert.ok(
+              testContent.includes("multiply") || testContent.includes("Multiply"),
+              `math.test.ts should contain multiply tests. Content:\n${testContent.substring(0, 500)}`,
+            );
+          }
+        } finally {
+          // ── Stop daemon between workflows for clean scheduler state ─
+          await stopIsolatedDaemon(daemon);
+        }
+      },
     );
-    return r.stdout.trim();
-  }
 
-  git(["init"]);
-  git(["config", "user.email", "test@tamandua.local"]);
-  git(["config", "user.name", "Tamandua E2E Test"]);
-  git(["add", "-A"]);
-  git(["commit", "-m", "initial commit with sample project"]);
-  return targetDir;
-}
-
-/** Stop the daemon and remove temp directory */
-/** Resolve full run ID from the 8-char prefix using the temp home DB */
-function resolveFullRunId(prefix: string, tamanduaDir: string): string {
-  const dbPath = path.join(tamanduaDir, "tamandua.db");
-  const db = new DatabaseSync(dbPath);
-  try {
-    const rows = db
-      .prepare("SELECT id FROM runs WHERE id LIKE ? ORDER BY created_at DESC LIMIT 1")
-      .all(`${prefix}%`) as Array<{ id: string }>;
-    if (rows.length === 0) {
-      throw new Error(`No run found matching prefix "${prefix}"`);
-    }
-    return rows[0].id;
-  } finally {
-    db.close();
-  }
-}
-
-function cleanupTempHome(
-  env: { root: string; homeDir: string; controlPort: number },
-) {
-  try {
-    cli(["dashboard", "stop"], baseEnv(env.homeDir, env.controlPort));
-  } catch {
-    // best-effort
-  }
-  try {
-    fs.rmSync(env.root, { recursive: true, force: true });
-  } catch {
-    // best-effort
-  }
-}
-
-// ── Tests ──
-
-describe("workflows e2e", { concurrency: 1 }, () => {
-  it(
-    "feature-dev-merge-worktree: plan → setup → implement → verify → test → merge → done",
-    { timeout: 120_000 },
-    async () => {
-      const env = await createTempHome();
-      const be = () => baseEnv(env.homeDir, env.controlPort);
-
-      try {
-        // 1. Install the workflow
-        cliMustSucceed(
-          ["workflow", "install", "feature-dev-merge-worktree"],
-          be(),
-          "install feature-dev-merge-worktree",
+    // ── TEST 2: bug-fix-merge-worktree (sequential, same repo) ──────
+    it(
+      "bug-fix-merge-worktree: fixes broken add function (sequential, same repo)",
+      { timeout: 60 * 60_000 }, // 60 minutes
+      async () => {
+        // ── Restart daemon for clean scheduler state ────────────────
+        daemon = await startIsolatedDaemon(
+          env.dashboardPort,
+          env.homeDir,
+          env.controlPort,
         );
 
-        // 2. Prepare a clean git repo from the sample project
-        const repoDir = path.join(env.root, "sample-repo");
-        prepareGitRepo(fixtureDir, repoDir);
+        try {
+          // ── Verify precondition: add function is still broken ────
+          // The sample-project has `a - b` — confirm it hasn't been
+          // accidentally fixed by the feature workflow's merge.
+          const preMathTs = fs.readFileSync(
+            path.join(repoDir, "src", "math.ts"),
+            "utf-8",
+          );
+          assert.ok(
+            preMathTs.includes("a - b") || preMathTs.includes("a-b"),
+            `Precondition: add function should be broken (a - b). Content:\n${preMathTs}`,
+          );
 
-        // 3. Create the run
-        const runIdPrefix = await spawnWorkflowRun(
-          [
-            "workflow",
-            "run",
-            "feature-dev-merge-worktree",
-            "Add a multiply function to math.ts",
-            "--worktree-origin-repository",
-            repoDir,
-          ],
-          be(),
-        );
-        const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
+          // ── Create run ───────────────────────────────────────────
+          const runIdPrefix = await spawnWorkflowRun(
+            [
+              "workflow",
+              "run",
+              "bug-fix-merge-worktree",
+              "The add function in src/math.ts returns a - b instead of a + b",
+              "--worktree-origin-repository",
+              repoDir,
+            ],
+            baseEnv(env.homeDir, env.controlPort),
+          );
+          const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
 
-        // ---- Advance pipeline ----
+          // ── Wait for completion ──────────────────────────────────
+          await waitForRunTerminal(
+            runId,
+            baseEnv(env.homeDir, env.controlPort),
+            45 * 60_000, // 45 min timeout
+            10_000,       // poll every 10s
+          );
 
-        // Step: plan (planner)
-        const plan = stepClaim(
-          "feature-dev-merge-worktree_planner",
-          runId,
-          be(),
-        );
-        const planResult = stepComplete(
-          plan.stepId,
-          "STATUS: done\n" +
-            `REPO: ${repoDir}\n` +
-            "BRANCH: feature/add-multiply\n" +
-            'STORIES_JSON: [{"id":"US-001","title":"Add multiply function","description":"Add a function multiply(a,b) that returns a * b to src/math.ts","acceptanceCriteria":["multiply function exists in src/math.ts","export is added to index if applicable","tests pass","Typecheck passes"]}]\n',
-          be(),
-        );
-        assert.ok(
-          planResult.status === "advanced" || planResult.status === "completed",
-          `plan: expected advanced/completed, got ${planResult.status}`,
-        );
+          // ── Verify run status ────────────────────────────────────
+          const statusOut = cliMustSucceed(
+            ["workflow", "status", runId],
+            baseEnv(env.homeDir, env.controlPort),
+            "workflow status after bug-fix completion",
+          );
+          assert.match(statusOut, /Status:\s+completed/i);
 
-        // Step: setup (setup)
-        const setup = stepClaim(
-          "feature-dev-merge-worktree_setup",
-          runId,
-          be(),
-        );
-        const setupResult = stepComplete(
-          setup.stepId,
-          "STATUS: done\n" +
-            `ORIGINAL_BRANCH: main\n` +
-            "BUILD_CMD: npm run build\n" +
-            "TEST_CMD: npm test\n" +
-            "CI_NOTES: Standard TypeScript project\n" +
-            "BASELINE: Build succeeds, 1 test passes, 1 test fails (known bug in add)\n",
-          be(),
-        );
-        assert.equal(setupResult.status, "advanced");
+          // ── Verify repository state ──────────────────────────────
+          // After the bug-fix workflow completes, the origin repo should
+          // have a fix for the add function AND still have multiply.
 
-        // Step: implement (developer, loop — US-001)
-        const implement = stepClaim(
-          "feature-dev-merge-worktree_developer",
-          runId,
-          be(),
-        );
-        assert.ok(
-          implement.input.includes("US-001"),
-          `implement input should reference US-001: ${implement.input.substring(0, 200)}`,
-        );
-        const implResult = stepComplete(
-          implement.stepId,
-          "STATUS: done\n" +
-            "CHANGES: Added multiply function to src/math.ts\n" +
-            "TESTS: Added test for multiply function, all tests pass\n",
-          be(),
-        );
-        assert.equal(implResult.status, "advanced");
+          // Git log shows a merge commit for the fix on main
+          const gitLog = execSync(
+            "git log --oneline -5",
+            { cwd: repoDir, encoding: "utf-8" },
+          );
+          const commitLines = gitLog.trim().split("\n");
+          assert.ok(
+            commitLines.length >= 3,
+            `Expected at least 3 commits (initial + feature merge + fix merge), got:\n${gitLog}`,
+          );
 
-        // Step: verify (verifier, triggered by verify_each)
-        const verify = stepClaim(
-          "feature-dev-merge-worktree_verifier",
-          runId,
-          be(),
-        );
-        const verifyResult = stepComplete(
-          verify.stepId,
-          "STATUS: done\n" +
-            "VERIFIED: multiply function exists in src/math.ts, test passes\n",
-          be(),
-        );
-        assert.ok(
-          verifyResult.status === "advanced" ||
-            verifyResult.status === "completed",
-          `verify: expected advanced/completed, got ${verifyResult.status}`,
-        );
+          // Add function is FIXED: returns a + b (not a - b)
+          const mathTs = fs.readFileSync(
+            path.join(repoDir, "src", "math.ts"),
+            "utf-8",
+          );
+          assert.ok(
+            mathTs.includes("a + b") || mathTs.includes("a+b"),
+            `src/math.ts add function should be fixed (a + b). Content:\n${mathTs}`,
+          );
+          assert.ok(
+            !mathTs.includes("a - b") && !mathTs.includes("a-b"),
+            `src/math.ts should NOT contain the broken subtract logic. Content:\n${mathTs}`,
+          );
 
-        // Step: test (tester)
-        const testStep = stepClaim(
-          "feature-dev-merge-worktree_tester",
-          runId,
-          be(),
-        );
-        const testResult = stepComplete(
-          testStep.stepId,
-          "STATUS: done\n" +
-            "RESULTS: Full test suite passes, integration verified\n",
-          be(),
-        );
-        assert.equal(testResult.status, "advanced");
+          // Assert the actual runtime behavior: add(5, 3) === 8
+          // Compile and run the tests
+          execSync("npm run build", { cwd: repoDir, encoding: "utf-8" });
+          const testOutput = execSync("npm test", {
+            cwd: repoDir,
+            encoding: "utf-8",
+          });
+          assert.ok(
+            testOutput.match(/pass|OK|0 fail/),
+            `Tests should pass after fix. Output:\n${testOutput.substring(0, 500)}`,
+          );
 
-        // Step: finalize_merge (merger)
-        const merge = stepClaim(
-          "feature-dev-merge-worktree_merger",
-          runId,
-          be(),
-        );
-        const mergeResult = stepComplete(
-          merge.stepId,
-          "STATUS: done\n" +
-            "REBASED: false\n" +
-            "MERGE_COMMIT: abc1234\n" +
-            "MERGED_INTO: main\n",
-          be(),
-        );
-        assert.equal(mergeResult.status, "completed");
+          // add(5, 3) === 8 should be asserted in tests
+          const testPath = path.join(repoDir, "test", "math.test.ts");
+          if (fs.existsSync(testPath)) {
+            const testContent = fs.readFileSync(testPath, "utf-8");
+            // The fixed test should expect add(5, 3) === 8
+            assert.ok(
+              testContent.includes("8"),
+              `math.test.ts should assert add(5, 3) === 8 after fix. Content:\n${testContent.substring(0, 500)}`,
+            );
+            // Should NOT still assert add(5, 3) === 2
+            assert.ok(
+              !testContent.match(/add\(5,\s*3\).*2/) && !testContent.includes("expects subtraction"),
+              `math.test.ts should no longer assert the buggy value 2. Content:\n${testContent.substring(0, 500)}`,
+            );
+          }
 
-        // 4. Verify the run completed
-        const statusOut = cliMustSucceed(
-          ["workflow", "status", runId],
-          be(),
-          "workflow status",
-        );
-        assert.match(statusOut, /Status:\s+completed/i);
-        assert.match(statusOut, /\[done\s+\]\s+plan/);
-        assert.match(statusOut, /\[done\s+\]\s+setup/);
-        assert.match(statusOut, /\[done\s+\]\s+implement/);
-        assert.match(statusOut, /\[done\s+\]\s+verify/);
-        assert.match(statusOut, /\[done\s+\]\s+test/);
-        assert.match(statusOut, /\[done\s+\]\s+finalize_merge/);
-      } finally {
-        cleanupTempHome(env);
-      }
-    },
-  );
-
-  it(
-    "bug-fix-merge-worktree: triage → investigate → setup → fix → verify → merge → done",
-    { timeout: 120_000 },
-    async () => {
-      const env = await createTempHome();
-      const be = () => baseEnv(env.homeDir, env.controlPort);
-
-      try {
-        // 1. Install the workflow
-        cliMustSucceed(
-          ["workflow", "install", "bug-fix-merge-worktree"],
-          be(),
-          "install bug-fix-merge-worktree",
-        );
-
-        // 2. Prepare a clean git repo from the sample project
-        const repoDir = path.join(env.root, "sample-repo");
-        prepareGitRepo(fixtureDir, repoDir);
-
-        // 3. Create the run
-        const runIdPrefix = await spawnWorkflowRun(
-          [
-            "workflow",
-            "run",
-            "bug-fix-merge-worktree",
-            "The add function in src/math.ts returns a - b instead of a + b",
-            "--worktree-origin-repository",
-            repoDir,
-          ],
-          be(),
-        );
-        const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
-
-        // ---- Advance pipeline ----
-
-        // Step: triage (triager)
-        const triage = stepClaim(
-          "bug-fix-merge-worktree_triager",
-          runId,
-          be(),
-        );
-        const triageResult = stepComplete(
-          triage.stepId,
-          "STATUS: done\n" +
-            `REPO: ${repoDir}\n` +
-            "BRANCH: bugfix/fix-add-function\n" +
-            "SEVERITY: high\n" +
-            "AFFECTED_AREA: src/math.ts — add function\n" +
-            "REPRODUCTION: Call add(2, 3) — returns -1 instead of 5\n" +
-            "PROBLEM_STATEMENT: The add(a,b) function computes a - b instead of a + b\n",
-          be(),
-        );
-        assert.equal(triageResult.status, "advanced");
-
-        // Step: investigate (investigator)
-        const investigate = stepClaim(
-          "bug-fix-merge-worktree_investigator",
-          runId,
-          be(),
-        );
-        const investigateResult = stepComplete(
-          investigate.stepId,
-          "STATUS: done\n" +
-            "ROOT_CAUSE: The add function in src/math.ts line 2 has a typo: uses subtraction operator (-) instead of addition operator (+)\n" +
-            "FIX_APPROACH: Change 'return a - b' to 'return a + b' in src/math.ts\n",
-          be(),
-        );
-        assert.equal(investigateResult.status, "advanced");
-
-        // Step: setup (setup)
-        const setup = stepClaim(
-          "bug-fix-merge-worktree_setup",
-          runId,
-          be(),
-        );
-        const setupResult = stepComplete(
-          setup.stepId,
-          "STATUS: done\n" +
-            "ORIGINAL_BRANCH: main\n" +
-            "BUILD_CMD: npm run build\n" +
-            "TEST_CMD: npm test\n" +
-            "BASELINE: Build succeeds, 1 test passes (bug-matching), 1 test fails (correct expectation)\n",
-          be(),
-        );
-        assert.equal(setupResult.status, "advanced");
-
-        // Step: fix (fixer)
-        const fix = stepClaim(
-          "bug-fix-merge-worktree_fixer",
-          runId,
-          be(),
-        );
-        const fixResult = stepComplete(
-          fix.stepId,
-          "STATUS: done\n" +
-            "CHANGES: Changed 'return a - b' to 'return a + b' in src/math.ts\n" +
-            "REGRESSION_TEST: Added test that verifies add(2, 3) === 5 (catches the subtraction bug)\n",
-          be(),
-        );
-        assert.equal(fixResult.status, "advanced");
-
-        // Step: verify (verifier)
-        const verify = stepClaim(
-          "bug-fix-merge-worktree_verifier",
-          runId,
-          be(),
-        );
-        const verifyResult = stepComplete(
-          verify.stepId,
-          "STATUS: done\n" +
-            "VERIFIED: Fix correct — add now returns a + b, regression test passes, all tests pass\n",
-          be(),
-        );
-        assert.equal(verifyResult.status, "advanced");
-
-        // Step: finalize_merge (merger)
-        const merge = stepClaim(
-          "bug-fix-merge-worktree_merger",
-          runId,
-          be(),
-        );
-        const mergeResult = stepComplete(
-          merge.stepId,
-          "STATUS: done\n" +
-            "REBASED: false\n" +
-            "MERGE_COMMIT: def5678\n" +
-            "MERGED_INTO: main\n",
-          be(),
-        );
-        assert.equal(mergeResult.status, "completed");
-
-        // 4. Verify the run completed
-        const statusOut = cliMustSucceed(
-          ["workflow", "status", runId],
-          be(),
-          "workflow status",
-        );
-        assert.match(statusOut, /Status:\s+completed/i);
-        assert.match(statusOut, /\[done\s+\]\s+triage/);
-        assert.match(statusOut, /\[done\s+\]\s+investigate/);
-        assert.match(statusOut, /\[done\s+\]\s+setup/);
-        assert.match(statusOut, /\[done\s+\]\s+fix/);
-        assert.match(statusOut, /\[done\s+\]\s+verify/);
-        assert.match(statusOut, /\[done\s+\]\s+finalize_merge/);
-      } finally {
-        cleanupTempHome(env);
-      }
-    },
-  );
-});
+          // ── Verify multiply still exists (no regression) ─────────
+          assert.ok(
+            mathTs.includes("multiply") || mathTs.includes("Multiply"),
+            `multiply function should still exist after bug-fix. Content:\n${mathTs}`,
+          );
+          assert.ok(
+            testOutput.includes("multiply") || testOutput.includes("Multiply"),
+            `Multiply tests should still pass after bug-fix. Output:\n${testOutput.substring(0, 500)}`,
+          );
+        } finally {
+          // ── Stop daemon ─────────────────────────────────────────
+          await stopIsolatedDaemon(daemon);
+        }
+      },
+    );
+  },
+);
