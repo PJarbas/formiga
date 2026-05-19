@@ -1,0 +1,160 @@
+# Progress Log
+Run: dbb6b772-fab5-4f9e-987a-f5abd10167ec
+Task: Add support for tamandua status command — detailed system status
+Started: 2026-05-18
+
+## Codebase Patterns
+- CLI entry point is `src/cli/cli.ts` with `async function main()` at line 1126
+- Every command has a `get<Thing>Help()` function returning a multi-line help string
+- `--help` dispatch happens at the top of `main()` (line 1132) before any command execution
+- `getUsageText()` at line 1065 lists all top-level commands for `tamandua --help`
+- New command dispatch blocks in `main()` go BEFORE the `if args.length < 2` fallthrough at line 1698
+- Tests use `node:test` and `node:assert`, with temporary HOME directories for isolation
+- The test `cli()` helper spawns `bin/tamandua` wrapper with temp HOME/state dir
+- Project requires Node.js >= 22 for `node:sqlite` built-in module
+- Build: `npm run build` (TypeScript compilation + version injection)
+- Test: `npm test` (runs `node --test tests/*.test.ts src/**/*.test.ts`)
+- Service status imports come from `../server/daemonctl.js` (isRunning, getDaemonStatus, getMcpStatus, isMcpRunning, etc.)
+- Path resolution via `../installer/paths.js` (resolveSourcePath, resolveSkillPath)
+- Run listing via `../installer/status.js` (listRuns)
+- **IMPORTANT**: Do NOT import from `dist/cli/cli.js` in tests — it calls `main()` which runs `process.exit(1)` on no-args. Place testable functions in separate modules (like `src/cli/status-format.ts`) and import those from tests.
+- daemonctl status functions: getDaemonStatus returns `{running: bool, pid: number|null, port: number}`, getMcpStatus/getControlPlaneStatus return `{running: bool, pid: number|null, port: number, endpoint: string}`
+- Default ports: MCP = 3338 with endpoint /mcp, Control-plane = 3339 with endpoint /control/health, Dashboard port from file
+- `git rev-parse HEAD^{tree}` returns a 40-char hex SHA representing the source tree content — used for installation verification
+- `readVersionStatus()` from `../lib/version-check.js` returns `VersionStatus { updateAvailable, currentHead, remoteHead, checkedAt }`
+- `execSync` from `node:child_process` can be dependency-injected by passing a function matching `(cmd: string) => string` signature
+- `listRuns(limit)` from `../installer/status.js` returns `RunInfo[]` — each has `id`, `workflowId`, `task`, `status`, `createdAt`, `updatedAt`, `stepSummary?`, `tokensSpent`
+- `ps -eo pid,etime,args --no-headers` gives PID, elapsed time, and full command for process discovery
+- `isRunning()` from daemonctl returns `{ running: true; pid: number } | { running: false }` — used to gate process discovery
+
+## Story Plan
+
+### US-001: Add tamandua status CLI scaffolding and help text
+
+**Description:** As a developer, I need to register the status command in the CLI entry point so users can invoke `tamandua status` and `tamandua status --help`.
+
+**Acceptance Criteria:**
+- `tamandua status --help` prints help text describing the command
+- `tamandua status` prints placeholder output without error
+- `tamandua --help` includes `tamandua status` in the command listing
+- Tests for status CLI scaffolding pass
+- Typecheck passes
+
+### US-002 through US-006
+(see Story Plan in task input for full details)
+
+---
+
+## 2026-05-18 - US-001: Add tamandua status CLI scaffolding and help text
+- Scaffolding was already implemented and committed (5ff517a)
+- Verified all acceptance criteria pass with Node 22:
+  - `tamandua status --help` prints full help text describing services, info, runs, processes
+  - `tamandua status` prints placeholder output and exits 0
+  - `tamandua --help` lists `tamandua status` in command listing
+  - `npm run build` (TypeScript) passes cleanly
+- Files changed (in commit 5ff517a):
+  - `src/cli/cli.ts`: Added getStatusHelp() at line 301, help dispatch at line 1154, main dispatch at line 1690, usage line at 1071
+  - `src/cli/cli.test.ts`: Added "status command" describe block with 3 tests at line 1011
+- **Learnings:** Following the get<Thing>Help() pattern is straightforward. The help dispatch block uses if/if (not if/else if), so every recognized group returns via printHelp(). The status dispatch must go before the args.length < 2 fallthrough guard. Tests need Node 22 on PATH to run — the test helper calls bin/tamandua shell wrapper which uses the system `node`.
+
+## 2026-05-18 - US-002: Implement service status section (dashboard, MCP, control-plane)
+- Created `src/cli/status-format.ts` with `formatServiceStatus()` function
+- Uses dependency injection pattern (optional overrides for daemonctl functions) for testability
+- Formats dashboard, MCP, and control-plane status with PID, port, and endpoint info
+- Handles all state combinations: all up, all down, mixed states
+- Wired into status dispatch in cli.ts (replaced placeholder output)
+- Updated CLI integration test: "tamandua status shows services section (all down when nothing running)"
+- Added 5 direct unit tests for formatServiceStatus with mocked daemonctl responses:
+  - all services UP (verifies PID, port, endpoint)
+  - all services DOWN (verifies port, endpoint shown)
+  - mixed state: dashboard up, MCP and control-plane down
+  - MCP endpoint shown even when not running
+  - defaults to real daemonctl when no overrides provided
+- Files changed (commit 4ab76da):
+  - `src/cli/status-format.ts` — new file with formatServiceStatus()
+  - `src/cli/cli.ts` — import from status-format.js, updated status dispatch
+  - `src/cli/cli.test.ts` — updated placeholder test, added 5 SDK tests
+- **Learnings:** Importing from `dist/cli/cli.js` in tests kills the process because the CLI calls `main()` which calls `process.exit(1)` on no-args. Functions that need unit testing should live in their own modules (like `status-format.ts`) that don't call main(). The dependency injection pattern (optional function overrides) works well for mocking daemonctl without needing running processes.
+
+## 2026-05-18 - US-003: Implement paths, version, and source tree SHA256 section
+- Added `formatTamanduaInfo()` to `src/cli/status-format.ts`
+- Displays source-path (via resolveSourcePath), skill-path (via resolveSkillPath), version, and source tree SHA256
+- Source tree SHA256 computed via `git -C <sourcePath> rev-parse HEAD^{tree}` using execSync
+- Falls back to "unavailable" when git fails or output is not a valid 40-char hex SHA
+- Shows update availability from readVersionStatus() when updateAvailable=true
+- Uses same dependency injection pattern as formatServiceStatus for testability
+- Wired into status dispatch in cli.ts as `formatTamanduaInfo({ getVersion })`
+- Updated CLI integration test to verify Tamandua Info section appears in output
+- Added 5 unit tests for formatTamanduaInfo:
+  - normal output with source-path, skill-path, version, and tree SHA
+  - git failure → "unavailable" without crashing
+  - invalid SHA output → "unavailable"
+  - update available message when readVersionStatus returns updateAvailable=true
+  - defaults work without overrides (uses real paths/git)
+- Files changed (commit 72cc0e3):
+  - `src/cli/status-format.ts` — added import for execSync, paths, version-check; added formatTamanduaInfo()
+  - `src/cli/cli.ts` — updated import, wired formatTamanduaInfo into status dispatch
+  - `src/cli/cli.test.ts` — updated integration test, added 5 formatTamanduaInfo tests
+- **Learnings:** git rev-parse HEAD^{tree} is the right command for tree SHA256. execSync can be dependency-injected for testing by passing a function matching `(cmd: string) => string | Buffer`. The version-check module (readVersionStatus) was already imported in cli.ts but not in status-format.ts — added it there for the reusable formatting function. SHA validation regex `/^[0-9a-f]{40}$/i` rejects outputs that aren't valid git SHAs.
+
+## 2026-05-18 - US-004: Implement workflow runs summary section
+- Added `formatRunsSummary()` to `src/cli/status-format.ts`
+- Imports `listRuns` and `RunInfo` type from `../installer/status.js` with alias for DI
+- Shows total run count and breakdown by status (running, paused, done, failed)
+- Lists running and paused runs with: run ID (8-char prefix), workflow ID, status, token count, task preview (truncated at 60 chars)
+- Shows `(N done, M failed runs not shown)` count line when terminal runs exist
+- Handles empty state with "No workflow runs.", errors from listRuns gracefully
+- Wired into status dispatch in cli.ts: `formatRunsSummary()` called after formatTamanduaInfo
+- Added 7 unit tests for formatRunsSummary:
+  - shows "No workflow runs" when list is empty
+  - shows total count and status breakdown with mixed statuses
+  - lists running and paused runs with ID, workflow, tokens, and task preview
+  - shows "(N done, M failed runs not shown)" when terminal runs exist
+  - does NOT show not-shown line when no terminal runs
+  - handles long task descriptions with truncation (60 chars)
+  - catches errors from listRuns gracefully
+  - defaults to real listRuns when no override provided
+- Files changed (commit 061fed7):
+  - `src/cli/status-format.ts` — added import for listRuns/RunInfo, added formatRunsSummary()
+  - `src/cli/cli.ts` — updated import, wired formatRunsSummary into status dispatch
+  - `src/cli/cli.test.ts` — added 7 formatRunsSummary tests
+- **Learnings:** listRuns from status.js takes an optional `limit` parameter (default 50). The RunInfo type has id, workflowId, task, status, createdAt, updatedAt, stepSummary?, tokensSpent. For DI, import with alias `listRuns as defaultListRuns` and accept an optional override. Task truncation at 60 chars leaves room for the rest of the line. The catch block for listRuns errors returns `[]` so formatRunsSummary shows "No workflow runs" gracefully.
+
+## 2026-05-19 - US-005: Implement running harness process discovery section
+- Added `formatProcessList()` to `src/cli/status-format.ts`
+- Added import for `isRunning` from `../server/daemonctl.js` alongside existing daemonctl imports
+- Uses `ps -eo pid,etime,args --no-headers` to scan for running processes
+- Filters for tamandua-related patterns (line contains "tamandua", "pi ", or "hermes")
+- Classifies each process by harness type: pi, hermes, or tamandua
+- Shows PID, elapsed time (etime), and command summary (truncated at 80 chars)
+- When daemon is not running: "Daemon not running — no agent processes active."
+- When no processes match: "No active agent processes found."
+- Uses same dependency injection pattern as other format functions for testability
+- Wired into status dispatch in cli.ts: `formatProcessList()` called after formatRunsSummary
+- Added 8 unit tests for formatProcessList:
+  - shows daemon down message when daemon not running
+  - shows "No active agent processes" when daemon running but no matching ps output
+  - detects pi processes and shows PID and runtime
+  - detects hermes processes
+  - distinguishes pi and hermes in mixed output
+  - handles empty ps output gracefully
+  - handles execSync error gracefully
+  - defaults to real isRunning when no overrides provided
+- Files changed (commit 0e7ed10):
+  - `src/cli/status-format.ts` — added isRunning import, added formatProcessList()
+  - `src/cli/cli.ts` — updated import, wired formatProcessList into status dispatch
+  - `src/cli/cli.test.ts` — added 8 formatProcessList tests
+- **Learnings:** `ps -eo pid,etime,args --no-headers` provides a clean parseable output for process discovery. Harness classification needs to check `command` (args portion) rather than the full ps line, since the full line includes PID and etime columns. The `isRunning()` function from daemonctl returns `{ running: true; pid: number } | { running: false }` — accessing `.running` to determine daemon state. Running `tamandua status` on a live system with running agents shows real processes with their PIDs and uptimes.
+
+## 2026-05-19 - US-006: Integration — compose all sections into final cohesive status output
+- Added `---` section dividers between all four status sections for readability
+- Updated integration test to verify all four sections, 3 dividers, graceful edge cases
+- Replaced existing "shows services and info sections" test with comprehensive one
+- Test now checks: Services, Tamandua Info, Workflow Runs, Running Processes sections, dividers count, service down states, info fields, "No workflow runs" fallback, "Daemon not running" fallback
+- Three section dividers: after Services section, after Tamandua Info section, after Workflow Runs section
+- Exit code 0 verified, edge cases (no services, no runs, no processes) all handled gracefully
+- `tamandua status --help` continues to work correctly
+- Files changed:
+  - `src/cli/cli.ts` — added 3 `console.log("---")` divider lines with spacing in status dispatch
+  - `src/cli/cli.test.ts` — enhanced integration test with full section and divider assertions
+- **Learnings:** `---` dividers paired with blank lines create clean visual separation. The `console.log()` calls in toto produce the final output; spacing is all handled via explicit console.log calls. Integration test should verify the full composed output, not just individual sections. The test uses the `cli()` helper which spawns the actual `bin/tamandua` wrapper — so tests run against the real CLI with temp HOME isolation.

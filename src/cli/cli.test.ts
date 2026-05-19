@@ -1007,3 +1007,497 @@ describe("--help infrastructure", () => {
     }
   });
 });
+
+describe("status command", () => {
+  it("tamandua status --help shows help about status display", () => {
+    const result = cli(["status", "--help"]);
+    try {
+      assert.equal(result.status, 0);
+      assert.match(result.stdout ?? "", /Show detailed Tamandua system status/);
+      assert.match(result.stdout ?? "", /Services.*Dashboard, MCP, and control-plane/);
+      assert.match(result.stdout ?? "", /Tamandua Info.*Source path, skill path, version/);
+      assert.match(result.stdout ?? "", /Workflow Runs.*Summary of all runs/);
+      assert.match(result.stdout ?? "", /Running Processes.*Active pi\/hermes/);
+      assert.match(result.stdout ?? "", /tamandua status/);
+      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua status produces comprehensive output with all sections and dividers", () => {
+    const result = cli(["status"]);
+    try {
+      assert.equal(result.status, 0);
+      const out = result.stdout ?? "";
+
+      // Overall header
+      assert.match(out, /Tamandua Status/);
+
+      // All four sections present
+      assert.match(out, /Services/);
+      assert.match(out, /Tamandua Info/);
+      assert.match(out, /Workflow Runs/);
+      assert.match(out, /Running Processes/);
+
+      // Section dividers between sections (3 dividers: after Services, after Info, after Runs)
+      const dividerCount = (out.match(/^---$/gm) || []).length;
+      assert.equal(dividerCount, 3, `expected 3 section dividers, got ${dividerCount}`);
+
+      // Services section details
+      assert.match(out, /Dashboard: +DOWN/);
+      assert.match(out, /MCP: +DOWN/);
+      assert.match(out, /Control-plane: +DOWN/);
+
+      // Tamandua Info section details
+      assert.match(out, /Source-path:/);
+      assert.match(out, /Skill-path:/);
+      assert.match(out, /Version:/);
+      assert.match(out, /Source tree:/);
+
+      // Workflow Runs section (should gracefully show "No workflow runs")
+      assert.match(out, /No workflow runs/);
+
+      // Running Processes section (should show daemon down message)
+      assert.match(out, /Daemon not running/);
+
+      // Should NOT show placeholder text
+      assert.doesNotMatch(out, /Full status output coming in future stories/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua --help lists status command", () => {
+    const result = cli(["--help"]);
+    try {
+      assert.equal(result.status, 0);
+      assert.match(result.stdout ?? "", /tamandua status/);
+      assert.match(result.stdout ?? "", /Show detailed system status/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Direct unit tests for formatServiceStatus() — uses dependency injection
+// to mock daemonctl responses without needing running processes.
+describe("formatServiceStatus", () => {
+  it("shows all services UP when everything is running", async () => {
+    const { formatServiceStatus } = await import("../../dist/cli/status-format.js");
+
+    const result = formatServiceStatus({
+      getDaemonStatus: () => ({ running: true, pid: 12345, port: 3334 }),
+      getMcpStatus: () => ({
+        running: true,
+        pid: 12346,
+        port: 3338,
+        endpoint: "/mcp",
+      }),
+      getControlPlaneStatus: () => ({
+        running: true,
+        pid: 12347,
+        port: 3339,
+        endpoint: "/control/health",
+      }),
+    });
+
+    assert.match(result, /Services/);
+    assert.match(result, /Dashboard: +UP +\(pid 12345, port 3334, http:\/\/localhost:3334\)/);
+    assert.match(result, /MCP: +UP +\(pid 12346, port 3338, http:\/\/localhost:3338\/mcp\)/);
+    assert.match(result, /Control-plane: +UP +\(pid 12347, port 3339, http:\/\/localhost:3339\/control\/health\)/);
+  });
+
+  it("shows all services DOWN when nothing is running", async () => {
+    const { formatServiceStatus } = await import("../../dist/cli/status-format.js");
+
+    const result = formatServiceStatus({
+      getDaemonStatus: () => ({ running: false, pid: null, port: 3334 }),
+      getMcpStatus: () => ({
+        running: false,
+        pid: null,
+        port: 3338,
+        endpoint: "/mcp",
+      }),
+      getControlPlaneStatus: () => ({
+        running: false,
+        pid: null,
+        port: 3339,
+        endpoint: "/control/health",
+      }),
+    });
+
+    assert.match(result, /Services/);
+    assert.match(result, /Dashboard: +DOWN \(port 3334\)/);
+    assert.match(result, /MCP: +DOWN \(port 3338, endpoint \/mcp\)/);
+    assert.match(result, /Control-plane: +DOWN \(port 3339, endpoint \/control\/health\)/);
+  });
+
+  it("shows mixed state: dashboard up, MCP and control-plane down", async () => {
+    const { formatServiceStatus } = await import("../../dist/cli/status-format.js");
+
+    const result = formatServiceStatus({
+      getDaemonStatus: () => ({ running: true, pid: 42, port: 3334 }),
+      getMcpStatus: () => ({
+        running: false,
+        pid: null,
+        port: 3338,
+        endpoint: "/mcp",
+      }),
+      getControlPlaneStatus: () => ({
+        running: false,
+        pid: null,
+        port: 3339,
+        endpoint: "/control/health",
+      }),
+    });
+
+    assert.match(result, /Services/);
+    assert.match(result, /Dashboard: +UP +\(pid 42, port 3334, http:\/\/localhost:3334\)/);
+    assert.match(result, /MCP: +DOWN/);
+    assert.match(result, /Control-plane: +DOWN/);
+  });
+
+  it("shows MCP endpoint even when not running", async () => {
+    const { formatServiceStatus } = await import("../../dist/cli/status-format.js");
+
+    const result = formatServiceStatus({
+      getDaemonStatus: () => ({ running: false, pid: null, port: 3334 }),
+      getMcpStatus: () => ({
+        running: false,
+        pid: null,
+        port: 3338,
+        endpoint: "/mcp",
+      }),
+      getControlPlaneStatus: () => ({
+        running: false,
+        pid: null,
+        port: 3339,
+        endpoint: "/control/health",
+      }),
+    });
+
+    // MCP should show its endpoint even when down
+    assert.match(result, /MCP: +DOWN \(port 3338, endpoint \/mcp\)/);
+  });
+
+  it("defaults to real daemonctl when no overrides provided (accepts any output)", async () => {
+    const { formatServiceStatus } = await import("../../dist/cli/status-format.js");
+
+    // Without overrides, uses real daemonctl — should not throw
+    const result = formatServiceStatus();
+    assert.match(result, /Services/);
+    assert.match(result, /Dashboard:/);
+    assert.match(result, /MCP:/);
+    assert.match(result, /Control-plane:/);
+  });
+});
+
+// Direct unit tests for formatTamanduaInfo() — uses dependency injection
+// to mock paths, version, git, and version status without needing filesystem or git.
+describe("formatTamanduaInfo", () => {
+  it("shows source-path, skill-path, version, and tree SHA", async () => {
+    const { formatTamanduaInfo } = await import("../../dist/cli/status-format.js");
+
+    const result = formatTamanduaInfo({
+      getVersion: () => "1.2.3",
+      resolveSourcePath: () => "/opt/tamandua",
+      resolveSkillPath: () => "/opt/tamandua/skills/tamandua-agents/SKILL.md",
+      getReadVersionStatus: () => ({
+        updateAvailable: false,
+        currentHead: "",
+        remoteHead: "",
+        checkedAt: "",
+      }),
+      execSync: () => "a1b2c3d4e5f6789012345678abcdef1234567890",
+    });
+
+    assert.match(result, /Tamandua Info/);
+    assert.match(result, /Source-path: +\/opt\/tamandua/);
+    assert.match(result, /Skill-path: +\/opt\/tamandua\/skills\/tamandua-agents\/SKILL.md/);
+    assert.match(result, /Version: +1\.2\.3/);
+    assert.match(result, /Source tree: +a1b2c3d4e5f6789012345678abcdef1234567890/);
+    // No update available — update line should NOT appear
+    assert.doesNotMatch(result, /Update:/);
+  });
+
+  it("shows 'unavailable' when git fails", async () => {
+    const { formatTamanduaInfo } = await import("../../dist/cli/status-format.js");
+
+    const result = formatTamanduaInfo({
+      getVersion: () => "1.0.0",
+      resolveSourcePath: () => "/some/path",
+      resolveSkillPath: () => "/some/path/skills.md",
+      getReadVersionStatus: () => ({
+        updateAvailable: false,
+        currentHead: "",
+        remoteHead: "",
+        checkedAt: "",
+      }),
+      execSync: () => { throw new Error("git not found"); },
+    });
+
+    assert.match(result, /Tamandua Info/);
+    assert.match(result, /Source tree: +unavailable/);
+  });
+
+  it("shows 'unavailable' when git output is not a valid sha", async () => {
+    const { formatTamanduaInfo } = await import("../../dist/cli/status-format.js");
+
+    const result = formatTamanduaInfo({
+      getVersion: () => "1.0.0",
+      resolveSourcePath: () => "/some/path",
+      resolveSkillPath: () => "/some/path/skills.md",
+      getReadVersionStatus: () => ({
+        updateAvailable: false,
+        currentHead: "",
+        remoteHead: "",
+        checkedAt: "",
+      }),
+      execSync: () => "not-a-valid-sha",
+    });
+
+    assert.match(result, /Source tree: +unavailable/);
+  });
+
+  it("shows update available when version status has updateAvailable=true", async () => {
+    const { formatTamanduaInfo } = await import("../../dist/cli/status-format.js");
+
+    const result = formatTamanduaInfo({
+      getVersion: () => "1.0.0",
+      resolveSourcePath: () => "/some/path",
+      resolveSkillPath: () => "/some/path/skills.md",
+      getReadVersionStatus: () => ({
+        updateAvailable: true,
+        currentHead: "abc123",
+        remoteHead: "def456",
+        checkedAt: "2026-05-18T00:00:00Z",
+      }),
+      execSync: () => "a1b2c3d4e5f6789012345678abcdef1234567890",
+    });
+
+    assert.match(result, /Update: +available \(run 'tamandua update'\)/);
+  });
+
+  it("defaults to real paths and git when no overrides provided (accepts any output)", async () => {
+    const { formatTamanduaInfo } = await import("../../dist/cli/status-format.js");
+
+    // Without overrides, uses real resolveSourcePath, resolveSkillPath, etc. — should not throw
+    const result = formatTamanduaInfo({ getVersion: () => "1.0.0" });
+    assert.match(result, /Tamandua Info/);
+    assert.match(result, /Source-path:/);
+    assert.match(result, /Skill-path:/);
+    assert.match(result, /Version: +1\.0\.0/);
+    assert.match(result, /Source tree:/);
+  });
+});
+
+// Direct unit tests for formatRunsSummary() — uses dependency injection
+// to mock listRuns without needing a real database.
+describe("formatRunsSummary", () => {
+  it("shows 'No workflow runs' when list is empty", async () => {
+    const { formatRunsSummary } = await import("../../dist/cli/status-format.js");
+    const result = formatRunsSummary({
+      listRuns: () => [],
+    });
+    assert.match(result, /Workflow Runs/);
+    assert.match(result, /No workflow runs/);
+  });
+
+  it("shows total count and status breakdown with mixed statuses", async () => {
+    const { formatRunsSummary } = await import("../../dist/cli/status-format.js");
+    const result = formatRunsSummary({
+      listRuns: () => [
+        { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "wf1", task: "Fix login bug", status: "running", createdAt: "", updatedAt: "", tokensSpent: 1500 },
+        { id: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "wf1", task: "Add dashboard", status: "done", createdAt: "", updatedAt: "", tokensSpent: 3000 },
+        { id: "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "wf2", task: "Refactor auth", status: "failed", createdAt: "", updatedAt: "", tokensSpent: 500 },
+        { id: "dddddddd-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "wf3", task: "Update deps", status: "paused", createdAt: "", updatedAt: "", tokensSpent: 200 },
+      ],
+    });
+    assert.match(result, /Workflow Runs/);
+    assert.match(result, /4 total/);
+    assert.match(result, /1 done/);
+    assert.match(result, /1 failed/);
+    assert.match(result, /1 paused/);
+    assert.match(result, /1 running/);
+  });
+
+  it("lists running and paused runs with ID, workflow, tokens, and task preview", async () => {
+    const { formatRunsSummary } = await import("../../dist/cli/status-format.js");
+    const result = formatRunsSummary({
+      listRuns: () => [
+        { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "feature-dev", task: "Implement login page with validation and error handling", status: "running", createdAt: "", updatedAt: "", tokensSpent: 4200 },
+        { id: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "bug-fix", task: "Fix navbar", status: "paused", createdAt: "", updatedAt: "", tokensSpent: 800 },
+      ],
+    });
+    // Running run
+    assert.match(result, /\[running\] aaaaaaaa/);
+    assert.match(result, /feature-dev/);
+    assert.match(result, /4,200 tokens/);
+    assert.match(result, /Implement login page/);
+    // Paused run
+    assert.match(result, /\[paused \] bbbbbbbb/);
+    assert.match(result, /bug-fix/);
+    assert.match(result, /800 tokens/);
+    assert.match(result, /Fix navbar/);
+    // Should NOT show done/failed not-shown line when there are none
+    assert.doesNotMatch(result, /runs not shown/);
+  });
+
+  it("shows '(N done, M failed runs not shown)' when terminal runs exist", async () => {
+    const { formatRunsSummary } = await import("../../dist/cli/status-format.js");
+    const result = formatRunsSummary({
+      listRuns: () => [
+        { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "wf1", task: "Current task", status: "running", createdAt: "", updatedAt: "", tokensSpent: 100 },
+        { id: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "wf1", task: "Old task", status: "done", createdAt: "", updatedAt: "", tokensSpent: 2000 },
+        { id: "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "wf2", task: "Broken task", status: "failed", createdAt: "", updatedAt: "", tokensSpent: 0 },
+      ],
+    });
+    assert.match(result, /3 total/);
+    assert.match(result, /\(1 done, 1 failed runs not shown\)/);
+    // Running run still listed
+    assert.match(result, /\[running\] aaaaaaaa/);
+  });
+
+  it("handles long task descriptions with truncation", async () => {
+    const { formatRunsSummary } = await import("../../dist/cli/status-format.js");
+    const longTask = "A".repeat(80);
+    const result = formatRunsSummary({
+      listRuns: () => [
+        { id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", workflowId: "wf1", task: longTask, status: "running", createdAt: "", updatedAt: "", tokensSpent: 0 },
+      ],
+    });
+    // Should be truncated to 60 chars with "..."
+    const expectedPreview = "A".repeat(57) + "...";
+    assert.match(result, new RegExp(expectedPreview.replace(/\./g, "\\.")));
+    // Should NOT contain the full 80-char string
+    assert.doesNotMatch(result, /A{80}/);
+  });
+
+  it("catches errors from listRuns gracefully", async () => {
+    const { formatRunsSummary } = await import("../../dist/cli/status-format.js");
+    const result = formatRunsSummary({
+      listRuns: () => { throw new Error("DB error"); },
+    });
+    assert.match(result, /Workflow Runs/);
+    assert.match(result, /No workflow runs/);
+  });
+
+  it("defaults to real listRuns when no override provided (accepts any output)", async () => {
+    const { formatRunsSummary } = await import("../../dist/cli/status-format.js");
+    // Without overrides, uses the real listRuns from the DB — should not throw
+    const result = formatRunsSummary();
+    assert.match(result, /Workflow Runs/);
+    // Should either show "No workflow runs" or a counts line
+    assert.ok(
+      result.includes("No workflow runs") || result.includes("total"),
+      "should produce valid output",
+    );
+  });
+});
+
+// Direct unit tests for formatProcessList() — uses dependency injection
+// to mock ps output without needing real processes.
+describe("formatProcessList", () => {
+  it("shows daemon down message when daemon not running", async () => {
+    const { formatProcessList } = await import("../../dist/cli/status-format.js");
+    const result = formatProcessList({
+      isDaemonRunning: () => false,
+    });
+    assert.match(result, /Running Processes/);
+    assert.match(result, /Daemon not running/);
+  });
+
+  it("shows no processes when daemon is running but ps returns no matches", async () => {
+    const { formatProcessList } = await import("../../dist/cli/status-format.js");
+    const result = formatProcessList({
+      isDaemonRunning: () => true,
+      execSync: () =>
+        "  123  01:23:45  /usr/bin/node some-other-thing\n  456  00:05:00  bash\n",
+    });
+    assert.match(result, /Running Processes/);
+    assert.match(result, /No active agent processes/);
+  });
+
+  it("detects pi processes and shows PID and runtime", async () => {
+    const { formatProcessList } = await import("../../dist/cli/status-format.js");
+    const result = formatProcessList({
+      isDaemonRunning: () => true,
+      execSync: () =>
+        "  1001  02:30:00  /usr/bin/pi --print --session abc123 --model gpt-4\n" +
+        "  1002  01:15:00  node /usr/local/bin/pi --print --mode json\n",
+    });
+    assert.match(result, /Running Processes/);
+    assert.match(result, /\[pi\s*\] PID 1001/);
+    assert.match(result, /up 02:30:00/);
+    assert.match(result, /\[pi\s*\] PID 1002/);
+    assert.match(result, /up 01:15:00/);
+  });
+
+  it("detects hermes processes", async () => {
+    const { formatProcessList } = await import("../../dist/cli/status-format.js");
+    const result = formatProcessList({
+      isDaemonRunning: () => true,
+      execSync: () =>
+        "  2001  00:45:00  /usr/bin/hermes agent --provider openrouter\n",
+    });
+    assert.match(result, /Running Processes/);
+    assert.match(result, /\[hermes\s*\] PID 2001/);
+    assert.match(result, /up 00:45:00/);
+  });
+
+  it("distinguishes pi and hermes processes in mixed output", async () => {
+    const { formatProcessList } = await import("../../dist/cli/status-format.js");
+    const result = formatProcessList({
+      isDaemonRunning: () => true,
+      execSync: () =>
+        "  1001  02:30:00  /usr/bin/pi --print --session abc\n" +
+        "  2001  00:45:00  /usr/bin/hermes agent --provider openrouter\n" +
+        "  3001  01:00:00  node /path/to/tamandua/dist/cli/cli.js step claim some-agent\n",
+    });
+    assert.match(result, /\[pi\s*\] PID 1001/);
+    assert.match(result, /\[hermes\s*\] PID 2001/);
+    assert.match(result, /\[tamandua\s*\] PID 3001/); // tamandua step claim classified as tamandua
+    // Should have 3 process lines
+    const lines = result.split("\n");
+    const processLines = lines.filter((l) => /\[.*\] PID/.test(l));
+    assert.strictEqual(processLines.length, 3);
+  });
+
+  it("handles empty ps output gracefully", async () => {
+    const { formatProcessList } = await import("../../dist/cli/status-format.js");
+    const result = formatProcessList({
+      isDaemonRunning: () => true,
+      execSync: () => "",
+    });
+    assert.match(result, /Running Processes/);
+    assert.match(result, /No active agent processes/);
+  });
+
+  it("handles execSync error gracefully", async () => {
+    const { formatProcessList } = await import("../../dist/cli/status-format.js");
+    const result = formatProcessList({
+      isDaemonRunning: () => true,
+      execSync: () => {
+        throw new Error("ps not found");
+      },
+    });
+    assert.match(result, /Running Processes/);
+    assert.match(result, /Unable to scan for agent processes/);
+  });
+
+  it("defaults to real isRunning when no overrides provided (accepts any output)", async () => {
+    const { formatProcessList } = await import("../../dist/cli/status-format.js");
+    // Without overrides, uses real daemonctl isRunning + ps — should not throw
+    const result = formatProcessList();
+    assert.match(result, /Running Processes/);
+    // Should show something (either daemon down message or process list)
+    assert.ok(
+      result.includes("Daemon not running") ||
+        result.includes("No active agent processes") ||
+        result.includes("PID ") ||
+        result.includes("Unable to scan"),
+      "should produce valid output",
+    );
+  });
+});

@@ -25,6 +25,7 @@ import { pauseRunWithDaemon, resumeRunWithDaemon } from "../server/control-clien
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
 import { ensureCliSymlink } from "../installer/symlink.js";
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
+import { formatServiceStatus, formatTamanduaInfo, formatRunsSummary, formatProcessList } from "./status-format.js";
 import {
   listRunWorktrees,
   getRunWorktree,
@@ -296,6 +297,23 @@ Examples:
   tamandua uninstall --force  # Force uninstall despite active runs
   tamandua workflow uninstall <name>  # Uninstall a single workflow by name
   tamandua workflow uninstall --all   # Uninstall all workflows only (no service stops)`;
+}
+
+function getStatusHelp(): string {
+  return `tamandua status — Show detailed Tamandua system status
+
+Usage: tamandua status
+
+Displays a comprehensive status overview of the Tamandua system, including:
+
+  Services — Dashboard, MCP, and control-plane status (up/down, PID, port)
+  Tamandua Info — Source path, skill path, version, and source tree SHA256
+  Workflow Runs — Summary of all runs (running, paused, done, failed)
+  Running Processes — Active pi/hermes harness processes spawned by tamandua
+
+Examples:
+  tamandua status             # Full system status overview
+  tamandua status --help      # This help text`;
 }
 
 function getStepPeekHelp(): string {
@@ -1051,6 +1069,7 @@ function getUsageText(): string {
     "",
     "tamandua get-ready                    Install bundled workflows and start dashboard/control plane",
     "tamandua uninstall [--force]          Full uninstall",
+    "tamandua status                       Show detailed system status (services, paths, runs, processes)",
     "", "tamandua workflow list                List available workflows",
     "tamandua workflow install <name|--all>  Install a workflow (or all)",
     "tamandua workflow run <name> <task> [--no-hurry-please-save-tokens-mode]",
@@ -1132,6 +1151,9 @@ async function main() {
     }
     if (group === "uninstall") {
       printHelp(getUninstallHelp());
+    }
+    if (group === "status") {
+      printHelp(getStatusHelp());
     }
     if (group === "mcp") {
       if (action === "start") { printHelp(getMcpStartHelp()); }
@@ -1664,6 +1686,26 @@ async function main() {
       `Unknown worktree action: ${action}\nUsage: tamandua worktree <list|status|remove|prune>\n`,
     );
     process.exit(1);
+  }
+
+  if (group === "status") {
+    console.log("Tamandua Status");
+    console.log("===============");
+    console.log();
+    console.log(formatServiceStatus());
+    console.log();
+    console.log("---");
+    console.log();
+    console.log(formatTamanduaInfo({ getVersion }));
+    console.log();
+    console.log("---");
+    console.log();
+    console.log(formatRunsSummary());
+    console.log();
+    console.log("---");
+    console.log();
+    console.log(formatProcessList());
+    return;
   }
 
   if (args.length < 2) { printUsage(); process.exit(1); }
