@@ -1354,9 +1354,9 @@ export async function executePollingRound(
     });
   }
 
-  // Skip this tick if a pi for the same job is still running.
+  // Skip this tick if a harness for the same job is still running.
   if (inFlightJobs.has(job.id)) {
-    logger.info("Polling round skipped — previous pi still in flight", {
+    logger.info("Polling round skipped — previous harness still in flight", {
       ...context,
       reason: "previous_round_in_flight",
     });

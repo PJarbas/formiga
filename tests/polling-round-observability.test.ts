@@ -116,7 +116,7 @@ describe("executePollingRound observability", () => {
       await executePollingRound(job, agent);
       await firstRound;
 
-      const skipLog = calls.find((entry) => entry.level === "info" && entry.message === "Polling round skipped — previous pi still in flight");
+      const skipLog = calls.find((entry) => entry.level === "info" && entry.message === "Polling round skipped — previous harness still in flight");
       const startLog = calls.find((entry) => entry.level === "info" && entry.message === "Polling round start");
       const completeLog = calls.find((entry) => entry.level === "info" && entry.message === "Polling round complete");
 
@@ -198,6 +198,65 @@ describe("executePollingRound observability", () => {
       assert.equal(completeLog?.extra?.outcome, "heartbeat");
       assert.equal(completeLog?.extra?.outputTruncated, false);
       assert.equal(completeLog?.extra?.outputPreview, "HEARTBEAT_OK");
+    } finally {
+      restore();
+      seeded.cleanup();
+      if (originalPiBinary === undefined) {
+        delete process.env.TAMANDUA_PI_BINARY;
+      } else {
+        process.env.TAMANDUA_PI_BINARY = originalPiBinary;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses harness-agnostic wording in skip log (regression: should not hardcode pi)", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-round-harness-wording-"));
+    const fakePi = path.join(tempDir, "pi");
+    const longOutput = `STATUS: done\n${"B".repeat(320)}::TAIL_MARKER::`;
+    fs.writeFileSync(
+      fakePi,
+      `#!/usr/bin/env node\nsetTimeout(() => { process.stdout.write(${JSON.stringify(longOutput)}); }, 100);\n`,
+      "utf-8",
+    );
+    fs.chmodSync(fakePi, 0o755);
+
+    const originalPiBinary = process.env.TAMANDUA_PI_BINARY;
+    process.env.TAMANDUA_PI_BINARY = fakePi;
+
+    const { calls, restore } = captureLoggerCalls();
+    const seeded = seedRunningRun("wf-observability-harness-wording");
+
+    const job = {
+      id: `job-observability-harness-wording-${seeded.runId}`,
+      workflowId: "wf-observability-harness-wording",
+      runId: seeded.runId,
+      agentId: "wf_developer",
+      intervalMinutes: 5,
+      timeoutSeconds: 3,
+      workingDirectoryForHarness: tempDir,
+      createdAt: new Date().toISOString(),
+    };
+
+    const agent = {
+      id: "developer",
+      role: "coding" as const,
+      pollingModel: "anthropic/claude-sonnet-4-20250514",
+      workspace: {
+        baseDir: tempDir,
+        files: {},
+      },
+    };
+
+    try {
+      const firstRound = executePollingRound(job, agent);
+      await executePollingRound(job, agent);
+      await firstRound;
+
+      const skipLog = calls.find((entry) => entry.level === "info" && entry.message.startsWith("Polling round skipped"));
+      assert.ok(skipLog, "expected skip log");
+      assert.equal(skipLog!.message, "Polling round skipped — previous harness still in flight",
+        "skip log must use harness-agnostic wording");
     } finally {
       restore();
       seeded.cleanup();
