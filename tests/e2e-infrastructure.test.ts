@@ -416,14 +416,16 @@ describe("e2e test infrastructure", () => {
     );
   });
 
-  it("e2e-tests/workflows-e2e.test.ts verifies multiply function still exists after bug-fix", () => {
+  it("e2e-tests/workflows-e2e.test.ts verifies add stays fixed after feature-dev", () => {
     const content = fs.readFileSync(
       path.join(repoRoot, "e2e-tests", "workflows-e2e.test.ts"),
       "utf-8",
     );
     assert.ok(
-      content.includes("multiply still exists") || content.includes("no regression") || content.includes("Multiply tests should still pass"),
-      "real e2e test should verify multiply is not regressed by the bug-fix",
+      content.includes("Add function remains fixed") ||
+        content.includes("add remains fixed") ||
+        content.includes("no regression"),
+      "real e2e test should verify the feature workflow does not regress the bug-fix",
     );
   });
 

@@ -13,6 +13,8 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   createTempHome,
@@ -27,6 +29,104 @@ import {
 } from "./helpers/smoke-helpers.ts";
 
 const fixtureDir = path.join(process.cwd(), "e2e-tests", "fixtures", "sample-project");
+
+describe("createTempHome pi auth symlink (regression: auth isolation mismatch)", () => {
+  it("symlinks isolated HOME .pi → real ~/.pi instead of synthesizing settings.json", async () => {
+    const realPiDir = path.join(os.homedir(), ".pi");
+    assert.ok(
+      fs.existsSync(realPiDir),
+      `Real ~/.pi must exist at ${realPiDir} for this regression test`,
+    );
+
+    const env = await createTempHome();
+    try {
+      const isolatedPiLink = path.join(env.homeDir, ".pi");
+      const stat = fs.lstatSync(isolatedPiLink);
+
+      // Must be a symlink, not a regular directory with a synthetic settings.json
+      assert.ok(
+        stat.isSymbolicLink(),
+        `Expected ${isolatedPiLink} to be a symlink to the real ~/.pi, but it is not a symlink.`,
+      );
+
+      // The symlink must resolve to the real ~/.pi directory
+      const resolved = fs.realpathSync(isolatedPiLink);
+      assert.equal(
+        resolved,
+        realPiDir,
+        `Symlink ${isolatedPiLink} must resolve to ${realPiDir}, got ${resolved}`,
+      );
+
+      // The target must be a valid pi directory with agent/settings.json
+      const settingsPath = path.join(resolved, "agent", "settings.json");
+      assert.ok(
+        fs.existsSync(settingsPath),
+        `Real pi config must exist at ${settingsPath}`,
+      );
+    } finally {
+      cleanupTempHome(env);
+    }
+  });
+
+  it("baseEnv preserves provider environment variables while keeping Tamandua state isolated", async () => {
+    const previousToken = process.env.TAMANDUA_E2E_TEST_PROVIDER_TOKEN;
+    const previousNodeTestContext = process.env.NODE_TEST_CONTEXT;
+    const previousStateDir = process.env.TAMANDUA_STATE_DIR;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousWorktreeRoot = process.env.TAMANDUA_WORKTREE_ROOT;
+
+    process.env.TAMANDUA_E2E_TEST_PROVIDER_TOKEN = "present";
+    process.env.NODE_TEST_CONTEXT = "node-test-internal-context";
+    process.env.TAMANDUA_STATE_DIR = "/tmp/should-not-leak-tamandua-state";
+    process.env.TAMANDUA_DB_PATH = "/tmp/should-not-leak-tamandua.db";
+    process.env.TAMANDUA_WORKTREE_ROOT = "/tmp/should-not-leak-worktrees";
+
+    const env = await createTempHome();
+    try {
+      const childEnv = baseEnv(env.homeDir, env.controlPort);
+      assert.equal(childEnv.TAMANDUA_E2E_TEST_PROVIDER_TOKEN, "present");
+      assert.equal(childEnv.NODE_TEST_CONTEXT, undefined);
+      assert.equal(childEnv.HOME, env.homeDir);
+      assert.equal(childEnv.TAMANDUA_CONTROL_PORT, String(env.controlPort));
+      assert.equal(childEnv.TAMANDUA_STATE_DIR, env.tamanduaDir);
+      assert.equal(
+        childEnv.TAMANDUA_DB_PATH,
+        path.join(env.tamanduaDir, "tamandua.db"),
+      );
+      assert.equal(
+        childEnv.TAMANDUA_WORKTREE_ROOT,
+        path.join(env.tamanduaDir, "worktrees"),
+      );
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.TAMANDUA_E2E_TEST_PROVIDER_TOKEN;
+      } else {
+        process.env.TAMANDUA_E2E_TEST_PROVIDER_TOKEN = previousToken;
+      }
+      if (previousNodeTestContext === undefined) {
+        delete process.env.NODE_TEST_CONTEXT;
+      } else {
+        process.env.NODE_TEST_CONTEXT = previousNodeTestContext;
+      }
+      if (previousStateDir === undefined) {
+        delete process.env.TAMANDUA_STATE_DIR;
+      } else {
+        process.env.TAMANDUA_STATE_DIR = previousStateDir;
+      }
+      if (previousDbPath === undefined) {
+        delete process.env.TAMANDUA_DB_PATH;
+      } else {
+        process.env.TAMANDUA_DB_PATH = previousDbPath;
+      }
+      if (previousWorktreeRoot === undefined) {
+        delete process.env.TAMANDUA_WORKTREE_ROOT;
+      } else {
+        process.env.TAMANDUA_WORKTREE_ROOT = previousWorktreeRoot;
+      }
+      cleanupTempHome(env);
+    }
+  });
+});
 
 describe("workflows smoke (state-machine integration)", { concurrency: 1 }, () => {
   it(

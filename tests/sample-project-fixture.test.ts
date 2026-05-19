@@ -48,6 +48,14 @@ describe("sample project fixture", () => {
     );
   });
 
+  it("ignores generated build artifacts", () => {
+    const gitignorePath = path.join(fixtureDir, ".gitignore");
+    assert.ok(fs.existsSync(gitignorePath), ".gitignore should exist");
+    const content = fs.readFileSync(gitignorePath, "utf-8");
+    assert.match(content, /^dist\/$/m, "dist/ should be ignored");
+    assert.match(content, /^node_modules\/$/m, "node_modules/ should be ignored");
+  });
+
   it("has test/math.test.ts with test exposing the bug", () => {
     const testPath = path.join(fixtureDir, "test", "math.test.ts");
     assert.ok(fs.existsSync(testPath), "test/math.test.ts should exist");

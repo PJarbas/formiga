@@ -16,6 +16,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanChildEnv } from "../../tests/helpers/test-env.ts";
+import { baseEnv } from "./smoke-helpers.ts";
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -29,14 +30,20 @@ export const DEFAULT_POLL_INTERVAL_MS = 5_000;
 export const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000; // 30 minutes
 export const DAEMON_START_TIMEOUT_MS = 15_000;
 
-const TERMINAL_STATUSES = new Set(["done", "failed", "canceled"]);
+const TERMINAL_STATUSES = new Set(["completed", "done", "failed", "canceled"]);
+const SUCCESSFUL_RUN_STATUSES = new Set(["completed", "done"]);
+
+export function isSuccessfulRunTerminalStatus(status: string): boolean {
+  return SUCCESSFUL_RUN_STATUSES.has(status);
+}
 
 /**
  * Poll for a workflow run to reach a terminal status.
  *
  * Calls `tamandua workflow status <runId>` at regular intervals and
  * parses the output to extract the current status. Returns the terminal
- * status string ("done", "failed", or "canceled") when reached.
+ * status string ("completed", "failed", or "canceled") when reached.
+ * "done" is also accepted as a legacy success alias.
  *
  * Throws with timeout diagnostics (last known status and output) if the
  * run does not reach a terminal status within `timeoutMs`.
@@ -103,10 +110,7 @@ export function startIsolatedDaemon(
       "node",
       ["--disable-warning=ExperimentalWarning", daemonScript, String(port)],
       {
-        env: cleanChildEnv({
-          HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort),
-        }),
+        env: cleanChildEnv(baseEnv(homeDir, controlPort)),
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -198,10 +202,10 @@ export async function stopIsolatedDaemon(child: ChildProcess): Promise<void> {
 }
 
 /**
- * Wait for a workflow run to reach terminal status "done".
+ * Wait for a workflow run to reach a successful terminal status.
  *
  * Thin wrapper around pollForRunCompletion that throws if the terminal
- * status is anything other than "done".
+ * status is anything other than "completed" (or legacy alias "done").
  */
 export async function waitForRunTerminal(
   runId: string,
@@ -211,9 +215,9 @@ export async function waitForRunTerminal(
 ): Promise<string> {
   const status = await pollForRunCompletion(runId, env, timeoutMs, pollIntervalMs);
 
-  if (status !== "done") {
+  if (!isSuccessfulRunTerminalStatus(status)) {
     throw new Error(
-      `Run ${runId.slice(0, 8)} reached terminal status "${status}" (expected "done").`,
+      `Run ${runId.slice(0, 8)} reached terminal status "${status}" (expected "completed").`,
     );
   }
 

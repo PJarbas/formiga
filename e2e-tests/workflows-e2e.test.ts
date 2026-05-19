@@ -38,20 +38,21 @@
  *
  * TEST ORDERING:
  *   The two tests run SEQUENTIALLY (concurrency: 1):
- *   1. feature-dev-merge-worktree — adds a multiply function
- *   2. bug-fix-merge-worktree  — fixes the deliberately broken add function
+ *   1. bug-fix-merge-worktree  — fixes the deliberately broken add function
+ *   2. feature-dev-merge-worktree — adds a multiply function
  *   Test 2 depends on the state produced by Test 1 (same sample repo, shared
  *   temp HOME), so they must execute in order and share the before/after hooks.
  *****************************************************************************/
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
   createTempHome,
   baseEnv,
+  inheritedProcessEnv,
   cliMustSucceed,
   spawnWorkflowRun,
   prepareGitRepo,
@@ -68,23 +69,27 @@ import type { ChildProcess } from "node:child_process";
 
 const fixtureDir = path.join(process.cwd(), "e2e-tests", "fixtures", "sample-project");
 
-/**
- * Helper: generate pi agent settings pointing at a real model.
- *
- * Derives provider/model/apiKey from environment variables with defaults
- * suitable for Tamandua development. The daemon reads this config when
- * spawning pi agent invocations.
- */
-function piAgentSettings(env: NodeJS.ProcessEnv): string {
-  return JSON.stringify({
-    defaultProvider: env.TAMANDUA_E2E_PROVIDER || env.PI_PROVIDER || "openai",
-    defaultModel: env.TAMANDUA_E2E_MODEL || env.PI_MODEL || "gpt-4o",
-    providers: {
-      openai: {
-        apiKey: env.TAMANDUA_E2E_API_KEY || env.OPENAI_API_KEY || "sk-placeholder",
-      },
-    },
+function runNodeModuleScript(repoDir: string, script: string): string {
+  return execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    cwd: repoDir,
+    encoding: "utf-8",
   });
+}
+
+function testCommandEnv(): NodeJS.ProcessEnv {
+  return inheritedProcessEnv();
+}
+
+function buildSampleProject(repoDir: string): void {
+  execFileSync("npm", ["exec", "--yes", "--package", "typescript", "--", "tsc"], {
+    cwd: repoDir,
+    encoding: "utf-8",
+  });
+}
+
+function assertRepoClean(repoDir: string, context: string): void {
+  const status = execSync("git status --porcelain", { cwd: repoDir, encoding: "utf-8" });
+  assert.equal(status.trim(), "", `${context} left origin repository dirty:\n${status}`);
 }
 
 // ── Shared state across both sequential tests ────────────────────────────
@@ -102,16 +107,8 @@ describe(
   () => {
     // ── before: shared environment setup ──────────────────────────────
     before(async () => {
-      // Create isolated temp HOME
+      // Create isolated temp HOME (symlinks real ~/.pi for auth)
       env = await createTempHome();
-
-      // Override the default pi config with real model settings from env vars
-      const piAgentDir = path.join(env.homeDir, ".pi", "agent");
-      fs.writeFileSync(
-        path.join(piAgentDir, "settings.json"),
-        piAgentSettings(process.env),
-        "utf-8",
-      );
 
       // Install both workflows
       cliMustSucceed(
@@ -141,9 +138,9 @@ describe(
       cleanupTempHome(env);
     });
 
-    // ── TEST 1: feature-dev-merge-worktree ────────────────────────────
+    // ── TEST 1: bug-fix-merge-worktree ────────────────────────────────
     it(
-      "feature-dev-merge-worktree: adds multiply function",
+      "bug-fix-merge-worktree: fixes broken add function",
       { timeout: 60 * 60_000 }, // 60 minutes
       async () => {
         // ── Start daemon ────────────────────────────────────────────
@@ -154,104 +151,7 @@ describe(
         );
 
         try {
-          // ── Create run ───────────────────────────────────────────
-          const runIdPrefix = await spawnWorkflowRun(
-            [
-              "workflow",
-              "run",
-              "feature-dev-merge-worktree",
-              "Add a multiply function to math.ts that multiplies two numbers",
-              "--worktree-origin-repository",
-              repoDir,
-            ],
-            baseEnv(env.homeDir, env.controlPort),
-          );
-          const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
-
-          // ── Wait for completion ──────────────────────────────────
-          await waitForRunTerminal(
-            runId,
-            baseEnv(env.homeDir, env.controlPort),
-            45 * 60_000, // 45 min timeout
-            10_000,       // poll every 10s
-          );
-
-          // ── Verify run status ────────────────────────────────────
-          const statusOut = cliMustSucceed(
-            ["workflow", "status", runId],
-            baseEnv(env.homeDir, env.controlPort),
-            "workflow status after feature-dev completion",
-          );
-          assert.match(statusOut, /Status:\s+completed/i);
-
-          // ── Verify repository state ──────────────────────────────
-          // After the workflow completes, the origin repo (main branch)
-          // should have a squash merge commit with the multiply function.
-
-          // Git log shows a merge commit on main
-          const gitLog = execSync(
-            "git log --oneline -5",
-            { cwd: repoDir, encoding: "utf-8" },
-          );
-          const commitLines = gitLog.trim().split("\n");
-          assert.ok(
-            commitLines.length >= 2,
-            `Expected at least 2 commits (initial + merge), got:\n${gitLog}`,
-          );
-
-          // Multiply function exists in src/math.ts
-          const mathTs = fs.readFileSync(
-            path.join(repoDir, "src", "math.ts"),
-            "utf-8",
-          );
-          assert.ok(
-            mathTs.includes("multiply") || mathTs.includes("Multiply"),
-            `src/math.ts should contain a multiply function. Content:\n${mathTs}`,
-          );
-
-          // Multiply test exists and passes
-          execSync("npm run build", { cwd: repoDir, encoding: "utf-8" });
-          const testOutput = execSync("npm test", {
-            cwd: repoDir,
-            encoding: "utf-8",
-          });
-          assert.ok(
-            testOutput.includes("multiply") || testOutput.includes("Multiply") || testOutput.match(/pass|OK|0 fail/),
-            `Tests should reference multiply and pass. Output:\n${testOutput.substring(0, 500)}`,
-          );
-
-          // Multiply test file exists
-          const multiplyTestPath = path.join(repoDir, "test", "math.test.ts");
-          if (fs.existsSync(multiplyTestPath)) {
-            const testContent = fs.readFileSync(multiplyTestPath, "utf-8");
-            assert.ok(
-              testContent.includes("multiply") || testContent.includes("Multiply"),
-              `math.test.ts should contain multiply tests. Content:\n${testContent.substring(0, 500)}`,
-            );
-          }
-        } finally {
-          // ── Stop daemon between workflows for clean scheduler state ─
-          await stopIsolatedDaemon(daemon);
-        }
-      },
-    );
-
-    // ── TEST 2: bug-fix-merge-worktree (sequential, same repo) ──────
-    it(
-      "bug-fix-merge-worktree: fixes broken add function (sequential, same repo)",
-      { timeout: 60 * 60_000 }, // 60 minutes
-      async () => {
-        // ── Restart daemon for clean scheduler state ────────────────
-        daemon = await startIsolatedDaemon(
-          env.dashboardPort,
-          env.homeDir,
-          env.controlPort,
-        );
-
-        try {
-          // ── Verify precondition: add function is still broken ────
-          // The sample-project has `a - b` — confirm it hasn't been
-          // accidentally fixed by the feature workflow's merge.
+          // ── Verify precondition: add function starts broken ──────
           const preMathTs = fs.readFileSync(
             path.join(repoDir, "src", "math.ts"),
             "utf-8",
@@ -293,7 +193,7 @@ describe(
 
           // ── Verify repository state ──────────────────────────────
           // After the bug-fix workflow completes, the origin repo should
-          // have a fix for the add function AND still have multiply.
+          // have a fix for the add function.
 
           // Git log shows a merge commit for the fix on main
           const gitLog = execSync(
@@ -302,8 +202,8 @@ describe(
           );
           const commitLines = gitLog.trim().split("\n");
           assert.ok(
-            commitLines.length >= 3,
-            `Expected at least 3 commits (initial + feature merge + fix merge), got:\n${gitLog}`,
+            commitLines.length >= 2,
+            `Expected at least 2 commits (initial + fix merge), got:\n${gitLog}`,
           );
 
           // Add function is FIXED: returns a + b (not a - b)
@@ -320,12 +220,22 @@ describe(
             `src/math.ts should NOT contain the broken subtract logic. Content:\n${mathTs}`,
           );
 
-          // Assert the actual runtime behavior: add(5, 3) === 8
-          // Compile and run the tests
-          execSync("npm run build", { cwd: repoDir, encoding: "utf-8" });
+          // Assert the actual runtime behavior: add(5, 3) === 8.
+          const runtimeOutput = runNodeModuleScript(
+            repoDir,
+            `
+              const { add } = await import("./src/math.ts");
+              if (add(5, 3) !== 8) throw new Error("add(5, 3) failed");
+              console.log("add ok");
+            `,
+          );
+          assert.match(runtimeOutput, /add ok/);
+
+          buildSampleProject(repoDir);
           const testOutput = execSync("npm test", {
             cwd: repoDir,
             encoding: "utf-8",
+            env: testCommandEnv(),
           });
           assert.ok(
             testOutput.match(/pass|OK|0 fail/),
@@ -348,15 +258,148 @@ describe(
             );
           }
 
-          // ── Verify multiply still exists (no regression) ─────────
+          assertRepoClean(repoDir, "bug-fix post-check");
+        } finally {
+          // ── Stop daemon between workflows for clean scheduler state ─
+          await stopIsolatedDaemon(daemon);
+        }
+      },
+    );
+
+    // ── TEST 2: feature-dev-merge-worktree (sequential, same repo) ──
+    it(
+      "feature-dev-merge-worktree: adds multiply function (sequential, same repo)",
+      { timeout: 60 * 60_000 }, // 60 minutes
+      async () => {
+        // ── Restart daemon for clean scheduler state ────────────────
+        daemon = await startIsolatedDaemon(
+          env.dashboardPort,
+          env.homeDir,
+          env.controlPort,
+        );
+
+        try {
+          // ── Verify precondition: add function was fixed by test 1 ─
+          const preMathTs = fs.readFileSync(
+            path.join(repoDir, "src", "math.ts"),
+            "utf-8",
+          );
+          assert.ok(
+            preMathTs.includes("a + b") || preMathTs.includes("a+b"),
+            `Precondition: add function should already be fixed (a + b). Content:\n${preMathTs}`,
+          );
+
+          // ── Create run ───────────────────────────────────────────
+          const runIdPrefix = await spawnWorkflowRun(
+            [
+              "workflow",
+              "run",
+              "feature-dev-merge-worktree",
+              "Add a multiply function to math.ts that multiplies two numbers",
+              "--worktree-origin-repository",
+              repoDir,
+            ],
+            baseEnv(env.homeDir, env.controlPort),
+          );
+          const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
+
+          // ── Wait for completion ──────────────────────────────────
+          await waitForRunTerminal(
+            runId,
+            baseEnv(env.homeDir, env.controlPort),
+            45 * 60_000, // 45 min timeout
+            10_000,       // poll every 10s
+          );
+
+          // ── Verify run status ────────────────────────────────────
+          const statusOut = cliMustSucceed(
+            ["workflow", "status", runId],
+            baseEnv(env.homeDir, env.controlPort),
+            "workflow status after feature-dev completion",
+          );
+          assert.match(statusOut, /Status:\s+completed/i);
+
+          // ── Verify repository state ──────────────────────────────
+          // After the workflow completes, the origin repo should have
+          // the add fix from test 1 and a squash merge commit with multiply.
+
+          // Git log shows a second merge commit on main
+          const gitLog = execSync(
+            "git log --oneline -5",
+            { cwd: repoDir, encoding: "utf-8" },
+          );
+          const commitLines = gitLog.trim().split("\n");
+          assert.ok(
+            commitLines.length >= 3,
+            `Expected at least 3 commits (initial + fix merge + feature merge), got:\n${gitLog}`,
+          );
+
+          // Add function remains fixed with no regression, and multiply exists
+          const mathTs = fs.readFileSync(
+            path.join(repoDir, "src", "math.ts"),
+            "utf-8",
+          );
+          assert.ok(
+            mathTs.includes("a + b") || mathTs.includes("a+b"),
+            `src/math.ts add function should be fixed (a + b). Content:\n${mathTs}`,
+          );
+          assert.ok(
+            !mathTs.includes("a - b") && !mathTs.includes("a-b"),
+            `src/math.ts should NOT contain the broken subtract logic. Content:\n${mathTs}`,
+          );
+
+          // Assert the actual runtime behavior: add remains fixed and multiply works.
+          const runtimeOutput = runNodeModuleScript(
+            repoDir,
+            `
+              const { add, multiply } = await import("./src/math.ts");
+              if (add(5, 3) !== 8) throw new Error("add(5, 3) failed");
+              if (multiply(2, 3) !== 6) throw new Error("multiply(2, 3) regressed");
+              if (multiply(0, 5) !== 0) throw new Error("multiply(0, 5) failed");
+              if (multiply(-2, 3) !== -6) throw new Error("multiply(-2, 3) failed");
+              console.log("runtime ok");
+            `,
+          );
+          assert.match(runtimeOutput, /runtime ok/);
+
+          buildSampleProject(repoDir);
+          const testOutput = execSync("npm test", {
+            cwd: repoDir,
+            encoding: "utf-8",
+            env: testCommandEnv(),
+          });
+          assert.ok(
+            testOutput.match(/pass|OK|0 fail/),
+            `Tests should pass after fix. Output:\n${testOutput.substring(0, 500)}`,
+          );
+
+          // add(5, 3) === 8 should be asserted in tests
+          const testPath = path.join(repoDir, "test", "math.test.ts");
+          if (fs.existsSync(testPath)) {
+            const testContent = fs.readFileSync(testPath, "utf-8");
+            // The fixed test should expect add(5, 3) === 8
+            assert.ok(
+              testContent.includes("8"),
+              `math.test.ts should assert add(5, 3) === 8 after fix. Content:\n${testContent.substring(0, 500)}`,
+            );
+            // Should NOT still assert add(5, 3) === 2
+            assert.ok(
+              !testContent.match(/add\(5,\s*3\).*2/) && !testContent.includes("expects subtraction"),
+              `math.test.ts should no longer assert the buggy value 2. Content:\n${testContent.substring(0, 500)}`,
+            );
+          }
+
+          // ── Verify multiply exists and its tests are present ─────
           assert.ok(
             mathTs.includes("multiply") || mathTs.includes("Multiply"),
-            `multiply function should still exist after bug-fix. Content:\n${mathTs}`,
+            `multiply function should exist after feature workflow. Content:\n${mathTs}`,
           );
           assert.ok(
             testOutput.includes("multiply") || testOutput.includes("Multiply"),
-            `Multiply tests should still pass after bug-fix. Output:\n${testOutput.substring(0, 500)}`,
+            `Multiply tests should pass after feature workflow. Output:\n${testOutput.substring(0, 500)}`,
           );
+
+          assertRepoClean(repoDir, "feature-dev post-check");
         } finally {
           // ── Stop daemon ─────────────────────────────────────────
           await stopIsolatedDaemon(daemon);

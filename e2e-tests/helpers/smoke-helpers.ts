@@ -27,27 +27,47 @@ export async function createTempHome() {
   );
   const homeDir = path.join(root, "home");
   const tamanduaDir = path.join(homeDir, ".tamandua");
-  const piAgentDir = path.join(homeDir, ".pi", "agent");
   fs.mkdirSync(tamanduaDir, { recursive: true });
-  fs.mkdirSync(piAgentDir, { recursive: true });
+  fs.mkdirSync(homeDir, { recursive: true });
   fs.writeFileSync(
     path.join(tamanduaDir, "port"),
     String(dashboardPort),
     "utf-8",
   );
-  // Minimal pi config required by workflow install
-  fs.writeFileSync(
-    path.join(piAgentDir, "settings.json"),
-    JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-4o" }),
-    "utf-8",
+  // Symlink the real developer ~/.pi so the isolated test environment
+  // reuses the working pi auth configuration (provider, API key, model).
+  // This avoids the auth isolation mismatch where a synthesized
+  // settings.json points at providers.openai.apiKey but pi --print
+  // cannot resolve it (especially when cleanChildEnv strips env-based
+  // auth like OPENAI_API_KEY).
+  const realPiDir = path.join(os.homedir(), ".pi");
+  const isolatedPiLink = path.join(homeDir, ".pi");
+  assert.ok(
+    fs.existsSync(realPiDir),
+    `Real ~/.pi directory must exist at ${realPiDir} for e2e tests to reuse pi auth configuration.`,
   );
+  fs.symlinkSync(realPiDir, isolatedPiLink, "dir");
   return { root, homeDir, tamanduaDir, controlPort, dashboardPort };
 }
 
+export function inheritedProcessEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  delete env.NODE_TEST_CONTEXT;
+  return env;
+}
+
 export function baseEnv(homeDir: string, controlPort: number) {
+  const tamanduaDir = path.join(homeDir, ".tamandua");
   return {
+    ...inheritedProcessEnv(),
     HOME: homeDir,
     TAMANDUA_CONTROL_PORT: String(controlPort),
+    TAMANDUA_STATE_DIR: tamanduaDir,
+    TAMANDUA_DB_PATH: path.join(tamanduaDir, "tamandua.db"),
+    TAMANDUA_WORKTREE_ROOT: path.join(tamanduaDir, "worktrees"),
   };
 }
 

@@ -18,6 +18,7 @@ import {
   startIsolatedDaemon,
   stopIsolatedDaemon,
   waitForRunTerminal,
+  isSuccessfulRunTerminalStatus,
   DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_RUN_TIMEOUT_MS,
 } from "./e2e-helpers.ts";
@@ -137,7 +138,14 @@ describe("e2e-helpers (real e2e test helpers)", () => {
   });
 
   describe("waitForRunTerminal", () => {
-    it("throws when the run reaches a non-done terminal status", async () => {
+    it("treats completed and legacy done as successful terminal statuses", () => {
+      assert.equal(isSuccessfulRunTerminalStatus("completed"), true);
+      assert.equal(isSuccessfulRunTerminalStatus("done"), true);
+      assert.equal(isSuccessfulRunTerminalStatus("failed"), false);
+      assert.equal(isSuccessfulRunTerminalStatus("canceled"), false);
+    });
+
+    it("throws when the run does not reach a successful terminal status", async () => {
       // We can't easily create a terminal run in the DB (no run in this empty HOME),
       // but we verify waitForRunTerminal throws when pollForRunCompletion times out.
       const fakeRunId = "00000000-0000-0000-0000-000000000000";
