@@ -16,6 +16,7 @@ Use the `tamandua` CLI if available on PATH.
 ```bash
 tamandua version
 tamandua source-path
+tamandua skill-path
 ```
 
 If the binary is not on PATH, use the Node entrypoint directly:
@@ -29,8 +30,10 @@ node /path/to/tamandua/dist/cli/cli.js <command>
 Use these when managing workflow runs (outside individual step execution):
 
 ```bash
-tamandua workflow list
-tamandua workflow run <workflow-id> "<task>" [--working-directory-for-harness <dir>] [--no-hurry-please-save-tokens-mode]
+tamandua workflow list [--json]
+tamandua workflow install <workflow-id|--all>
+tamandua workflow uninstall <workflow-id|--all> [--force]
+tamandua workflow run <workflow-id> "<task>" [--working-directory-for-harness <dir>] [--worktree-origin-repository <dir>] [--worktree-origin-ref <ref>] [--pi-as-harness | --hermes-as-harness] [--no-hurry-please-save-tokens-mode]
 tamandua workflow status <query>
 tamandua workflow runs
 tamandua workflow pause <run-id>
@@ -43,6 +46,12 @@ tamandua workflow stop <run-id>
 `resume` works for both paused runs (restarted via the daemon) and failed
 runs (resumed directly). `pause-all --drain` lets in-progress steps finish
 before pausing.
+
+`install` fetches workflow files, provisions agent workspaces, and registers
+agents in `~/.tamandua/agents.json`. Use `--all` (or `all`) to install every
+bundled workflow in one command. `uninstall` removes the workflow and its
+agent configuration. Use `--force` to skip the active-runs safety check.
+`uninstall --all` removes every installed workflow.
 
 Use `tamandua update [--force]` only for local Tamandua maintenance. Without
 `--force`, update blocks after rebuilding if active runs are present — it
@@ -57,11 +66,96 @@ Harness working directory guidance:
 - CLI run: `--working-directory-for-harness` is optional; if omitted it defaults to the shell's current working directory.
 - Prefer passing an explicit absolute path when the task depends on a specific repo checkout.
 
+Worktree guidance:
+
+- Use `--worktree-origin-repository <dir>` to clone a repo into an isolated
+  git worktree for the run. Defaults to the current repository.
+- Use `--worktree-origin-ref <ref>` to check out a specific branch, tag, or
+  SHA in the worktree. Defaults to the current branch.
+- Worktree runs never modify the origin repository — all changes stay in
+  the isolated worktree.
+
 Use `--no-hurry-please-save-tokens-mode` to lower agent polling frequency
 for the run. When enabled, the scheduler floor becomes 15 minutes (default
 15 minutes) instead of the normal 1 minute (default 5 minutes), reducing
 token consumption. Use this for low-priority or long-running background
 runs where responsiveness is less important than cost savings.
+
+### 2.6) System status with tamandua status
+
+Use `tamandua status` for a comprehensive overview of the Tamandua system:
+
+```bash
+tamandua status
+```
+
+`status` reports:
+
+- **Services** — Dashboard, MCP, and control-plane status (up/down, PID, port)
+- **Tamandua Info** — Source path, skill path, version, and source tree SHA256
+- **Workflow Runs** — Summary of all runs (running, paused, done, failed)
+- **Running Processes** — Active pi/hermes harness processes spawned by Tamandua
+
+### 2.7) Worktree management
+
+Worktree commands manage the git worktrees Tamandua creates for isolated
+workflow runs.
+
+```bash
+tamandua worktree list
+tamandua worktree status <run-id>
+tamandua worktree remove <run-id> [--force]
+tamandua worktree prune --completed --older-than <duration>
+```
+
+`list` shows all managed worktrees with run ID, status, cleanup policy, and
+filesystem path.
+
+`status` shows detailed worktree info for a run: origin repo, ref, SHA,
+original branch, worktree path, and cleanup policy.
+
+`remove` deletes a worktree and its tracking entry. By default, only
+non-ready worktrees can be removed. Use `--force` to remove any status.
+
+`prune` cleans up old worktrees for completed or canceled runs older than a
+duration (e.g. `7d`, `24h`, `30m`). Requires both `--completed` and
+`--older-than` flags.
+
+### 2.8) Control plane management
+
+The control plane provides run-scoped scheduling that the dashboard daemon
+uses to manage agent polling and work dispatch.
+
+```bash
+tamandua control-plane start [--port N]
+tamandua control-plane stop
+tamandua control-plane status
+```
+
+Default port: 3339.
+
+`status` reports whether the control plane is running (PID, port, endpoint).
+
+Start will refuse if the control plane is already running, printing its
+current status instead. Stop is safe to run even when no control plane
+is active.
+
+### 2.9) Full uninstall with tamandua uninstall
+
+`tamandua uninstall [--force]` stops all Tamandua services and removes every
+installed workflow, including agent workspaces, agent registrations, and cron
+jobs.
+
+```bash
+tamandua uninstall [--force]
+```
+
+By default, uninstall checks for active runs (running or paused) and refuses
+if any exist. Use `--force` to skip this check.
+
+Compare with `tamandua workflow uninstall <name> [--force]` which removes a
+single workflow without stopping services, and `tamandua workflow uninstall
+--all [--force]` which removes all workflows (also no service stops).
 
 ### 3) Follow the step lifecycle exactly
 
@@ -154,7 +248,7 @@ tamandua logs-tail 8a3b2c1d          # follow events as they arrive
 Start, stop, and check the web dashboard:
 
 ```bash
-tamandua dashboard [start] [--port N]  # Start dashboard (default: 3334)
+tamandua dashboard start [--port N]    # Start dashboard (default: 3334)
 tamandua dashboard stop                # Stop dashboard
 tamandua dashboard status              # Check dashboard + MCP status
 ```
@@ -199,6 +293,37 @@ tamandua get-ready
 # -> Dashboard is running on port 3334
 # -> MCP server is not running (start it with: tamandua mcp start)
 ```
+
+### 2.5) Hermes harness support (Alpha)
+
+The `--hermes-as-harness` flag runs agents with the Hermes harness instead of
+the default pi harness.
+
+```bash
+tamandua workflow run <workflow-id> "<task>" --hermes-as-harness
+```
+
+> ⚠️ **Hermes support is in alpha.** It is **very slow** compared to pi, and
+> **token accounting is broken** — token counts reported by Hermes runs are
+> inaccurate. Pi is the default and recommended harness for production use.
+
+The `--pi-as-harness` flag explicitly selects the pi harness (this is the
+default, so the flag is rarely needed unless a previous run used
+`--hermes-as-harness`).
+
+These flags are mutually exclusive — you cannot specify both in the same run.
+
+To use a custom Hermes binary, set the `TAMANDUA_HERMES_BINARY` environment
+variable:
+
+```bash
+export TAMANDUA_HERMES_BINARY=/path/to/hermes
+tamandua workflow run <workflow-id> "<task>" --hermes-as-harness
+```
+
+If `TAMANDUA_HERMES_BINARY` is not set, Tamandua searches for `hermes` on
+`PATH`. The binary is validated at scheduling time — if it is not found or
+not executable, the run fails at startup.
 
 ### 5) Review artifacts on changes
 

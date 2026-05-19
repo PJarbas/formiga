@@ -460,8 +460,8 @@ describe("workflow structure", () => {
     const readmePath = resolve(repoRoot, "README.md");
     const readme = readFileSync(readmePath, "utf-8");
 
-    assert.match(readme, /### bug-fix `5 agents`/);
-    assert.match(readme, /stops after verification/i);
+    assert.match(readme, /`bug-fix`/);
+    assert.match(readme, /stops after testing/i);
     assert.match(readme, /no merge/i);
     assert.match(readme, /triage → investigate → setup → fix → verify/);
   });
@@ -471,10 +471,9 @@ describe("workflow structure", () => {
     const readmePath = resolve(repoRoot, "README.md");
     const readme = readFileSync(readmePath, "utf-8");
 
-    assert.match(readme, /### feature-dev-merge `6 agents`/);
-    assert.match(readme, /story-by-story rigor/i);
-    assert.match(readme, /squashed merge commit/i);
-    assert.match(readme, /ORIGINAL_BRANCH/);
+    assert.match(readme, /`feature-dev-merge`/);
+    assert.match(readme, /squash-merges/i);
+    assert.match(readme, /original branch/i);
     assert.match(readme, /plan → setup → implement → verify → test → finalize_merge/);
   });
 

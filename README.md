@@ -37,62 +37,78 @@ That's it. Run `tamandua workflow list` to see available workflows.
 
 ---
 
-## What You Get: Agent Team Workflows
+## What You Get: Bundled Workflows
 
-### do-now `1 agent`
+Tamandua ships with 18 bundled workflows organized into four families. Use `tamandua workflow list` to see available workflows, and `tamandua workflow install <id>` to install one.
 
-Submit any task. Get back a success/failure report with a clear reason. No planning, no stories, no merge — just execute the task and report back what happened. Ideal for quick one-off tasks.
+### Worktree Variants
 
-```
-execute
-```
+Worktree variants (`*-worktree`, `*-merge-worktree`) run in a detached git worktree
+created from your origin repository. Your main working copy stays untouched until the
+workflow completes. This gives you full isolation — continue working while agents
+iterate — and a clean abort path: delete the worktree and nothing in your origin repo
+has changed. The origin repository only sees changes when a `-merge` variant squashes
+the result back into the original branch.
 
-### feature-dev `7 agents`
+### Feature Development
 
-Drop in a feature request. Get back a tested PR. The planner decomposes your task into stories. Each story gets implemented, verified, and tested in isolation. Failures retry automatically. Nothing ships without a code review.
+Story-based feature development. The planner decomposes your task into ordered user
+stories. Each story goes through implement → verify → test before the next one starts.
 
-```
-plan → setup → implement → verify → test → PR → review
-```
+| Variant | Workflow ID | Agents | Pipeline |
+|---------|------------|--------|----------|
+| Local-only | `feature-dev` | 5 | plan → setup → implement → verify → test |
+| + Merge | `feature-dev-merge` | 6 | plan → setup → implement → verify → test → finalize_merge |
+| Worktree | `feature-dev-worktree` | 5 | plan → setup → implement → verify → test |
+| Worktree + Merge | `feature-dev-merge-worktree` | 6 | plan → setup → implement → verify → test → finalize_merge |
+| GitHub PR | `feature-dev-github-pr` | 6 | plan → setup → implement → verify → test → pr → review |
 
-### feature-dev-merge `6 agents`
+**Local-only** stops after testing — commits stay on the feature branch, no merge or
+PR. **+ Merge** variants add a `finalize_merge` step that squash-merges all commits
+back into the original branch. **Worktree** variants run isolated in a detached worktree.
+**GitHub PR** variants create a pull request and run a code review step.
 
-Use this when you want feature-dev story-by-story rigor, but need the run to end with one squashed merge commit back onto the original branch. Setup captures `ORIGINAL_BRANCH`, and the final merger step performs the squash merge after testing passes.
+### Bug Fix
 
-```
-plan → setup → implement → verify → test → finalize_merge
-```
+Bug triage and fix. The triager reproduces the bug, the investigator finds the root
+cause, the fixer patches it, and the verifier confirms the fix against acceptance
+criteria.
 
-### security-audit-github-pr `7 agents`
+| Variant | Workflow ID | Agents | Pipeline |
+|---------|------------|--------|----------|
+| Local-only | `bug-fix` | 5 | triage → investigate → setup → fix → verify |
+| + Merge | `bug-fix-merge` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
+| Worktree | `bug-fix-worktree` | 5 | triage → investigate → setup → fix → verify |
+| Worktree + Merge | `bug-fix-merge-worktree` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
+| GitHub PR | `bug-fix-github-pr` | 6 | triage → investigate → setup → fix → verify → pr |
 
-Point it at a repo. Get back a security fix PR with regression tests. Scans for vulnerabilities, ranks by severity, patches each one, re-audits after all fixes are applied.
+### Security Audit
 
-```
-scan → prioritize → setup → fix → verify → test → PR
-```
+Vulnerability scanning and patching. Scans for vulnerabilities, ranks by severity,
+patches each one, re-audits after all fixes are applied, and runs regression tests.
 
-### bug-fix `5 agents`
+| Variant | Workflow ID | Agents | Pipeline |
+|---------|------------|--------|----------|
+| Local-only | `security-audit` | 6 | scan → prioritize → setup → fix → verify → test |
+| + Merge | `security-audit-merge` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
+| Worktree | `security-audit-worktree` | 6 | scan → prioritize → setup → fix → verify → test |
+| Worktree + Merge | `security-audit-merge-worktree` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
+| GitHub PR | `security-audit-github-pr` | 7 | scan → prioritize → setup → fix → verify → test → pr |
 
-Drop in a bug report. Get back a verified fix. The triager reproduces the bug, investigator finds the root cause, fixer patches it, and verifier confirms the fix against acceptance criteria. Stops after verification — no merge or PR. Use [bug-fix-github-pr](#bug-fix-github-pr-6-agents) when you want the fix merged and a PR created.
+### Quick Tasks
 
-```
-triage → investigate → setup → fix → verify
-```
+Single-agent workflows for quick one-off tasks and workflow auto-selection.
 
-### bug-fix-github-pr `6 agents`
+| Workflow ID | Agents | Pipeline | Description |
+|------------|--------|----------|-------------|
+| `do-now` | 1 | execute | Submit any task. Get back a success/failure report. No planning, no stories. |
+| `just-do-it` | 1 | dispatch | Describe what you want. Dispatches to the most appropriate workflow automatically. |
+| `do-review-do-verify` | 3 | do → review → do-again → verify | Two-pass execution: do the work, review it, revise, then verify the result. |
 
-Paste a bug report. Get back a fix with a regression test. Triager reproduces it, investigator finds root cause, fixer patches, verifier confirms. Zero babysitting.
+Install all bundled workflows at once with:
 
-```
-triage → investigate → setup → fix → verify → PR
-```
-
-### just-do-it `1 agent`
-
-Describe what you want in plain language. The dispatcher analyzes your prompt, picks the most appropriate workflow, and launches it. No need to know which workflow to use — just describe the task and it figures out the rest.
-
-```
-dispatch
+```bash
+$ tamandua workflow install --all
 ```
 
 ---
@@ -141,8 +157,6 @@ Steps:
   [running] implement (developer)  Stories: 3/7 done
   [pending] verify (verifier)
   [pending] test (tester)
-  [pending] pr (developer)
-  [pending] review (reviewer)
 ```
 
 ---
@@ -201,7 +215,7 @@ You're installing agent teams that run code on your machine. We take that seriou
 
 | Command | Description |
 |---------|-------------|
-| `tamandua workflow run <id> <task> [--working-directory-for-harness <dir>]` | Start a run (defaults harness CWD to your current directory) |
+| `tamandua workflow run <id> <task> [--working-directory-for-harness <dir>] [--pi-as-harness \| --hermes-as-harness]` | Start a run (defaults harness CWD to your current directory) |
 | `tamandua workflow status <query>` | Check run status |
 | `tamandua workflow runs` | List all runs |
 | `tamandua workflow resume <run-id>` | Resume a failed run |
@@ -235,25 +249,71 @@ failed) and the page polls `/api/runs/<run-id>/kanban` every 3 seconds. The
 JSON endpoint is also useful for external integrations — see
 `src/server/kanban-data.ts` for the response shape.
 
+### Harness Selection
+
+By default, Tamandua uses **pi** (`pi --print`) as its agent harness. You can
+override this with the harness selection flags on `tamandua workflow run`:
+
+| Flag | Description |
+|------|-------------|
+| `--pi-as-harness` | Use pi as the agent harness. **This is the default.** |
+| `--hermes-as-harness` | Use [Hermes](https://github.com/nicholasgasior/hermes) as the agent harness instead of pi. |
+
+These flags are **mutually exclusive** — specifying both is an error.
+
+#### Hermes Support (Alpha)
+
+> **⚠️ Alpha quality.** Hermes harness support is in **alpha** and has known
+> limitations: it is **very slow** compared to pi, and **token accounting is
+> broken** (token usage numbers in runs and the dashboard will be inaccurate).
+> Use pi (`--pi-as-harness`) for production workflows.
+
+To use a custom Hermes binary path, set the `TAMANDUA_HERMES_BINARY`
+environment variable:
+
+```bash
+export TAMANDUA_HERMES_BINARY=/path/to/hermes
+```
+
+If `TAMANDUA_HERMES_BINARY` is not set, Tamandua searches for `hermes` on your
+`PATH`. The harness validation runs at scheduling time — if the Hermes binary
+isn't found or isn't executable, the run fails immediately with a clear error.
+
 ### Remote MCP tools
 
-The remote MCP endpoint exposes these tools:
+The remote MCP endpoint exposes 9 tools:
 
-- `tamandua.runs.list`
-- `tamandua.run.status`
-- `tamandua.run.start`
-- `tamandua.events.recent`
-- `tamandua.source.path`
-- `tamandua.skill.path`
-- `tamandua.update.command`
+#### Run Management
 
-For remote run creation, `tamandua.run.start` requires:
+| Tool | Description |
+|------|-------------|
+| `tamandua.runs.list` | List recent Tamandua workflow runs. Accepts optional `limit` (integer, 1–200, default 50). |
+| `tamandua.run.status` | Fetch detailed status for a run. Requires `query` (run id, prefix, or task substring). |
+| `tamandua.run.start` | Start a workflow run. Requires `workflowId` and `taskTitle`. |
+| `tamandua.run.pause` | Pause a running workflow run. Requires `runId`. Optional `drain` (boolean) to wait for in-flight work before pausing. |
+| `tamandua.run.resume` | Resume a paused workflow run. Requires `runId`. |
 
-- `workflowId`
-- `taskTitle`
-- `workingDirectoryForHarness` (**mandatory**)
+#### Events & Metadata
 
-If omitted, MCP returns an invalid-params error (`Argument "workingDirectoryForHarness" must be a non-empty string`).
+| Tool | Description |
+|------|-------------|
+| `tamandua.events.recent` | List recent global Tamandua events. Accepts optional `limit` (integer, 1–500, default 50). |
+| `tamandua.source.path` | Return the local Tamandua source checkout path. No parameters. |
+| `tamandua.skill.path` | Return the path to the bundled tamandua-agents agent skill. No parameters. |
+| `tamandua.update.command` | Return local CLI guidance for updating Tamandua safely. No parameters. |
+
+#### `tamandua.run.start` Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `workflowId` | Yes | Workflow id to run. |
+| `taskTitle` | Yes | Task description for the workflow run. |
+| `workingDirectoryForHarness` | For direct workflows | Harness working directory for remote MCP runs. Required for direct workflows, invalid for worktree workflows. |
+| `worktreeOriginRepository` | For worktree workflows | Repository path to create the worktree from. Required for worktree workflows, invalid for direct workflows. |
+| `worktreeOriginRef` | No | Git ref (branch, tag, SHA) for the worktree. Optional. Only valid for worktree workflows. |
+| `noHurrySaveTokensMode` | No | When `true`, reduces polling frequency to save tokens (15-min floor, 15-min default instead of 1-min floor, 5-min default). Optional, defaults to `false`. |
+
+`workingDirectoryForHarness` and `worktreeOriginRepository` are **mutually exclusive**: direct workflows require the former, worktree workflows require the latter. Supplying the wrong one or both results in an invalid-params error.
 
 ---
 
