@@ -10,7 +10,7 @@
     "tamandua": "dist/cli/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/server/index.html dist/server/index.html && cp src/server/kanban.html dist/server/kanban.html && chmod +x dist/cli/cli.js && chmod +x dist/server/mcp-standalone.js && node scripts/inject-version.js",
+    "build": "tsc -p tsconfig.json && cp src/server/index.html dist/server/index.html && cp src/server/kanban.html dist/server/kanban.html && chmod +x dist/cli/cli.js && chmod +x dist/server/mcp-standalone.js && node scripts/inject-version.js && rm -rf dist/www && cp -r www dist/www",
     "start": "node dist/cli/cli.js",
     "test": "node --test tests/*.test.ts src/**/*.test.ts",
     "//": "Tests are intentionally parallel-safe: they use isolated HOME/TAMANDUA_STATE_DIR temp dirs per test, reserveRandomPort() for port allocation, and avoid shared fixed ports (3334/3338/3339) except where explicitly testing production defaults. Real CLI defaults remain 3334 (dashboard), 3338 (MCP), 3339 (control plane)."

@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Tamandua — Build your agent team in pi with one command. Deterministic, repeatable agent workflows.">
+  <title>Tamandua — Agent Team Orchestrator</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <a href="#main-content" class="skip-link">Skip to content</a>
+
+  <header>
+    <nav aria-label="Main navigation">
+      <a href="#" class="logo" aria-label="Tamandua home"><span role="img" aria-label="Tamandua ant logo">🦔</span> Tamandua</a>
+      <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
+      <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation menu">
+        <span class="nav-hamburger"></span>
+      </label>
+      <ul id="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#workflows">Workflows</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#why-it-works">Why It Works</a></li>
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="#build-your-own">Build Your Own</a></li>
+        <li><a href="#mcp">MCP Tools</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main id="main-content">
+
+    <!-- Hero -->
+    <section id="hero" aria-labelledby="hero-heading">
+      <div class="hero-content">
+        <h1 id="hero-heading">Build your agent team in pi with one command.</h1>
+        <p class="hero-tagline">You don't need to hire a dev team. You need to define one. Tamandua gives you a team of specialized AI agents — planner, developer, verifier, tester, reviewer — that work together in reliable, repeatable workflows. One install. Zero infrastructure.</p>
+        <div class="hero-install">
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/igorhvr/tamandua/main/scripts/install.sh | bash</code></pre>
+        </div>
+        <p class="hero-or">Or just tell your pi agent: <strong>“install github.com/igorhvr/tamandua”</strong></p>
+        <a href="#install" class="cta-button">Get Started</a>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" class="section-reveal" aria-labelledby="features-heading">
+      <h2 id="features-heading">Features</h2>
+
+      <article>
+        <span class="feature-icon" aria-hidden="true">📋</span>
+        <h3>Deterministic Workflows</h3>
+        <p>Same workflow, same steps, same order. Not "hopefully the agent remembers to test."</p>
+      </article>
+
+      <article>
+        <span class="feature-icon" aria-hidden="true">✅</span>
+        <h3>Agents Verify Each Other</h3>
+        <p>The developer doesn't mark their own homework. A separate verifier checks every story against acceptance criteria.</p>
+      </article>
+
+      <article>
+        <span class="feature-icon" aria-hidden="true">🧹</span>
+        <h3>Fresh Context, Every Step</h3>
+        <p>Each agent gets a clean session. No context window bloat. No hallucinated state from 50 messages ago.</p>
+      </article>
+
+      <article>
+        <span class="feature-icon" aria-hidden="true">🔄</span>
+        <h3>Retry and Escalate</h3>
+        <p>Failed steps retry automatically. If retries exhaust, it escalates to you. Nothing fails silently.</p>
+      </article>
+    </section>
+
+    <!-- Workflow Families -->
+    <section id="workflows" class="section-reveal" aria-labelledby="workflows-heading">
+      <h2 id="workflows-heading">Bundled Workflows</h2>
+      <p>Tamandua ships with 18 bundled workflows organized into four families. Use <code>tamandua workflow list</code> to see available workflows, and <code>tamandua workflow install &lt;id&gt;</code> to install one.</p>
+
+      <p>Worktree variants (<code>*-worktree</code>, <code>*-merge-worktree</code>) run in a detached git worktree created from your origin repository. Your main working copy stays untouched until the workflow completes. This gives you full isolation — continue working while agents iterate — and a clean abort path: delete the worktree and nothing in your origin repo has changed.</p>
+
+      <h3>Feature Development</h3>
+      <p>Story-based feature development. The planner decomposes your task into ordered user stories. Each story goes through implement → verify → test before the next one starts.</p>
+      <div class="table-wrapper" aria-label="Feature Development variants — horizontally scrollable" tabindex="0">
+      <table>
+        <caption>Feature Development variants</caption>
+        <thead>
+          <tr>
+            <th scope="col">Variant</th>
+            <th scope="col">Workflow ID</th>
+            <th scope="col">Agents</th>
+            <th scope="col">Pipeline</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Local-only</td>
+            <td><code>feature-dev</code></td>
+            <td>5</td>
+            <td>plan → setup → implement → verify → test</td>
+          </tr>
+          <tr>
+            <td>+ Merge</td>
+            <td><code>feature-dev-merge</code></td>
+            <td>6</td>
+            <td>plan → setup → implement → verify → test → finalize_merge</td>
+          </tr>
+          <tr>
+            <td>Worktree</td>
+            <td><code>feature-dev-worktree</code></td>
+            <td>5</td>
+            <td>plan → setup → implement → verify → test</td>
+          </tr>
+          <tr>
+            <td>Worktree + Merge</td>
+            <td><code>feature-dev-merge-worktree</code></td>
+            <td>6</td>
+            <td>plan → setup → implement → verify → test → finalize_merge</td>
+          </tr>
+          <tr>
+            <td>GitHub PR</td>
+            <td><code>feature-dev-github-pr</code></td>
+            <td>6</td>
+            <td>plan → setup → implement → verify → test → pr → review</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>Bug Fix</h3>
+      <p>Bug triage and fix. The triager reproduces the bug, the investigator finds the root cause, the fixer patches it, and the verifier confirms the fix against acceptance criteria.</p>
+      <div class="table-wrapper" aria-label="Bug Fix variants — horizontally scrollable" tabindex="0">
+      <table>
+        <caption>Bug Fix variants</caption>
+        <thead>
+          <tr>
+            <th scope="col">Variant</th>
+            <th scope="col">Workflow ID</th>
+            <th scope="col">Agents</th>
+            <th scope="col">Pipeline</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Local-only</td>
+            <td><code>bug-fix</code></td>
+            <td>5</td>
+            <td>triage → investigate → setup → fix → verify</td>
+          </tr>
+          <tr>
+            <td>+ Merge</td>
+            <td><code>bug-fix-merge</code></td>
+            <td>6</td>
+            <td>triage → investigate → setup → fix → verify → finalize_merge</td>
+          </tr>
+          <tr>
+            <td>Worktree</td>
+            <td><code>bug-fix-worktree</code></td>
+            <td>5</td>
+            <td>triage → investigate → setup → fix → verify</td>
+          </tr>
+          <tr>
+            <td>Worktree + Merge</td>
+            <td><code>bug-fix-merge-worktree</code></td>
+            <td>6</td>
+            <td>triage → investigate → setup → fix → verify → finalize_merge</td>
+          </tr>
+          <tr>
+            <td>GitHub PR</td>
+            <td><code>bug-fix-github-pr</code></td>
+            <td>6</td>
+            <td>triage → investigate → setup → fix → verify → pr</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>Security Audit</h3>
+      <p>Vulnerability scanning and patching. Scans for vulnerabilities, ranks by severity, patches each one, re-audits after all fixes are applied, and runs regression tests.</p>
+      <div class="table-wrapper" aria-label="Security Audit variants — horizontally scrollable" tabindex="0">
+      <table>
+        <caption>Security Audit variants</caption>
+        <thead>
+          <tr>
+            <th scope="col">Variant</th>
+            <th scope="col">Workflow ID</th>
+            <th scope="col">Agents</th>
+            <th scope="col">Pipeline</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Local-only</td>
+            <td><code>security-audit</code></td>
+            <td>6</td>
+            <td>scan → prioritize → setup → fix → verify → test</td>
+          </tr>
+          <tr>
+            <td>+ Merge</td>
+            <td><code>security-audit-merge</code></td>
+            <td>7</td>
+            <td>scan → prioritize → setup → fix → verify → test → finalize_merge</td>
+          </tr>
+          <tr>
+            <td>Worktree</td>
+            <td><code>security-audit-worktree</code></td>
+            <td>6</td>
+            <td>scan → prioritize → setup → fix → verify → test</td>
+          </tr>
+          <tr>
+            <td>Worktree + Merge</td>
+            <td><code>security-audit-merge-worktree</code></td>
+            <td>7</td>
+            <td>scan → prioritize → setup → fix → verify → test → finalize_merge</td>
+          </tr>
+          <tr>
+            <td>GitHub PR</td>
+            <td><code>security-audit-github-pr</code></td>
+            <td>7</td>
+            <td>scan → prioritize → setup → fix → verify → test → pr</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>Quick Tasks</h3>
+      <p>Single-agent workflows for quick one-off tasks and workflow auto-selection.</p>
+      <div class="table-wrapper" aria-label="Quick Tasks variants — horizontally scrollable" tabindex="0">
+      <table>
+        <caption>Quick Tasks variants</caption>
+        <thead>
+          <tr>
+            <th scope="col">Workflow ID</th>
+            <th scope="col">Agents</th>
+            <th scope="col">Pipeline</th>
+            <th scope="col">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>do-now</code></td>
+            <td>1</td>
+            <td>execute</td>
+            <td>Submit any task. Get back a success/failure report. No planning, no stories.</td>
+          </tr>
+          <tr>
+            <td><code>just-do-it</code></td>
+            <td>1</td>
+            <td>dispatch</td>
+            <td>Describe what you want. Dispatches to the most appropriate workflow automatically.</td>
+          </tr>
+          <tr>
+            <td><code>do-review-do-verify</code></td>
+            <td>3</td>
+            <td>do → review → do-again → verify</td>
+            <td>Two-pass execution: do the work, review it, revise, then verify the result.</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>Install all bundled workflows at once with:</p>
+      <pre><code>$ tamandua workflow install --all</code></pre>
+    </section>
+
+    <!-- Installation -->
+    <section id="install" class="section-reveal" aria-labelledby="install-heading">
+      <h2 id="install-heading">Installation</h2>
+
+      <div class="install-grid">
+        <div class="install-column">
+          <h3>Install from GitHub</h3>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/igorhvr/tamandua/main/scripts/install.sh | bash</code></pre>
+          <p>Or just tell your pi agent: <strong>"install github.com/igorhvr/tamandua"</strong></p>
+        </div>
+
+        <div class="install-column">
+          <h3>Install from Local Checkout</h3>
+          <pre><code>git clone https://github.com/igorhvr/tamandua.git
+cd tamandua
+./build-and-install</code></pre>
+          <p>Or step by step:</p>
+          <pre><code>./build        # npm install + tsc
+./install      # symlink into ~/.local/bin</code></pre>
+          <p>The <code>build</code> script handles everything: checks Node.js &gt;= 22, runs <code>npm install</code>, compiles TypeScript. The <code>install</code> script creates a symlink at <code>~/.local/bin/tamandua</code> pointed at your checkout — so you can keep the source wherever you like and <code>tamandua</code> stays in sync.</p>
+        </div>
+      </div>
+
+      <div class="install-prereqs">
+        <h3>Prerequisites</h3>
+        <ul>
+          <li>Node.js &gt;= 22</li>
+          <li><a href="https://github.com/mariozechner/pi-coding-agent">pi</a> installed on the host — Tamandua uses pi for AI agent execution</li>
+          <li><code>gh</code> CLI for PR creation steps</li>
+        </ul>
+        <p><strong>Not on npm.</strong> Tamandua is installed from source (or GitHub), not the npm registry.</p>
+      </div>
+    </section>
+
+    <!-- Why It Works -->
+    <section id="why-it-works" class="section-reveal" aria-labelledby="why-heading">
+      <h2 id="why-heading">Why It Works</h2>
+
+      <ol class="why-list">
+        <li>
+          <strong>Deterministic workflows</strong>
+          <p>Same workflow, same steps, same order. Not "hopefully the agent remembers to test."</p>
+        </li>
+        <li>
+          <strong>Agents verify each other</strong>
+          <p>The developer doesn't mark their own homework. A separate verifier checks every story against acceptance criteria.</p>
+        </li>
+        <li>
+          <strong>Fresh context, every step</strong>
+          <p>Each agent gets a clean session. No context window bloat. No hallucinated state from 50 messages ago.</p>
+        </li>
+        <li>
+          <strong>Retry and escalate</strong>
+          <p>Failed steps retry automatically. If retries exhaust, it escalates to you. Nothing fails silently.</p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- How It Works -->
+    <section id="how-it-works" class="section-reveal" aria-labelledby="how-heading">
+      <h2 id="how-heading">How It Works</h2>
+
+      <div class="architecture-flow" aria-label="Architecture flow: Define, Install, Run">
+        <div class="arch-step">
+          <span class="arch-number">1</span>
+          <strong>Define</strong>
+          <p>Agents and steps in YAML. Each agent gets a persona, workspace, and strict acceptance criteria. No ambiguity about who does what.</p>
+        </div>
+        <div class="arch-arrow" aria-hidden="true">→</div>
+        <div class="arch-step">
+          <span class="arch-number">2</span>
+          <strong>Install</strong>
+          <p>One command provisions everything: agent workspaces, polling, subagent permissions. No Docker, no queues, no external services.</p>
+        </div>
+        <div class="arch-arrow" aria-hidden="true">→</div>
+        <div class="arch-step">
+          <span class="arch-number">3</span>
+          <strong>Run</strong>
+          <p>Agents poll for work independently. Claim a step, do the work, pass context to the next agent. SQLite tracks state. The scheduler keeps it moving.</p>
+        </div>
+      </div>
+
+      <h3>Minimal by Design</h3>
+      <p>YAML + SQLite + polling. That's it. No Redis, no Kafka, no container orchestrator. Tamandua is a TypeScript CLI with zero external dependencies. It runs wherever pi runs.</p>
+
+      <h3>Quick Example</h3>
+      <pre><code>$ tamandua workflow install feature-dev
+
+# Or install all bundled workflows at once
+$ tamandua workflow install --all
+✓ Installed workflow: feature-dev
+
+$ tamandua workflow run feature-dev "Add user authentication with OAuth"
+Run: a1fdf573
+Workflow: feature-dev
+Status: running
+
+$ tamandua workflow status "OAuth"
+Run: a1fdf573
+Workflow: feature-dev
+Steps:
+  [done   ] plan (planner)
+  [done   ] setup (setup)
+  [running] implement (developer)  Stories: 3/7 done
+  [pending] verify (verifier)
+  [pending] test (tester)</code></pre>
+    </section>
+
+    <!-- Build Your Own -->
+    <section id="build-your-own" class="section-reveal" aria-labelledby="build-heading">
+      <h2 id="build-heading">Build Your Own</h2>
+
+      <p>The bundled workflows are starting points. Define your own agents, steps, retry logic, and verification gates in plain YAML and Markdown. If you can write a prompt, you can build a workflow.</p>
+
+      <h3>workflow.yml Example</h3>
+      <pre class="yaml-code"><code>id: my-workflow             # Required. Unique identifier (kebab-case)
+name: My Custom Workflow    # Optional. Human-readable name
+version: 1                  # Optional. Schema version
+description: |              # Optional. Free text — informational only
+  A workflow that does something useful.
+
+# Optional polling overrides applied to every agent's polling cron.
+polling:
+  model: default            # Optional. Override the polling model
+  timeoutSeconds: 120       # Optional. Polling-cron interval hint
+
+# Optional initial context.
+context:
+  some_key: some_value
+
+agents:
+  - id: planner               # Required.
+    name: Planner              # Optional.
+    role: analysis             # Optional.
+    workspace:
+      baseDir: agents/planner  # Required.
+      skills:                  # Optional.
+        - tamandua-agents
+      files:                   # Optional extra files.
+        EXTRA.md: agents/planner/EXTRA.md
+
+  - id: developer
+    name: Developer
+    role: coding
+    workspace:
+      baseDir: agents/developer
+
+steps:
+  - id: plan                   # Required.
+    agent: planner             # Required.
+    input: |                   # Required. Template.
+      Plan the implementation of {{task}}.
+      Output the stories as STORIES_JSON.
+      Reply with STATUS: done.
+    expects: "STATUS: done"    # Required.
+    max_retries: 4             # Optional. Default: 4.
+    on_fail:
+      escalate_to: human
+
+  - id: implement
+    agent: developer
+    type: loop                 # Optional. "single" (default) or "loop".
+    loop:
+      over: stories            # Required for loops.
+      completion: all_done     # Required for loops.
+      fresh_session: true      # Optional. New session per story.
+      verify_each: true        # Optional. Run verifyStep after each story.
+      verify_step: verify
+    input: |
+      Implement the current story.
+
+      CURRENT STORY:
+      {{current_story}}
+
+      Reply with STATUS: done.
+    expects: "STATUS: done"
+    max_retries: 4
+    on_fail:
+      on_exhausted:
+        escalate_to: human
+
+  - id: verify
+    agent: verifier
+    input: |
+      Verify {{current_story_title}} against acceptance criteria.
+      Reply with STATUS: done or STATUS: retry.
+    expects: "STATUS: done"</code></pre>
+
+      <p>Full guide: <a href="docs/creating-workflows.md">docs/creating-workflows.md</a></p>
+    </section>
+
+    <!-- Remote MCP -->
+    <section id="mcp" class="section-reveal" aria-labelledby="mcp-heading">
+      <h2 id="mcp-heading">Remote MCP Tools</h2>
+      <p>The remote MCP endpoint exposes 9 tools at <code>http://localhost:3338/mcp</code>:</p>
+
+      <h3>Run Management</h3>
+      <div class="table-wrapper" aria-label="Run Management MCP tools — horizontally scrollable" tabindex="0">
+      <table>
+        <caption>Run Management MCP tools</caption>
+        <thead>
+          <tr>
+            <th scope="col">Tool</th>
+            <th scope="col">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>tamandua.runs.list</code></td>
+            <td>List recent Tamandua workflow runs. Accepts optional <code>limit</code> (integer, 1–200, default 50).</td>
+          </tr>
+          <tr>
+            <td><code>tamandua.run.status</code></td>
+            <td>Fetch detailed status for a run. Requires <code>query</code> (run id, prefix, or task substring).</td>
+          </tr>
+          <tr>
+            <td><code>tamandua.run.start</code></td>
+            <td>Start a workflow run. Requires <code>workflowId</code> and <code>taskTitle</code>.</td>
+          </tr>
+          <tr>
+            <td><code>tamandua.run.pause</code></td>
+            <td>Pause a running workflow run. Requires <code>runId</code>. Optional <code>drain</code> (boolean) to wait for in-flight work before pausing.</td>
+          </tr>
+          <tr>
+            <td><code>tamandua.run.resume</code></td>
+            <td>Resume a paused workflow run. Requires <code>runId</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>Events &amp; Metadata</h3>
+      <div class="table-wrapper" aria-label="Events and Metadata MCP tools — horizontally scrollable" tabindex="0">
+      <table>
+        <caption>Events and Metadata MCP tools</caption>
+        <thead>
+          <tr>
+            <th scope="col">Tool</th>
+            <th scope="col">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>tamandua.events.recent</code></td>
+            <td>List recent global Tamandua events. Accepts optional <code>limit</code> (integer, 1–500, default 50).</td>
+          </tr>
+          <tr>
+            <td><code>tamandua.source.path</code></td>
+            <td>Return the local Tamandua source checkout path. No parameters.</td>
+          </tr>
+          <tr>
+            <td><code>tamandua.skill.path</code></td>
+            <td>Return the path to the bundled tamandua-agents agent skill. No parameters.</td>
+          </tr>
+          <tr>
+            <td><code>tamandua.update.command</code></td>
+            <td>Return local CLI guidance for updating Tamandua safely. No parameters.</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="dashboard" class="section-reveal" aria-labelledby="dashboard-heading">
+      <h2 id="dashboard-heading">Dashboard &amp; Kanban</h2>
+      <p>When you start the management dashboard (<code>tamandua dashboard</code>), Tamandua automatically starts the remote MCP server too.</p>
+      <ul>
+        <li>Dashboard: <code>http://localhost:3334</code></li>
+        <li>MCP endpoint: <code>http://localhost:3338/mcp</code> (fixed port)</li>
+      </ul>
+      <p>Use <code>tamandua dashboard status</code> to verify both endpoints are up.</p>
+
+      <figure class="screenshot">
+        <img src="assets/dashboard-screenshot.png" alt="Tamandua dashboard showing workflow runs, step progress, and token usage statistics" width="1440" height="900" loading="lazy">
+        <figcaption>The Tamandua dashboard at <code>http://localhost:3334</code> — real-time view of workflow runs, step status, and agent activity.</figcaption>
+      </figure>
+
+      <p>Each run also has a swim-lane Kanban view at <code>http://localhost:3334/runs/&lt;run-id&gt;/kanban</code>. Lanes are derived dynamically from the workflow's steps. Single steps render one card per lane; loop steps render one card per story. Cards are colour-coded by status (todo / running / done / failed).</p>
+
+      <figure class="screenshot">
+        <img src="assets/dashboard-kanban.png" alt="Tamandua kanban board showing swim-lane workflow step cards colour-coded by status" width="1440" height="900" loading="lazy">
+        <figcaption>Kanban swim-lane view — one card per step or story, colour-coded by status: todo, running, done, failed.</figcaption>
+      </figure>
+    </section>
+
+    <!-- Security -->
+    <section id="security" class="section-reveal" aria-labelledby="security-heading">
+      <h2 id="security-heading">Security</h2>
+      <p>You're installing agent teams that run code on your machine. We take that seriously.</p>
+      <ul>
+        <li><strong>Curated repo only</strong> — Tamandua only installs workflows from the official repository. No arbitrary remote sources.</li>
+        <li><strong>Reviewed for prompt injection</strong> — Every workflow is reviewed for prompt injection attacks and malicious agent files before merging.</li>
+        <li><strong>Community contributions welcome</strong> — Want to add a workflow? Submit a PR. All submissions go through careful security review before they ship.</li>
+        <li><strong>Transparent by default</strong> — Every workflow is plain YAML and Markdown. You can read exactly what each agent will do before you install it.</li>
+      </ul>
+    </section>
+
+  </main>
+
+  <footer>
+    <div class="footer-grid">
+      <div class="footer-col">
+        <h3>License</h3>
+        <p><a href="LICENSE">MIT</a></p>
+      </div>
+      <div class="footer-col">
+        <h3>Origins</h3>
+        <p>Tamandua began as a fork of <a href="https://github.com/snarktank/antfarm">antfarm</a> and pursues the same goal — orchestrating teams of AI agents through deterministic, repeatable workflows — but is built on top of <a href="https://github.com/mariozechner/pi-coding-agent">pi</a> instead of OpenClaw. Credit to the original authors for the design and inspiration.</p>
+      </div>
+      <div class="footer-col">
+        <h3>Links</h3>
+        <ul>
+          <li><a href="https://github.com/igorhvr/tamandua">GitHub</a></li>
+          <li><a href="docs/creating-workflows.md">Creating Workflows</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-branding">
+      <span class="footer-logo" aria-hidden="true">🦔</span>
+      <p class="footer-built">Built with Tamanduás in mind.</p>
+      <p class="footer-copyright">&copy; <span id="copyright-year">2026</span> Tamandua</p>
+    </div>
+  </footer>
+
+  <script src="scripts.js"></script>
+</body>
+</html>

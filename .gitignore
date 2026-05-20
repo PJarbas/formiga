@@ -1,20 +1,34 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# Environment
 .env
-*.db
-events.jsonl*
-tamandua.log*
-test-output.log
-medic.json
-.tamandua-pid
+.env.local
+.env.*.local
+
+# Secrets
 *.key
 *.pem
 *.secret
-*.swp
-.DS_Store
+
+# Coverage
 coverage/
 .nyc_output/
-.env.local
-.env.*.local
-e2e-smoke-test-output.log
-e2e-test-output.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
