@@ -62,8 +62,16 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$REPO_DIR/bin/tamandua" "$HOME/.local/bin/tamandua"
 chmod +x "$HOME/.local/bin/tamandua"
 
+# Install bundled workflows
+set +e
+"$HOME/.local/bin/tamandua" workflow install --all 2>&1
+WF_INSTALL_EXIT=$?
+set -e
+
 echo ""
 echo "Tamandua installed successfully!"
-echo "Run: tamandua get-ready"
+if [ $WF_INSTALL_EXIT -ne 0 ]; then
+  echo "Warning: workflow installation failed (exit $WF_INSTALL_EXIT)"
+fi
 echo ""
 echo "Make sure ~/.local/bin is in your PATH if not already."
