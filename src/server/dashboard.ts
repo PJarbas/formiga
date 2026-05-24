@@ -373,7 +373,7 @@ async function handleResumeRun(
       return;
     }
 
-    if (result.status === 200) {
+    if (result.status === 200 || result.status === 202) {
       jsonResponse(res, { resumed: true, runId });
       return;
     }

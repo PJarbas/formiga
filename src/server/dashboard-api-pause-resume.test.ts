@@ -264,6 +264,54 @@ describe("dashboard pause/resume API", () => {
     }
   });
 
+  it("POST /api/runs/:id/resume returns 200 when daemon responds with 202 (queued)", async () => {
+    await stopMockControl(controlMock);
+    // Create a mock returning 202 for resume (simulating admitOrQueueRun queued response)
+    const mock202 = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+      req.on("end", () => {
+        const parsed = body ? JSON.parse(body) : {};
+        res.setHeader("Content-Type", "application/json");
+        if (req.url === "/control/resume-run" && req.method === "POST") {
+          res.writeHead(202);
+          res.end(JSON.stringify({ state: "queued", runId: parsed.runId }));
+        } else {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: "not found" }));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => mock202.listen(controlPort, resolve));
+
+    process.env.TAMANDUA_DB_PATH = dbPath;
+    initDb(dbPath, [
+      { id: "run-resume-202", workflow_id: "wf-a", task: "test", status: "paused" },
+    ]);
+
+    const { server, baseUrl } = await startDashboardOnPort(0);
+
+    try {
+      const response = await fetch(`${baseUrl}/api/runs/run-resume-202/resume`, {
+        method: "POST",
+      });
+      assert.equal(response.status, 200);
+      const body = await response.json() as { resumed: boolean; runId: string };
+      assert.equal(body.resumed, true);
+      assert.equal(body.runId, "run-resume-202");
+    } finally {
+      await stopDashboard(server);
+      delete process.env.TAMANDUA_DB_PATH;
+      await stopMockControl(mock202);
+      // Re-bind default control mock for subsequent tests
+      controlMock = http.createServer((_req, res) => {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: "mock not configured" }));
+      });
+      await new Promise<void>((resolve) => controlMock.listen(controlPort, resolve));
+    }
+  });
+
   it("POST /api/runs/:id/resume returns 409 for a non-paused run", async () => {
     process.env.TAMANDUA_DB_PATH = dbPath;
     initDb(dbPath, [
