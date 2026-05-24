@@ -510,6 +510,97 @@ describe("runWorkflow", () => {
       assert.equal(ctx.harness_type, "pi");
     });
 
+    // ── base_branch_sha context tests ──
+
+    it("stores base_branch_sha from git rev-parse for direct mode", async () => {
+      const workflowId = "test-ctx-bbsha-direct";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      const repoDir = path.join(tempHome, "test-repo-direct");
+      initGitRepo(repoDir);
+
+      try {
+        await runWorkflow({
+          workflowId,
+          taskTitle: "Test base_branch_sha in direct mode",
+          workingDirectoryForHarness: repoDir,
+        });
+      } catch {
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
+      }
+
+      const { getDb } = await import("../../dist/db.js");
+      const db = getDb();
+      const rows = db.prepare(
+        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).all(workflowId) as { context: string }[];
+      assert.ok(rows.length > 0, "run record should exist");
+      const ctx = JSON.parse(rows[0].context);
+      assert.ok(ctx.base_branch_sha, "base_branch_sha should be present");
+      assert.equal(typeof ctx.base_branch_sha, "string");
+      assert.ok(ctx.base_branch_sha.length === 40, "base_branch_sha should be a full 40-char SHA");
+      assert.match(ctx.base_branch_sha, /^[0-9a-f]{40}$/);
+    });
+
+    it("stores base_branch_sha from worktree origin SHA for worktree mode", async () => {
+      const workflowId = "test-ctx-bbsha-wt";
+      writeMinimalWorkflow(tempHome, workflowId, "worktree");
+      const originDir = path.join(tempHome, "test-origin-wt");
+      initGitRepo(originDir);
+
+      try {
+        await runWorkflow({
+          workflowId,
+          taskTitle: "Test base_branch_sha in worktree mode",
+          worktreeOriginRepository: originDir,
+        });
+      } catch {
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
+      }
+
+      const { getDb } = await import("../../dist/db.js");
+      const db = getDb();
+      const rows = db.prepare(
+        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).all(workflowId) as { context: string }[];
+      assert.ok(rows.length > 0, "run record should exist");
+      const ctx = JSON.parse(rows[0].context);
+      assert.ok(ctx.base_branch_sha, "base_branch_sha should be present");
+      assert.equal(typeof ctx.base_branch_sha, "string");
+      assert.ok(ctx.base_branch_sha.length === 40, "base_branch_sha should be a full 40-char SHA");
+      assert.equal(ctx.base_branch_sha, ctx.worktree_origin_sha,
+        "base_branch_sha must equal worktree_origin_sha in worktree mode");
+    });
+
+    it("stores base_branch_sha as empty string when git rev-parse fails in direct mode", async () => {
+      const workflowId = "test-ctx-bbsha-empty";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-non-git-sha-"));
+
+      try {
+        try {
+          await runWorkflow({
+            workflowId,
+            taskTitle: "Test base_branch_sha empty on git failure",
+            workingDirectoryForHarness: nonGitDir,
+          });
+        } catch {
+          // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
+        }
+
+        const { getDb } = await import("../../dist/db.js");
+        const db = getDb();
+        const rows = db.prepare(
+          "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+        ).all(workflowId) as { context: string }[];
+        assert.ok(rows.length > 0, "run record should exist");
+        const ctx = JSON.parse(rows[0].context);
+        assert.equal(ctx.base_branch_sha, "",
+          "base_branch_sha should be empty string when git rev-parse fails");
+      } finally {
+        fs.rmSync(nonGitDir, { recursive: true, force: true });
+      }
+    });
+
     it("stores harness_type alongside other context fields", async () => {
       const workflowId = "test-ctx-harness-combined";
       writeMinimalWorkflow(tempHome, workflowId, "direct");
@@ -536,6 +627,55 @@ describe("runWorkflow", () => {
       assert.equal(ctx.no_hurry_save_tokens_mode, "true");
       assert.equal(ctx.task, "Test harness with other context");
       assert.equal(ctx.workspace_mode, "direct");
+    });
+
+    it("stores no_relaunch_upon_rugpull as 'true' when flag is set", async () => {
+      const workflowId = "test-ctx-norelaunch";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+
+      try {
+        await runWorkflow({
+          workflowId,
+          taskTitle: "Test no_relaunch_upon_rugpull context",
+          noRelaunchUponRugpull: true,
+        });
+      } catch {
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
+      }
+
+      const { getDb } = await import("../../dist/db.js");
+      const db = getDb();
+      const rows = db.prepare(
+        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).all(workflowId) as { context: string }[];
+      assert.ok(rows.length > 0, "run record should exist");
+      const ctx = JSON.parse(rows[0].context);
+      assert.equal(ctx.no_relaunch_upon_rugpull, "true",
+        "no_relaunch_upon_rugpull should be 'true' when flag is set");
+    });
+
+    it("stores no_relaunch_upon_rugpull as 'false' when flag is not set", async () => {
+      const workflowId = "test-ctx-norelaunch-default";
+      writeMinimalWorkflow(tempHome, workflowId, "direct");
+
+      try {
+        await runWorkflow({
+          workflowId,
+          taskTitle: "Test no_relaunch_upon_rugpull default",
+        });
+      } catch {
+        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
+      }
+
+      const { getDb } = await import("../../dist/db.js");
+      const db = getDb();
+      const rows = db.prepare(
+        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
+      ).all(workflowId) as { context: string }[];
+      assert.ok(rows.length > 0, "run record should exist");
+      const ctx = JSON.parse(rows[0].context);
+      assert.equal(ctx.no_relaunch_upon_rugpull, "false",
+        "no_relaunch_upon_rugpull should default to 'false' when flag is not set");
     });
   });
 });

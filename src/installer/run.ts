@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getDb, nextRunNumber } from "../db.js";
@@ -33,6 +34,8 @@ export interface RunWorkflowParams {
   noHurrySaveTokensMode?: boolean;
   /** Harness binary to use for agent invocations (default "pi") */
   harnessType?: HarnessType;
+  /** When true, suppresses automatic replacement-run launch after a rugpull is detected */
+  noRelaunchUponRugpull?: boolean;
 }
 
 export interface RunWorkflowResult {
@@ -67,6 +70,7 @@ export async function runWorkflow(
     worktreeOriginRef,
     noHurrySaveTokensMode,
     harnessType,
+    noRelaunchUponRugpull,
   } = params;
 
   // Load the workflow spec from the installed workflow directory
@@ -92,6 +96,7 @@ export async function runWorkflow(
     workspace_mode: workspaceMode,
     no_hurry_save_tokens_mode: String(noHurrySaveTokensMode ?? false),
     harness_type: harnessType ?? "pi",
+    no_relaunch_upon_rugpull: String(noRelaunchUponRugpull ?? false),
   };
 
   if (workspaceMode === "direct") {
@@ -151,6 +156,22 @@ export async function runWorkflow(
     throw new Error(
       `Invalid run.workspace value: "${workspaceMode}". Expected "direct" or "worktree".`,
     );
+  }
+
+  // Store base branch SHA for rugpull detection — captured at run creation time
+  // so downstream detection can compare against current tip after failure.
+  if (workspaceMode === "worktree") {
+    seededContext.base_branch_sha = seededContext.worktree_origin_sha;
+  } else {
+    try {
+      seededContext.base_branch_sha = execFileSync(
+        "git",
+        ["rev-parse", "HEAD"],
+        { cwd: workingDirectoryForHarness, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      ).trim();
+    } catch {
+      seededContext.base_branch_sha = "";
+    }
   }
 
   let workingDirectoryStats;

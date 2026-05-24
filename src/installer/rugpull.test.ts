@@ -1,0 +1,1271 @@
+import { describe, it, before, after } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import http from "node:http";
+import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
+
+// ── Event helper ──
+
+function readEventsForRun(
+  stateDir: string,
+  runId: string,
+): Array<Record<string, unknown>> {
+  const eventsFile = path.join(stateDir, "events", `${runId}.jsonl`);
+  try {
+    const content = fs.readFileSync(eventsFile, "utf-8");
+    return content
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  } catch {
+    return [];
+  }
+}
+
+async function waitForRugpullEvents(
+  stateDir: string,
+  runId: string,
+  maxWaitMs = 3000,
+): Promise<Array<Record<string, unknown>>> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const events = readEventsForRun(stateDir, runId);
+    const rugpullEvents = events.filter(
+      (e) =>
+        e.event === "run.rugpull_detected" ||
+        e.event === "run.rugpull_relaunched",
+    );
+    if (rugpullEvents.length > 0) return rugpullEvents;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return [];
+}
+
+// ── Helpers ──
+
+function runGit(args: string[], cwd: string): string | null {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status !== 0) return null;
+  return (result.stdout ?? "").trim();
+}
+
+function initGitRepo(dir: string): string {
+  fs.mkdirSync(dir, { recursive: true });
+  runGit(["init", "--initial-branch=main"], dir);
+  runGit(["config", "user.email", "test@tamandua.local"], dir);
+  runGit(["config", "user.name", "Tamandua Test"], dir);
+  fs.writeFileSync(path.join(dir, "README.md"), "# Test Repo\n", "utf-8");
+  runGit(["add", "README.md"], dir);
+  runGit(["commit", "-m", "initial commit"], dir);
+  const sha = runGit(["rev-parse", "HEAD"], dir);
+  assert.ok(sha, "initial commit SHA must exist");
+  return sha;
+}
+
+function makeCommit(dir: string, message: string): string {
+  fs.writeFileSync(
+    path.join(dir, "counter.txt"),
+    String(Date.now()),
+    "utf-8",
+  );
+  runGit(["add", "counter.txt"], dir);
+  runGit(["commit", "-m", message], dir);
+  const sha = runGit(["rev-parse", "HEAD"], dir);
+  assert.ok(sha, "commit SHA must exist");
+  return sha;
+}
+
+function insertRun(
+  db: ReturnType<typeof import("../../dist/db.js")["getDb"]>,
+  runId: string,
+  workflowId: string,
+  context: Record<string, string>,
+  status: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+     VALUES (?, 1, ?, 'test', ?, ?, 0, ?, ?)`,
+  ).run(runId, workflowId, status, JSON.stringify(context), now, now);
+}
+
+function insertStep(
+  db: ReturnType<typeof import("../../dist/db.js")["getDb"]>,
+  stepId: string,
+  runId: string,
+  stepNameId: string,
+  status: string,
+  stepIndex: number,
+  type: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, created_at, updated_at)
+     VALUES (?, ?, ?, 'dev', ?, 'input', 'STATUS', ?, 0, 4, ?, ?, ?)`,
+  ).run(stepId, runId, stepNameId, stepIndex, status, type, now, now);
+}
+
+function insertWorktree(
+  db: ReturnType<typeof import("../../dist/db.js")["getDb"]>,
+  runId: string,
+  originRepo: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO run_worktrees (run_id, worktree_origin_repository, worktree_origin_git_common_dir, worktree_path, worktree_origin_sha, status, cleanup_policy, created_at)
+     VALUES (?, ?, ?, ?, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 'creating', 'remove_on_success', ?)`,
+  ).run(runId, originRepo, path.join(originRepo, ".git"), path.join(originRepo, "wt"), now);
+}
+
+// ── Test suite ──
+
+describe("detectRugpull", () => {
+  let tempHome: string;
+  let repoDir: string;
+  let initialSha: string;
+  let origHome: string | undefined;
+  let origDbPath: string | undefined;
+  let origStateDir: string | undefined;
+
+  before(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-rugpull-"));
+    origHome = process.env.HOME;
+    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origStateDir = process.env.TAMANDUA_STATE_DIR;
+
+    const tamanduaDir = path.join(tempHome, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+    process.env.HOME = tempHome;
+    process.env.TAMANDUA_DB_PATH = path.join(tamanduaDir, "tamandua.db");
+    process.env.TAMANDUA_STATE_DIR = tamanduaDir;
+
+    // Create a git repo for direct-mode tests
+    repoDir = path.join(tempHome, "test-repo");
+    initialSha = initGitRepo(repoDir);
+  });
+
+  after(() => {
+    if (origHome !== undefined) {
+      process.env.HOME = origHome;
+    } else {
+      delete process.env.HOME;
+    }
+    if (origDbPath !== undefined) {
+      process.env.TAMANDUA_DB_PATH = origDbPath;
+    } else {
+      delete process.env.TAMANDUA_DB_PATH;
+    }
+    if (origStateDir !== undefined) {
+      process.env.TAMANDUA_STATE_DIR = origStateDir;
+    } else {
+      delete process.env.TAMANDUA_STATE_DIR;
+    }
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("returns isRugpull=true for merge workflow with moved base branch (direct mode)", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    // Make a second commit so HEAD differs from initialSha
+    const newSha = makeCommit(repoDir, "second commit");
+    assert.notEqual(newSha, initialSha, "new commit must differ from initial");
+
+    const runId = "run-rugpull-direct-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      base_branch_sha: initialSha,
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, true, "should detect rugpull");
+    assert.ok(result.reason?.includes("moved"), "reason should mention base moved");
+  });
+
+  it("returns isRugpull=true for merge-worktree workflow with moved base branch", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    // Create a separate origin repo for worktree test
+    const originDir = path.join(tempHome, "test-origin-wt-rugpull");
+    const originInitialSha = initGitRepo(originDir);
+    // Move it forward
+    const newSha = makeCommit(originDir, "second commit in origin");
+    assert.notEqual(newSha, originInitialSha);
+
+    const runId = "run-rugpull-wt-01";
+    insertRun(db, runId, "bug-fix-merge-worktree", {
+      repo: path.join(originDir, "wt"),
+      working_directory_for_harness: path.join(originDir, "wt"),
+      base_branch_sha: originInitialSha,
+      workspace_mode: "worktree",
+      worktree_path: path.join(originDir, "wt"),
+      worktree_origin_repository: originDir,
+      worktree_origin_sha: originInitialSha,
+    }, "failed");
+    insertStep(db, "step-wt-01", runId, "finalize_merge", "failed", 0, "single");
+    insertWorktree(db, runId, originDir);
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, true, "should detect rugpull for worktree mode");
+  });
+
+  it("returns isRugpull=false for non-merge workflows", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-non-merge-01";
+    insertRun(db, runId, "security-audit", {
+      repo: repoDir,
+      base_branch_sha: initialSha,
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-nm-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, false, "non-merge workflow should not be rugpull");
+    assert.ok(result.reason?.includes("not a merge workflow"), "reason should explain");
+  });
+
+  it("returns isRugpull=false when base SHA has not moved", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    // Use a fresh repo so HEAD matches the recorded base_branch_sha exactly
+    const freshDir = path.join(tempHome, "test-repo-sha-same");
+    const currentSha = initGitRepo(freshDir);
+
+    const runId = "run-sha-same-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: freshDir,
+      working_directory_for_harness: freshDir,
+      base_branch_sha: currentSha,
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-same-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, false, "unchanged base should not be rugpull");
+    assert.ok(result.reason?.includes("not changed"), "reason should mention SHA unchanged");
+  });
+
+  it("returns isRugpull=false when failing step is not finalize_merge", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-not-finalize-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      base_branch_sha: initialSha,
+      workspace_mode: "direct",
+    }, "failed");
+    // Failed step is "plan", not "finalize_merge"
+    insertStep(db, "step-nf-01", runId, "plan", "failed", 0, "single");
+
+    // Also add a passing finalize_merge to ensure we're checking only failed ones
+    insertStep(db, "step-nf-02", runId, "finalize_merge", "done", 1, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, false, "non-finalize_merge failure should not be rugpull");
+    assert.ok(result.reason?.includes("No failed finalize_merge"), "reason should explain");
+  });
+
+  it("returns isRugpull=false when base_branch_sha is missing from context", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-no-sha-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      // no base_branch_sha
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-ns-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, false, "missing SHA should not be rugpull");
+    assert.ok(result.reason?.includes("Missing base_branch_sha"), "reason should explain");
+  });
+
+  it("returns isRugpull=false when base_branch_sha is empty string", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-empty-sha-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      base_branch_sha: "",
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-es-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, false, "empty SHA should not be rugpull");
+    assert.ok(result.reason?.includes("Missing base_branch_sha"), "reason should explain");
+  });
+
+  it("returns isRugpull=false when run does not exist", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+
+    // No DB rows inserted — run should not be found
+    const result = detectRugpull("nonexistent-run-id");
+    assert.equal(result.isRugpull, false, "nonexistent run should not be rugpull");
+    assert.equal(result.reason, "Run not found");
+  });
+
+  it("handles merge workflows that end with '-merge' but not '-merge-worktree'", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-plain-merge-01";
+    // Use a pre-committed SHA so the new commit is newer
+    const shaBeforeCommit = runGit(["rev-parse", "HEAD"], repoDir);
+    const newSha = makeCommit(repoDir, "plain merge test commit");
+    assert.notEqual(newSha, shaBeforeCommit);
+
+    insertRun(db, runId, "some-custom-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      base_branch_sha: shaBeforeCommit!,
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-pm-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, true,
+      "workflows ending in '-merge' (but not '-merge-worktree') should still be detected");
+  });
+
+  it("handles workflows that end in '-merge-worktree'", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-mwt-01";
+    const shaBefore = runGit(["rev-parse", "HEAD"], repoDir);
+    const newSha = makeCommit(repoDir, "merge-worktree test commit");
+    assert.notEqual(newSha, shaBefore);
+
+    insertRun(db, runId, "feature-dev-merge-worktree", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      base_branch_sha: shaBefore!,
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-mwt-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, true,
+      "merge-worktree workflows should be detected");
+  });
+
+  it("handles failed run with multiple steps and finalize_merge among them", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const shaBefore = runGit(["rev-parse", "HEAD"], repoDir);
+    const newSha = makeCommit(repoDir, "multi-step test");
+    assert.notEqual(newSha, shaBefore);
+
+    const runId = "run-multi-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      base_branch_sha: shaBefore!,
+      workspace_mode: "direct",
+    }, "failed");
+    // Multiple steps — finalize_merge is the one that failed
+    insertStep(db, "step-m-plan", runId, "plan", "done", 0, "single");
+    insertStep(db, "step-m-setup", runId, "setup", "done", 1, "single");
+    insertStep(db, "step-m-implement", runId, "implement", "done", 2, "loop");
+    insertStep(db, "step-m-final", runId, "finalize_merge", "failed", 3, "single");
+    insertStep(db, "step-m-verify", runId, "verify", "waiting", 4, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, true,
+      "should find the failed finalize_merge step among other steps");
+  });
+
+  it("returns isRugpull=false for workflow ending with '-merge-substring' but not '-merge'", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    // "some-merge-helper" ends with "-helper", not "-merge" or "-merge-worktree"
+    const runId = "run-merge-substr-01";
+    insertRun(db, runId, "some-merge-helper", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      base_branch_sha: initialSha,
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-ms-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, false,
+      "workflows with '-merge' as substring but not suffix should not be detected");
+    assert.ok(result.reason?.includes("not a merge workflow"), "reason should explain");
+  });
+
+  it("returns isRugpull=false for worktree mode when worktree record is missing", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-wt-missing-01";
+    insertRun(db, runId, "feature-dev-merge-worktree", {
+      workspace_mode: "worktree",
+      base_branch_sha: "abc123def456789",
+    }, "failed");
+    insertStep(db, "step-wtm-01", runId, "finalize_merge", "failed", 0, "single");
+    // No worktree row inserted — detectRugpull should handle this gracefully
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, false,
+      "missing worktree record should not be a rugpull");
+    assert.ok(result.reason?.includes("Worktree record not found"), "reason should explain");
+  });
+
+  it("includes reason with SHA abbreviation in rugpull result", async () => {
+    const { detectRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const shaBefore = runGit(["rev-parse", "HEAD"], repoDir);
+    const newSha = makeCommit(repoDir, "reason test");
+    assert.notEqual(newSha, shaBefore);
+
+    const runId = "run-reason-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      base_branch_sha: shaBefore!,
+      workspace_mode: "direct",
+    }, "failed");
+    insertStep(db, "step-r-01", runId, "finalize_merge", "failed", 0, "single");
+
+    const result = detectRugpull(runId);
+    assert.equal(result.isRugpull, true);
+    assert.ok(result.reason, "reason should be set");
+    assert.ok(result.reason.includes(shaBefore!.slice(0, 7)), "reason should include old SHA prefix");
+    assert.ok(result.reason.includes(newSha.slice(0, 7)), "reason should include new SHA prefix");
+  });
+});
+
+// ── Helpers for relaunch tests ──
+
+function writeWorkflowYml(
+  homeDir: string,
+  workflowId: string,
+  workspaceMode: "direct" | "worktree",
+): void {
+  const workflowDir = path.join(homeDir, ".tamandua", "workflows", workflowId);
+  fs.mkdirSync(workflowDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(workflowDir, "workflow.yml"),
+    `id: ${workflowId}\nrun:\n  workspace: ${workspaceMode}\nagents:\n  - id: dev\n    model: fake\n    workspace:\n      baseDir: .\nsteps:\n  - id: implement\n    agent: dev\n    input: Implement the task\n    expects: STATUS, CHANGES, TESTS\n`,
+    "utf-8",
+  );
+}
+
+describe("relaunchRunAfterRugpull", () => {
+  let tempHome: string;
+  let repoDir: string;
+  let controlPort: number;
+  let mockServer: http.Server;
+  let origHome: string | undefined;
+  let origControlPort: string | undefined;
+  let origDbPath: string | undefined;
+  let origStateDir: string | undefined;
+  let origWorktreeRoot: string | undefined;
+
+  before(async () => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-relaunch-"));
+    origHome = process.env.HOME;
+    origControlPort = process.env.TAMANDUA_CONTROL_PORT;
+    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origStateDir = process.env.TAMANDUA_STATE_DIR;
+    origWorktreeRoot = process.env.TAMANDUA_WORKTREE_ROOT;
+
+    const tamanduaDir = path.join(tempHome, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+
+    process.env.HOME = tempHome;
+    process.env.TAMANDUA_DB_PATH = path.join(tamanduaDir, "tamandua.db");
+    process.env.TAMANDUA_STATE_DIR = tamanduaDir;
+    process.env.TAMANDUA_WORKTREE_ROOT = path.join(tamanduaDir, "worktrees");
+
+    // Start a mock daemon control server that responds 200 to all requests.
+    // This is shared across all tests so runWorkflow can register runs successfully.
+    controlPort = await new Promise<number>((resolve) => {
+      mockServer = http.createServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+      mockServer.listen(0, "127.0.0.1", () => {
+        const addr = mockServer.address();
+        assert.ok(addr && typeof addr !== "string");
+        resolve(addr.port);
+      });
+    });
+    process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
+
+    // Create a git repo for direct-mode tests
+    repoDir = path.join(tempHome, "test-repo");
+    initGitRepo(repoDir);
+  });
+
+  after(async () => {
+    if (mockServer) {
+      await new Promise<void>((resolve) => mockServer.close(() => resolve()));
+    }
+    if (origHome !== undefined) {
+      process.env.HOME = origHome;
+    } else {
+      delete process.env.HOME;
+    }
+    if (origControlPort !== undefined) {
+      process.env.TAMANDUA_CONTROL_PORT = origControlPort;
+    } else {
+      delete process.env.TAMANDUA_CONTROL_PORT;
+    }
+    if (origDbPath !== undefined) {
+      process.env.TAMANDUA_DB_PATH = origDbPath;
+    } else {
+      delete process.env.TAMANDUA_DB_PATH;
+    }
+    if (origStateDir !== undefined) {
+      process.env.TAMANDUA_STATE_DIR = origStateDir;
+    } else {
+      delete process.env.TAMANDUA_STATE_DIR;
+    }
+    if (origWorktreeRoot !== undefined) {
+      process.env.TAMANDUA_WORKTREE_ROOT = origWorktreeRoot;
+    } else {
+      delete process.env.TAMANDUA_WORKTREE_ROOT;
+    }
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("suppresses launch when no_relaunch_upon_rugpull is 'true'", async () => {
+    const { relaunchRunAfterRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-suppress-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      no_relaunch_upon_rugpull: "true",
+    }, "failed");
+
+    const result = await relaunchRunAfterRugpull(runId);
+    assert.equal(result.relaunched, false, "should suppress launch");
+    assert.equal(result.newRunId, undefined, "no new run ID should be set");
+
+    // Verify suppression event was emitted
+    const events = readEventsForRun(
+      process.env.TAMANDUA_STATE_DIR!,
+      runId,
+    );
+    const relaunchEvents = events.filter(
+      (e) => e.event === "run.rugpull_relaunched",
+    );
+    assert.equal(relaunchEvents.length, 1, "should emit one suppression event");
+    assert.ok(
+      String(relaunchEvents[0].detail).includes("suppressed"),
+      "event detail should mention suppression",
+    );
+  });
+
+  it("returns relaunched=false for nonexistent run", async () => {
+    const { relaunchRunAfterRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+
+    const result = await relaunchRunAfterRugpull("nonexistent-run-id");
+    assert.equal(result.relaunched, false);
+    assert.equal(result.newRunId, undefined);
+  });
+
+  it("returns relaunched=false when working_directory_for_harness is missing (direct mode)", async () => {
+    const { relaunchRunAfterRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-no-wd-01";
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      // no working_directory_for_harness
+      workspace_mode: "direct",
+    }, "failed");
+
+    const result = await relaunchRunAfterRugpull(runId);
+    assert.equal(result.relaunched, false, "should not relaunch without working dir");
+  });
+
+  it("returns relaunched=false when worktree_origin_repository is missing (worktree mode)", async () => {
+    const { relaunchRunAfterRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = "run-no-wtorigin-01";
+    insertRun(db, runId, "feature-dev-merge-worktree", {
+      workspace_mode: "worktree",
+      // no worktree_origin_repository
+      worktree_path: path.join(repoDir, "wt"),
+    }, "failed");
+
+    const result = await relaunchRunAfterRugpull(runId);
+    assert.equal(result.relaunched, false, "should not relaunch without origin repo");
+  });
+
+  it("launches replacement run in direct mode with same workflow_id and task", async () => {
+    const workflowId = "test-relaunch-direct";
+    writeWorkflowYml(tempHome, workflowId, "direct");
+
+    const { relaunchRunAfterRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const failedRunId = crypto.randomUUID();
+    insertRun(db, failedRunId, workflowId, {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      harness_type: "pi",
+      no_hurry_save_tokens_mode: "false",
+    }, "failed");
+
+    const result = await relaunchRunAfterRugpull(failedRunId);
+    assert.equal(result.relaunched, true, "should relaunch");
+    assert.ok(result.newRunId, "new run ID should be set");
+    assert.notEqual(result.newRunId, failedRunId, "new run ID must differ from failed");
+
+    // Verify the original run is still "failed" (preserved unchanged)
+    const originalRun = db
+      .prepare("SELECT status FROM runs WHERE id = ?")
+      .get(failedRunId) as { status: string } | undefined;
+    assert.ok(originalRun, "original run must still exist");
+    assert.equal(originalRun.status, "failed", "original run status must be preserved");
+
+    // Verify the new run exists with correct workflow_id and task
+    const newRun = db
+      .prepare("SELECT workflow_id, task, status FROM runs WHERE id = ?")
+      .get(result.newRunId!) as
+      | { workflow_id: string; task: string; status: string }
+      | undefined;
+    assert.ok(newRun, "new run must exist");
+    assert.equal(newRun.workflow_id, workflowId, "new run must have same workflow_id");
+    assert.equal(newRun.task, "test", "new run must have same task");
+    assert.equal(newRun.status, "running", "new run must be running");
+
+    // Verify relaunch event was emitted on the failed run
+    const events = readEventsForRun(
+      process.env.TAMANDUA_STATE_DIR!,
+      failedRunId,
+    );
+    const relaunchEvents = events.filter(
+      (e) => e.event === "run.rugpull_relaunched",
+    );
+    assert.equal(relaunchEvents.length, 1, "should emit relaunch event");
+    assert.ok(
+      String(relaunchEvents[0].detail).includes(result.newRunId!),
+      "event detail should include new run ID",
+    );
+  });
+
+  it("launches replacement run in worktree mode with fresh worktree", async () => {
+    const workflowId = "test-relaunch-worktree";
+    writeWorkflowYml(tempHome, workflowId, "worktree");
+
+    const { relaunchRunAfterRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const failedRunId = crypto.randomUUID();
+    insertRun(db, failedRunId, workflowId, {
+      workspace_mode: "worktree",
+      worktree_origin_repository: repoDir,
+      worktree_origin_ref: "main",
+      worktree_path: path.join(repoDir, "wt-old"),
+      worktree_origin_sha: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      harness_type: "pi",
+      no_hurry_save_tokens_mode: "false",
+    }, "failed");
+
+    // Also insert a worktree record for the failed run (simulating the original)
+    insertWorktree(db, failedRunId, repoDir);
+
+    const result = await relaunchRunAfterRugpull(failedRunId);
+    assert.equal(result.relaunched, true, "should relaunch worktree workflow");
+    assert.ok(result.newRunId, "new run ID should be set");
+    assert.notEqual(result.newRunId, failedRunId, "new run ID must differ from failed");
+
+    // Verify the original run is still "failed"
+    const originalRun = db
+      .prepare("SELECT status FROM runs WHERE id = ?")
+      .get(failedRunId) as { status: string } | undefined;
+    assert.ok(originalRun);
+    assert.equal(originalRun.status, "failed");
+
+    // Verify the new run exists
+    const newRun = db
+      .prepare("SELECT workflow_id, task, status FROM runs WHERE id = ?")
+      .get(result.newRunId!) as
+      | { workflow_id: string; task: string; status: string }
+      | undefined;
+    assert.ok(newRun, "new run must exist");
+    assert.equal(newRun.workflow_id, workflowId);
+
+    // Verify a NEW worktree record was created (different from the failed run's)
+    const newWt = db
+      .prepare("SELECT worktree_path FROM run_worktrees WHERE run_id = ?")
+      .get(result.newRunId!) as { worktree_path: string } | undefined;
+    assert.ok(newWt, "new worktree record must exist");
+    // The new worktree path should be different from the old one
+    assert.notEqual(
+      newWt.worktree_path,
+      path.join(repoDir, "wt-old"),
+      "new worktree must have a different path from the failed run's worktree",
+    );
+
+    // Verify relaunch event
+    const events = readEventsForRun(
+      process.env.TAMANDUA_STATE_DIR!,
+      failedRunId,
+    );
+    const relaunchEvents = events.filter(
+      (e) => e.event === "run.rugpull_relaunched",
+    );
+    assert.equal(relaunchEvents.length, 1, "should emit relaunch event");
+  });
+
+  it("preserves original failed run context unchanged after relaunch", async () => {
+    const workflowId = "test-preserve-context";
+    writeWorkflowYml(tempHome, workflowId, "direct");
+
+    const { relaunchRunAfterRugpull } = await import(
+      "../../dist/installer/rugpull.js"
+    );
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const originalContext = {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      harness_type: "hermes",
+      no_hurry_save_tokens_mode: "true",
+      base_branch_sha: "abc123def456",
+      custom_field: "custom_value",
+    };
+
+    const failedRunId = crypto.randomUUID();
+    insertRun(db, failedRunId, workflowId, originalContext, "failed");
+
+    await relaunchRunAfterRugpull(failedRunId);
+
+    // Verify original run context is unchanged
+    const run = db
+      .prepare("SELECT context, status FROM runs WHERE id = ?")
+      .get(failedRunId) as { context: string; status: string } | undefined;
+    assert.ok(run);
+    assert.equal(run.status, "failed", "original run status preserved");
+
+    const parsedContext = JSON.parse(run.context) as Record<string, string>;
+    assert.equal(parsedContext.custom_field, "custom_value", "custom fields preserved");
+    assert.equal(parsedContext.harness_type, "hermes", "harness type preserved");
+    assert.equal(parsedContext.base_branch_sha, "abc123def456", "base_branch_sha preserved");
+  });
+});
+
+// ── failStep rugpull integration tests (US-005) ──
+
+describe("failStep rugpull integration", () => {
+  let tempHome: string;
+  let repoDir: string;
+  let initialSha: string;
+  let controlPort: number;
+  let mockServer: http.Server;
+  let origHome: string | undefined;
+  let origControlPort: string | undefined;
+  let origDbPath: string | undefined;
+  let origStateDir: string | undefined;
+  let origWorktreeRoot: string | undefined;
+
+  before(async () => {
+    tempHome = fs.mkdtempSync(
+      path.join(os.tmpdir(), "tamandua-failstep-rugpull-"),
+    );
+    origHome = process.env.HOME;
+    origControlPort = process.env.TAMANDUA_CONTROL_PORT;
+    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origStateDir = process.env.TAMANDUA_STATE_DIR;
+    origWorktreeRoot = process.env.TAMANDUA_WORKTREE_ROOT;
+
+    const tamanduaDir = path.join(tempHome, ".tamandua");
+    fs.mkdirSync(tamanduaDir, { recursive: true });
+
+    process.env.HOME = tempHome;
+    process.env.TAMANDUA_DB_PATH = path.join(tamanduaDir, "tamandua.db");
+    process.env.TAMANDUA_STATE_DIR = tamanduaDir;
+    process.env.TAMANDUA_WORKTREE_ROOT = path.join(tamanduaDir, "worktrees");
+
+    // Mock daemon control server for runWorkflow (called by relaunchRunAfterRugpull)
+    controlPort = await new Promise<number>((resolve) => {
+      mockServer = http.createServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+      mockServer.listen(0, "127.0.0.1", () => {
+        const addr = mockServer.address();
+        assert.ok(addr && typeof addr !== "string");
+        resolve(addr.port);
+      });
+    });
+    process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
+
+    // Create a git repo for tests
+    repoDir = path.join(tempHome, "test-repo");
+    initialSha = initGitRepo(repoDir);
+  });
+
+  after(async () => {
+    if (mockServer) {
+      await new Promise<void>((resolve) => mockServer.close(() => resolve()));
+    }
+    if (origHome !== undefined) {
+      process.env.HOME = origHome;
+    } else {
+      delete process.env.HOME;
+    }
+    if (origControlPort !== undefined) {
+      process.env.TAMANDUA_CONTROL_PORT = origControlPort;
+    } else {
+      delete process.env.TAMANDUA_CONTROL_PORT;
+    }
+    if (origDbPath !== undefined) {
+      process.env.TAMANDUA_DB_PATH = origDbPath;
+    } else {
+      delete process.env.TAMANDUA_DB_PATH;
+    }
+    if (origStateDir !== undefined) {
+      process.env.TAMANDUA_STATE_DIR = origStateDir;
+    } else {
+      delete process.env.TAMANDUA_STATE_DIR;
+    }
+    if (origWorktreeRoot !== undefined) {
+      process.env.TAMANDUA_WORKTREE_ROOT = origWorktreeRoot;
+    } else {
+      delete process.env.TAMANDUA_WORKTREE_ROOT;
+    }
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("triggers rugpull detection and relaunch after merge step failure exhausts retries", async () => {
+    const workflowId = "test-failstep-rugpull-merge";
+    writeWorkflowYml(tempHome, workflowId, "direct");
+
+    const { failStep } = await import("../../dist/installer/step-ops.js");
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    // Move base forward so SHA differs from initial
+    const newSha = makeCommit(repoDir, "second commit");
+    assert.notEqual(newSha, initialSha);
+
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    // Insert a run and step with exhausted retries (retry_count === max_retries)
+    insertRun(db, runId, workflowId, {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      base_branch_sha: initialSha,
+      harness_type: "pi",
+      no_hurry_save_tokens_mode: "false",
+    }, "running");
+    insertStep(db, stepId, runId, "finalize_merge", "running", 0, "single");
+    // Set retry_count to max_retries so the next failStep exhausts
+    db.prepare(
+      "UPDATE steps SET retry_count = max_retries WHERE id = ?",
+    ).run(stepId);
+
+    const result = await failStep(stepId, "merge conflict");
+    assert.equal(result.status, "failed", "step should be failed after exhaustion");
+
+    // Wait for the fire-and-forget rugpull detection (setImmediate + async)
+    const events = await waitForRugpullEvents(
+      process.env.TAMANDUA_STATE_DIR!,
+      runId,
+    );
+
+    const detectedEvents = events.filter(
+      (e) => e.event === "run.rugpull_detected",
+    );
+    assert.equal(
+      detectedEvents.length,
+      1,
+      "should emit run.rugpull_detected event",
+    );
+    assert.ok(
+      String(detectedEvents[0].detail).includes("moved"),
+      "event detail should mention base moved",
+    );
+
+    const relaunchedEvents = events.filter(
+      (e) => e.event === "run.rugpull_relaunched",
+    );
+    assert.equal(
+      relaunchedEvents.length,
+      1,
+      "should emit run.rugpull_relaunched event",
+    );
+
+    // Verify the run is still marked as failed (original run preserved)
+    const run = db
+      .prepare("SELECT status FROM runs WHERE id = ?")
+      .get(runId) as { status: string } | undefined;
+    assert.ok(run);
+    assert.equal(run.status, "failed", "original run should be failed");
+  });
+
+  it("does NOT trigger rugpull for non-merge workflow failures", async () => {
+    const { failStep } = await import("../../dist/installer/step-ops.js");
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    insertRun(db, runId, "security-audit", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      base_branch_sha: initialSha,
+    }, "running");
+    insertStep(db, stepId, runId, "scan", "running", 0, "single");
+    db.prepare(
+      "UPDATE steps SET retry_count = max_retries WHERE id = ?",
+    ).run(stepId);
+
+    const result = await failStep(stepId, "scan failed");
+    assert.equal(result.status, "failed");
+
+    // Wait and verify no rugpull events
+    const events = await waitForRugpullEvents(
+      process.env.TAMANDUA_STATE_DIR!,
+      runId,
+    );
+    assert.equal(
+      events.length,
+      0,
+      "non-merge workflow should not emit rugpull events",
+    );
+  });
+
+  it("does NOT trigger rugpull for loop step failures", async () => {
+    const { failStep } = await import("../../dist/installer/step-ops.js");
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      base_branch_sha: initialSha,
+    }, "running");
+    // Insert a loop step with a current story
+    insertStep(db, stepId, runId, "implement", "running", 0, "loop");
+    // Also insert a story so the loop branch in failStep fires
+    const storyId = crypto.randomUUID();
+    db.prepare(
+      `INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status, retry_count, max_retries, created_at, updated_at)
+       VALUES (?, ?, 0, 'US-001', 'Test Story', 'desc', '["ac"]', 'running', 3, 4, datetime('now'), datetime('now'))`,
+    ).run(storyId, runId);
+    // Link the story to the step (as claimStep does)
+    db.prepare(
+      "UPDATE steps SET current_story_id = ? WHERE id = ?",
+    ).run(storyId, stepId);
+
+    const result = await failStep(stepId, "implement failed");
+    // Loop step with story retries — should retry, not fail
+    assert.equal(result.status, "retrying");
+
+    // Wait and verify no rugpull events
+    const events = await waitForRugpullEvents(
+      process.env.TAMANDUA_STATE_DIR!,
+      runId,
+      1000,
+    );
+    assert.equal(
+      events.length,
+      0,
+      "loop step failure should not emit rugpull events",
+    );
+  });
+
+  it("failStep still returns failed even when rugpull detection would error", async () => {
+    const { failStep } = await import("../../dist/installer/step-ops.js");
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    // Insert a run with missing required context (no workspace_mode) —
+    // detectRugpull won't error on this, but relaunchRunAfterRugpull will
+    // return { relaunched: false } for missing working directory.
+    // The key assertion is that failStep itself does not throw.
+    insertRun(db, runId, "feature-dev-merge", {
+      // No working_directory_for_harness, no workspace_mode — edge case
+      base_branch_sha: initialSha,
+    }, "running");
+    insertStep(db, stepId, runId, "finalize_merge", "running", 0, "single");
+    db.prepare(
+      "UPDATE steps SET retry_count = max_retries WHERE id = ?",
+    ).run(stepId);
+
+    // This should not throw — error in detection/relaunch is swallowed
+    const result = await failStep(stepId, "some error");
+    assert.equal(result.status, "failed", "failStep still reports failed");
+
+    // Verify run is marked as failed
+    const run = db
+      .prepare("SELECT status FROM runs WHERE id = ?")
+      .get(runId) as { status: string } | undefined;
+    assert.ok(run);
+    assert.equal(run.status, "failed", "run should be failed despite rugpull errors");
+  });
+
+  it("integration: no_relaunch_upon_rugpull suppresses relaunch (detection still fires)", async () => {
+    const workflowId = "test-no-relaunch-suppress-merge";
+    writeWorkflowYml(tempHome, workflowId, "direct");
+
+    const { failStep } = await import("../../dist/installer/step-ops.js");
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    // Move base forward so rugpull WOULD be detected
+    const newSha = makeCommit(repoDir, "suppress test commit");
+    assert.notEqual(newSha, initialSha);
+
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    insertRun(db, runId, workflowId, {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      base_branch_sha: initialSha,
+      no_relaunch_upon_rugpull: "true",
+      harness_type: "pi",
+      no_hurry_save_tokens_mode: "false",
+    }, "running");
+    insertStep(db, stepId, runId, "finalize_merge", "running", 0, "single");
+    db.prepare(
+      "UPDATE steps SET retry_count = max_retries WHERE id = ?",
+    ).run(stepId);
+
+    const result = await failStep(stepId, "merge conflict");
+    assert.equal(result.status, "failed");
+
+    // Wait for fire-and-forget events
+    const events = await waitForRugpullEvents(
+      process.env.TAMANDUA_STATE_DIR!,
+      runId,
+    );
+
+    // Detection should still fire (rugpull IS a rugpull)
+    const detectedEvents = events.filter(
+      (e) => e.event === "run.rugpull_detected",
+    );
+    assert.equal(detectedEvents.length, 1, "rugpull should still be detected");
+
+    // But relaunch should be suppressed
+    const relaunchedEvents = events.filter(
+      (e) => e.event === "run.rugpull_relaunched",
+    );
+    assert.equal(relaunchedEvents.length, 1, "should emit relaunch event (suppression)");
+    assert.ok(
+      String(relaunchedEvents[0].detail).includes("suppressed"),
+      "relaunch event should indicate suppression",
+    );
+  });
+
+  it("does NOT trigger rugpull when planner step fails", async () => {
+    const { failStep } = await import("../../dist/installer/step-ops.js");
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    // Move base forward so it WOULD be a rugpull if it were finalize_merge
+    const newSha = makeCommit(repoDir, "planner test");
+    assert.notEqual(newSha, initialSha);
+
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      base_branch_sha: initialSha,
+    }, "running");
+    // Fail the planner step
+    insertStep(db, stepId, runId, "plan", "running", 0, "single");
+    db.prepare(
+      "UPDATE steps SET retry_count = max_retries WHERE id = ?",
+    ).run(stepId);
+
+    const result = await failStep(stepId, "plan failed");
+    assert.equal(result.status, "failed");
+
+    const events = await waitForRugpullEvents(
+      process.env.TAMANDUA_STATE_DIR!,
+      runId,
+    );
+    assert.equal(events.length, 0, "planner failure should not emit rugpull events");
+  });
+
+  it("does NOT trigger rugpull when verifier step fails", async () => {
+    const { failStep } = await import("../../dist/installer/step-ops.js");
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    const newSha = makeCommit(repoDir, "verifier test");
+    assert.notEqual(newSha, initialSha);
+
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      base_branch_sha: initialSha,
+    }, "running");
+    // Fail the verifier step
+    insertStep(db, stepId, runId, "verify", "running", 0, "single");
+    db.prepare(
+      "UPDATE steps SET retry_count = max_retries WHERE id = ?",
+    ).run(stepId);
+
+    const result = await failStep(stepId, "verify failed");
+    assert.equal(result.status, "failed");
+
+    const events = await waitForRugpullEvents(
+      process.env.TAMANDUA_STATE_DIR!,
+      runId,
+    );
+    assert.equal(events.length, 0, "verifier failure should not emit rugpull events");
+  });
+
+  it("does NOT trigger rugpull when failing step is not finalize_merge", async () => {
+    const { failStep } = await import("../../dist/installer/step-ops.js");
+    const { getDb } = await import("../../dist/db.js");
+    const db = getDb();
+
+    const runId = crypto.randomUUID();
+    const stepId = crypto.randomUUID();
+
+    // Move base forward so it WOULD be a rugpull if it were finalize_merge
+    const newSha = makeCommit(repoDir, "not-finalize test");
+    assert.notEqual(newSha, initialSha);
+
+    insertRun(db, runId, "feature-dev-merge", {
+      repo: repoDir,
+      working_directory_for_harness: repoDir,
+      workspace_mode: "direct",
+      base_branch_sha: initialSha,
+    }, "running");
+    // Fail the "plan" step, not "finalize_merge"
+    insertStep(db, stepId, runId, "plan", "running", 0, "single");
+    db.prepare(
+      "UPDATE steps SET retry_count = max_retries WHERE id = ?",
+    ).run(stepId);
+
+    const result = await failStep(stepId, "plan step failed");
+    assert.equal(result.status, "failed");
+
+    // Wait and verify no rugpull events
+    const events = await waitForRugpullEvents(
+      process.env.TAMANDUA_STATE_DIR!,
+      runId,
+    );
+    // Note: failStep fires rugpull detection for ALL single step failures.
+    // detectRugpull itself checks that the failed step is finalize_merge.
+    // So no events should be emitted because detectRugpull returns false.
+    assert.equal(
+      events.length,
+      0,
+      "non-finalize_merge step should not emit rugpull events",
+    );
+  });
+});

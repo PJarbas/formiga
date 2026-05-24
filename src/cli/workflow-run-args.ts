@@ -4,6 +4,7 @@ export interface WorkflowRunArgs {
   worktreeOriginRepository?: string;
   worktreeOriginRef?: string;
   noHurrySaveTokensMode?: boolean;
+  noRelaunchUponRugpull?: boolean;
   harnessAs?: "pi" | "hermes";
 }
 
@@ -13,6 +14,7 @@ export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
   let worktreeOriginRepository: string | undefined;
   let worktreeOriginRef: string | undefined;
   let noHurrySaveTokensMode: boolean | undefined;
+  let noRelaunchUponRugpull: boolean | undefined;
   let harnessAs: "pi" | "hermes" | undefined;
 
   for (let i = 0; i < args.length; i++) {
@@ -20,6 +22,11 @@ export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
 
     if (token === "--no-hurry-please-save-tokens-mode") {
       noHurrySaveTokensMode = true;
+      continue;
+    }
+
+    if (token === "--no-relaunch-upon-rugpull") {
+      noRelaunchUponRugpull = true;
       continue;
     }
 
@@ -112,6 +119,7 @@ export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
     worktreeOriginRepository,
     worktreeOriginRef,
     noHurrySaveTokensMode,
+    noRelaunchUponRugpull,
     harnessAs,
   };
 }

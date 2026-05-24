@@ -48,6 +48,7 @@ describe("parseWorkflowRunArgs", () => {
       worktreeOriginRepository: undefined,
       worktreeOriginRef: undefined,
       noHurrySaveTokensMode: undefined,
+      noRelaunchUponRugpull: undefined,
       harnessAs: undefined,
     });
   });
@@ -230,6 +231,34 @@ describe("parseWorkflowRunArgs", () => {
     assert.equal(result.harnessAs, "pi");
     assert.equal(result.worktreeOriginRepository, "/repo");
     assert.equal(result.worktreeOriginRef, "main");
+  });
+
+  it("parses --no-relaunch-upon-rugpull as a boolean flag", () => {
+    const result = parseWorkflowRunArgs([
+      "--no-relaunch-upon-rugpull",
+      "do something",
+    ]);
+    assert.equal(result.taskTitle, "do something");
+    assert.equal(result.noRelaunchUponRugpull, true);
+  });
+
+  it("noRelaunchUponRugpull is undefined when flag not set", () => {
+    const result = parseWorkflowRunArgs(["task here"]);
+    assert.equal(result.noRelaunchUponRugpull, undefined);
+  });
+
+  it("parses --no-relaunch-upon-rugpull alongside other flags", () => {
+    const result = parseWorkflowRunArgs([
+      "--no-hurry-please-save-tokens-mode",
+      "--no-relaunch-upon-rugpull",
+      "--working-directory-for-harness",
+      "/work",
+      "build feature",
+    ]);
+    assert.equal(result.taskTitle, "build feature");
+    assert.equal(result.noHurrySaveTokensMode, true);
+    assert.equal(result.noRelaunchUponRugpull, true);
+    assert.equal(result.workingDirectoryForHarness, "/work");
   });
 });
 

@@ -878,6 +878,9 @@ Options:
   --hermes-as-harness
       Use hermes as the agent harness instead of pi.
       Mutually exclusive with --pi-as-harness.
+  --no-relaunch-upon-rugpull
+      Disable automatic replacement-run after a rugpull (base branch move)
+      is detected on a failed merge/merge-worktree run.
 
 Examples:
   tamandua workflow run feature-dev-merge "Add dark mode toggle"
@@ -1090,6 +1093,7 @@ function getUsageText(): string {
     "                                      [--worktree-origin-repository <dir>]",
     "                                      [--worktree-origin-ref <ref>]",
     "                                      [--pi-as-harness | --hermes-as-harness]",
+    "                                      [--no-relaunch-upon-rugpull]",
     "                                      Start a workflow run",
     "", "tamandua worktree list                List managed worktrees",
     "tamandua worktree status <run-id>     Show worktree details for a run",
@@ -1976,6 +1980,7 @@ async function main() {
       worktreeOriginRepository: runArgs.worktreeOriginRepository,
       worktreeOriginRef: runArgs.worktreeOriginRef,
       noHurrySaveTokensMode: runArgs.noHurrySaveTokensMode,
+      noRelaunchUponRugpull: runArgs.noRelaunchUponRugpull,
       harnessType,
     });
     console.log(`Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}\nHarness CWD: ${result.workingDirectoryForHarness}`);

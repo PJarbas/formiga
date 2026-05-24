@@ -12,6 +12,7 @@ import { getMaxRoleTimeoutSeconds } from "./install.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
 import { isFrontendChange } from "../lib/frontend-detect.js";
 import type { LoopConfig, Story, WorkflowStepFailure } from "./types.js";
+import { detectRugpull, relaunchRunAfterRugpull } from "./rugpull.js";
 
 // ══════════════════════════════════════════════════════════════════════
 // Key-Value Parsing
@@ -1758,6 +1759,29 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
       }
     } catch {
       // escalation logging is best-effort
+    }
+
+    // Rugpull detection: for single step failures, check if the base branch
+    // moved under the run and launch a replacement. Fire-and-forget via
+    // setImmediate so errors never block step failure completion.
+    if (step.type !== "loop") {
+      setImmediate(async () => {
+        try {
+          const rugResult = detectRugpull(step.run_id);
+          if (rugResult.isRugpull) {
+            emitEvent({
+              ts: new Date().toISOString(),
+              event: "run.rugpull_detected",
+              runId: step.run_id,
+              workflowId: wfId2,
+              detail: rugResult.reason,
+            });
+            await relaunchRunAfterRugpull(step.run_id);
+          }
+        } catch {
+          // fire-and-forget — errors must not prevent step failure from completing
+        }
+      });
     }
 
     return { status: "failed" };
