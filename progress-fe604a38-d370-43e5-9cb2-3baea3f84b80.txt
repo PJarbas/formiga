@@ -1,0 +1,64 @@
+# Progress Log
+Run: fe604a38-d370-43e5-9cb2-3baea3f84b80
+Task: Adjust the just-do-it workflow so that, for coding-related tasks, it is biased toward choosing the merge-worktree workflows unless it has a specific reason to choose otherwise.
+Started: 2026-05-23T00:00:00Z
+
+## Codebase Patterns
+- Workflow YAML dispatch input uses `{{task}}` and `{{no_hurry_save_tokens_mode}}` placeholders for context injection
+- Variant selection logic is defined in section 4 of the dispatch step input in `workflows/just-do-it/workflow.yml`
+- The dispatcher AGENTS.md at `workflows/just-do-it/agents/dispatcher/AGENTS.md` mirrors the workflow.yml variant logic
+- Tests for just-do-it dispatch live in `tests/workflow-validation.test.ts` under `describe("US-003: just-do-it dispatch step dynamic workflow selection")`
+- The → character in workflow.yml is a Unicode arrow (U+2192), not ASCII
+- Build: `npm run build` (tsc + copy html + inject version)
+- Test: `npm test` (runs node --test on all test files)
+
+## Story Plan
+
+### US-001: Update workflow.yml dispatch input to default coding tasks to -merge-worktree variant
+
+**Description:** As a developer, I need to update the variant selection rules in the dispatch step input of workflows/just-do-it/workflow.yml so that coding-related task families (feature-dev*, bug-fix*, security-audit*) default to the -merge-worktree suffix instead of the base variant. Non-coding standalone workflows (do-now, do-review-do-verify) must remain unchanged.
+
+Implementation notes:
+- In the dispatch step's input field, section 4 (variant selection rules), change the 'None of these' rule from 'base variant (family prefix only, e.g. feature-dev)' to default to -merge-worktree for coding families
+- Add explicit escape hatch: if the prompt says 'no merge' or 'no worktree', use the base variant (family prefix only)
+- The existing explicit keyword rules (PR/GitHub → -github-pr, merge → -merge, worktree → -worktree, compositions) are preserved and take precedence over the new default
+- Update the fallback order to prioritize -merge-worktree first: -merge-worktree → -merge → -worktree → base → -github-pr...
+- do-now and do-review-do-verify must remain as standalone (no suffix, no variant selection)
+
+**Acceptance Criteria:**
+- Variant selection rules in workflow.yml dispatch input mention -merge-worktree as the default for coding tasks
+- Escape hatch keywords 'no merge' and 'no worktree' are documented in the variant rules
+- do-now and do-review-do-verify rules remain unchanged (standalone, no suffix)
+- Fallback order prioritizes -merge-worktree first
+- The YAML file parses successfully
+- Tests for workflow dispatch logic pass
+- Typecheck passes
+
+### US-002: Update dispatcher AGENTS.md persona to match the new merge-worktree default
+
+### US-003: Update workflow-validation tests for merge-worktree default and escape hatch
+
+---
+
+## 2026-05-23 - US-001: Update workflow.yml dispatch input to default coding tasks to -merge-worktree variant
+- Changed section 4 "None of these" rule from "base variant" to "default to -merge-worktree for coding families"
+- Added escape hatch: "Prompt says 'no merge' or 'no worktree' → base variant"
+- Updated fallback order: -merge-worktree → -merge → -worktree → base → -github-pr → -github-pr-worktree
+- Updated existing test assertion for new fallback order
+- Added 3 new tests: merge-worktree default, escape hatch keywords, standalone routing unchanged
+- All 1860 tests pass, typecheck passes, YAML parses successfully
+
+## 2026-05-24 - US-002: Update dispatcher AGENTS.md persona to match the new merge-worktree default
+- Changed "Step 2: Choose the variant" rule: coding families default to -merge-worktree (not base)
+- Added escape hatch: "no merge" or "no worktree" → base variant
+- Updated fallback order to match workflow.yml: -merge-worktree → -merge → -worktree → base → -github-pr → -github-pr-worktree
+- Updated examples table: coding tasks without explicit keywords now show -merge-worktree variant
+- All 220 workflow-validation tests pass (1 unrelated flaky test in cli-pause-all-resume-all)
+- Build succeeds, typecheck passes
+
+## 2026-05-24 - US-003: Update workflow-validation tests for merge-worktree default and escape hatch
+- Updated 'variant suffix composition rules' test: added assertions verifying -merge-worktree is the default for coding families when no explicit keyword
+- Added assertions verifying explicit variant keywords (PR → -github-pr, merge → -merge, worktree → -worktree) take precedence
+- Existing tests from US-001 already cover merge-worktree default, escape hatch, and standalone routing
+- All 1860 tests pass, typecheck passes
+- **Learnings:** The Unicode arrow (→) in the YAML is checked by tests; regex patterns need to be concise and anchored enough to match the right line

@@ -72,16 +72,17 @@ Once you have the family prefix, build the full workflow ID by selecting a varia
 - If the prompt mentions both PR and merge → `-github-pr` takes precedence (PR flow includes merge)
 - If the prompt mentions both PR and worktree → compose `-github-pr-worktree`
 - If the prompt mentions both merge and worktree → compose `-merge-worktree`
-- If none of these are mentioned → default to the base variant (no suffix), e.g., `feature-dev`
+- If the prompt says "no merge" or "no worktree" → use the base variant (no suffix, e.g., `feature-dev`)
+- If none of these are mentioned → default to `-merge-worktree` for coding families (`feature-dev*`, `bug-fix*`, `security-audit*`)
 
 **Standalone workflows (no variant selection):**
 - `do-now` and `do-review-do-verify` are single workflows with no variants. Use them directly — no suffix composition.
 
 **Fallback rule:** After composing the target workflow ID, verify it exists in the `--json` output. If it doesn't exist, fall back to the closest available variant **from the JSON output**, tried in this order:
-1. Base variant (prefix only)
-2. `-worktree` variant
-3. `-merge` variant
-4. `-merge-worktree` variant
+1. `-merge-worktree` variant
+2. `-merge` variant
+3. `-worktree` variant
+4. Base variant (prefix only)
 5. `-github-pr` variant
 6. `-github-pr-worktree` variant
 
@@ -95,12 +96,12 @@ Before launching, confirm the final workflow ID is present in the `--json` outpu
 
 | User prompt | Category | Composed ID |
 |-------------|----------|-------------|
-| "Add a dark mode toggle to settings" | feature-dev | `feature-dev` |
-| "Fix the login crash when email is empty" | bug-fix | `bug-fix` |
+| "Add a dark mode toggle to settings" | feature-dev | `feature-dev-merge-worktree` |
+| "Fix the login crash when email is empty" | bug-fix | `bug-fix-merge-worktree` |
 | "Create a new API endpoint for user export and create a PR" | feature-dev + github-pr | `feature-dev-github-pr` |
 | "Fix the XSS in the comment form and merge to main" | bug-fix + merge | `bug-fix-merge` |
 | "Implement OAuth2, use worktrees, and create a PR" | feature-dev + worktree + github-pr | `feature-dev-github-pr-worktree` |
-| "Audit the auth module for vulnerabilities" | security-audit | `security-audit` |
+| "Audit the auth module for vulnerabilities" | security-audit | `security-audit-merge-worktree` |
 | "Quick, format this JSON for me" | do-now | `do-now` |
 | "Review my PR and check for security issues" | do-review-do-verify | `do-review-do-verify` |
 

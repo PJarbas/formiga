@@ -62,11 +62,12 @@ steps:
          - Both PR and merge → -github-pr takes precedence (PR flow includes merge)
          - Both PR and worktree → compose -github-pr-worktree
          - Both merge and worktree → compose -merge-worktree
-         - None of these → base variant (family prefix only, e.g. feature-dev)
+         - Prompt says "no merge" or "no worktree" → base variant (family prefix only, e.g. feature-dev)
+         - None of the above → default to -merge-worktree for coding families (feature-dev*, bug-fix*, security-audit*)
          - do-now and do-review-do-verify are standalone: use them directly, no suffix.
          After composing the target ID, verify it exists in the --json output.
          If not found, fall back to the closest available variant from the JSON output
-         in order: base → -worktree → -merge → -merge-worktree → -github-pr → -github-pr-worktree.
+         in order: -merge-worktree → -merge → -worktree → base → -github-pr → -github-pr-worktree.
          If none exist, fall back to do-now as the universal catch-all.
       5. Decide no-hurry mode:
          - If {{no_hurry_save_tokens_mode}} is true, launch the dispatched workflow

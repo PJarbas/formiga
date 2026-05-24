@@ -1292,11 +1292,17 @@ describe("US-003: just-do-it dispatch step dynamic workflow selection", () => {
     assert.match(justDoItYml, /-merge-worktree/);
     assert.match(justDoItYml, /composing.*suffix/);
     assert.match(justDoItYml, /verify it exists in the --json output/);
+    // merge-worktree is the default for coding families when no explicit variant keyword
+    assert.match(justDoItYml, /default to -merge-worktree for coding families/);
+    // explicit variant keywords take precedence over the default
+    assert.match(justDoItYml, /Prompt mentions.*PR.*pull request.*GitHub.*use -github-pr variant/);
+    assert.match(justDoItYml, /Prompt mentions.*merge.*land.*ship.*use variant with -merge/);
+    assert.match(justDoItYml, /Prompt mentions.*worktree.*use variant with -worktree/);
   });
 
   it("dispatch step input includes fallback order and do-now catch-all", () => {
     assert.match(justDoItYml, /fall back/);
-    assert.match(justDoItYml, /base → -worktree → -merge → -merge-worktree → -github-pr → -github-pr-worktree/);
+    assert.match(justDoItYml, /-merge-worktree → -merge → -worktree → base → -github-pr → -github-pr-worktree/);
     assert.match(justDoItYml, /fall back to do-now/);
   });
 
@@ -1313,5 +1319,24 @@ describe("US-003: just-do-it dispatch step dynamic workflow selection", () => {
     assert.match(justDoItYml, /NO_HURRY:.*true\|false/);
     assert.match(justDoItYml, /REASONING:/);
     assert.match(justDoItYml, /LAUNCHED_RUN_ID:/);
+  });
+
+  it("dispatch step input defaults coding tasks to -merge-worktree when no explicit variant keyword", () => {
+    // AC: When no variant keyword is present, coding families default to -merge-worktree
+    assert.match(justDoItYml, /default to -merge-worktree for coding families/);
+    assert.match(justDoItYml, /feature-dev\*.*bug-fix\*.*security-audit\*/);
+  });
+
+  it("dispatch step input includes escape hatch keywords for merge-worktree default", () => {
+    // AC: Escape hatch 'no merge' and 'no worktree' revert to base variant
+    assert.match(justDoItYml, /no merge.*no worktree.*base variant/);
+  });
+
+  it("dispatch step input preserves non-coding standalone routing unchanged", () => {
+    // AC: do-now and do-review-do-verify remain standalone, no variant suffix
+    assert.match(justDoItYml, /do-now and do-review-do-verify are standalone: use them directly, no suffix/);
+    // Verifies standalone rule text hasn't been altered
+    assert.match(justDoItYml, /do-now.*standalone/);
+    assert.match(justDoItYml, /do-review-do-verify.*standalone/);
   });
 });
