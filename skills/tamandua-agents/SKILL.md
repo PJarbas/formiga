@@ -25,6 +25,19 @@ If the binary is not on PATH, use the Node entrypoint directly:
 node /path/to/tamandua/dist/cli/cli.js <command>
 ```
 
+If neither the `tamandua` binary nor the Node entrypoint can be found,
+clone and install Tamandua from its GitHub repository:
+
+```bash
+git clone https://github.com/igorhvr/tamandua ~/my-tamandua
+cd ~/my-tamandua
+./build
+./install
+```
+
+This places a `tamandua` symlink at `~/.local/bin/tamandua`. Verify the
+install worked by running `tamandua version`.
+
 ### 2) Know the workflow-level commands
 
 Use these when managing workflow runs (outside individual step execution):
