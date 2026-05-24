@@ -393,7 +393,12 @@
 
   <footer class="status">
     <span id="footer-left">connecting…</span>
-    <span id="footer-right"></span>
+    <span id="footer-right">
+      <label>
+        <input type="checkbox" id="poll-toggle" checked>
+        <span id="poll-label">poll 3s</span>
+      </label>
+    </span>
   </footer>
 
 <script>
@@ -726,6 +731,44 @@
     }
   });
 
+  let pollInterval;
+
+  function updatePollLabel() {
+    const chk = document.getElementById("poll-toggle");
+    const label = document.getElementById("poll-label");
+    if (chk && label) {
+      label.textContent = chk.checked ? "poll " + (REFRESH_MS / 1000) + "s" : "poll paused";
+    }
+  }
+
+  function startPolling() {
+    if (pollInterval) clearInterval(pollInterval);
+    tick();
+    pollInterval = setInterval(tick, REFRESH_MS);
+  }
+
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    const chk = document.getElementById("poll-toggle");
+    if (chk) {
+      updatePollLabel();
+      chk.addEventListener("change", function () {
+        updatePollLabel();
+        if (chk.checked) {
+          startPolling();
+        } else {
+          stopPolling();
+        }
+      });
+    }
+  });
+
   async function tick() {
     if (!runId) {
       document.getElementById("footer-left").innerHTML =
@@ -766,8 +809,6 @@
       lastGoodAt = new Date();
       document.getElementById("footer-left").textContent =
         "live · refreshed " + lastGoodAt.toLocaleTimeString();
-      document.getElementById("footer-right").textContent =
-        runId + " · poll " + (REFRESH_MS / 1000) + "s";
     } catch (e) {
       const last = lastGoodAt ? lastGoodAt.toLocaleTimeString() : "never";
       document.getElementById("footer-left").innerHTML =
@@ -776,8 +817,7 @@
     }
   }
 
-  tick();
-  setInterval(tick, REFRESH_MS);
+  startPolling();
 })();
 </script>
 </body>
