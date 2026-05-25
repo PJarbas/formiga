@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { spawn, execSync } from "node:child_process";
 import { once } from "node:events";
 import { describe, it, after } from "node:test";
-import { cleanChildEnv } from "./helpers/test-env.ts";
+import { cleanChildEnv, reserveRandomPort } from "./helpers/test-env.ts";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
 const DEFAULT_MCP_PORT = 3338;
@@ -74,15 +74,6 @@ async function canBind(port: number): Promise<boolean> {
   }
 }
 
-async function reserveRandomPort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const port = address.port;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
-}
 
 describe("tamandua dashboard status MCP visibility", () => {
   // Belt-and-suspenders: kill any leaked mcp-standalone/daemon orphans

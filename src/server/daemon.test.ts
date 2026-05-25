@@ -7,7 +7,7 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { cleanChildEnv } from "../../tests/helpers/test-env.ts";
+import { cleanChildEnv, reserveRandomPort } from "../../tests/helpers/test-env.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DAEMON_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "daemon.js");
@@ -132,17 +132,6 @@ async function canBind(port: number): Promise<boolean> {
   }
 }
 
-async function reserveRandomPort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const port = address.port;
-
-  await closeServer(server);
-  return port;
-}
 
 describe("version check integration", () => {
   it("daemon bootstrap triggers version check and writes version-status.json", async (t) => {

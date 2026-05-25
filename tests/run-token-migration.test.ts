@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { cleanChildEnv } from "./helpers/test-env.ts";
+import { cleanChildEnv, reserveRandomPort } from "./helpers/test-env.ts";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -44,18 +44,6 @@ function runNodeScript(script: string, env: Record<string, string>) {
   return JSON.parse(lastLine) as Record<string, unknown>;
 }
 
-function reserveRandomPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      assert.ok(address && typeof address !== "string");
-      const port = address.port;
-      server.close(() => resolve(port));
-    });
-  });
-}
 
 describe("run token spend persistence", () => {
   it("migrates legacy runs schema to include tokens_spent with backfill", () => {

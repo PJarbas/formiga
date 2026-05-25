@@ -54,7 +54,18 @@ export function cleanChildEnv(
   return env;
 }
 
-export async function reserveRandomPort(): Promise<number> {
+/** A handle that holds a port reservation. Call close() to release. */
+export interface PortHandle {
+  port: number;
+  close(): Promise<void>;
+}
+
+/**
+ * Reserve a random port by binding an HTTP server and keeping it bound.
+ * The port stays owned until the caller invokes handle.close().
+ * This avoids the TOCTOU race of bind-close-return patterns.
+ */
+export async function reservePortHandle(): Promise<PortHandle> {
   const server = http.createServer();
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -62,13 +73,62 @@ export async function reserveRandomPort(): Promise<number> {
   });
   const address = server.address();
   if (!address || typeof address === "string") {
+    server.close();
     throw new Error("Failed to reserve a random TCP port");
   }
   const port = address.port;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
+  server.unref();
+  return {
+    port,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      }),
+  };
 }
 
+/** Reserve multiple ports held by handles. */
+export async function reservePortHandles(count: number): Promise<PortHandle[]> {
+  const handles: PortHandle[] = [];
+  for (let i = 0; i < count; i++) {
+    handles.push(await reservePortHandle());
+  }
+  return handles;
+}
+
+/**
+ * Reserve `count` distinct ports, call `fn(ports)`, then release all ports
+ * in a finally block. This is the preferred pattern for daemon/control-plane
+ * tests that need guaranteed port ownership for their duration.
+ */
+export async function withReservedPorts<T>(
+  count: number,
+  fn: (ports: number[]) => Promise<T>,
+): Promise<T> {
+  const handles = await reservePortHandles(count);
+  try {
+    return await fn(handles.map((h) => h.port));
+  } finally {
+    await Promise.all(handles.map((h) => h.close()));
+  }
+}
+
+/**
+ * @deprecated Use reservePortHandle() or withReservedPorts() instead.
+ * This function releases the port immediately, creating a TOCTOU race in
+ * parallel test environments. It is kept for backward compatibility.
+ */
+export async function reserveRandomPort(): Promise<number> {
+  const handle = await reservePortHandle();
+  await handle.close();
+  return handle.port;
+}
+
+/**
+ * @deprecated Use reservePortHandles() or withReservedPorts() instead.
+ * These ports are released immediately, creating a TOCTOU race in parallel
+ * test environments. Kept for backward compatibility.
+ */
 export async function reserveDistinctRandomPorts(count: number): Promise<number[]> {
   const ports = new Set<number>();
   while (ports.size < count) {

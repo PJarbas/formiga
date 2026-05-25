@@ -15,7 +15,7 @@
  */
 
 import { describe, it } from "node:test";
-import { cleanChildEnv } from "./helpers/test-env.ts";
+import { cleanChildEnv, reserveRandomPort } from "./helpers/test-env.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
@@ -96,17 +96,6 @@ async function waitForHttpDown(url: string, timeoutMs = 7000): Promise<void> {
   throw new Error(`Timed out waiting for ${url} to become unreachable`);
 }
 
-async function reserveRandomPort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const port = address.port;
-
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
-}
 
 interface CliResult {
   stdout: string;

@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 
 import { runWorkflow } from "../../dist/installer/run.js";
 import { getPidFile, getPortFile, stopDaemon } from "../../dist/server/daemonctl.js";
+import { reserveRandomPort } from "../../tests/helpers/test-env.ts";
 
 // ── Helpers ──
 
@@ -31,18 +32,6 @@ function initGitRepo(dir: string): void {
   runGit(["commit", "-m", "initial commit"], dir);
 }
 
-async function reserveRandomPort(): Promise<number> {
-  const server = http.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const port = address.port;
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  return port;
-}
 
 function readPid(filePath: string): number | null {
   try {
