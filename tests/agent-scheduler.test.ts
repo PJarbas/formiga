@@ -277,11 +277,11 @@ sleep 30
 // ── US-003: Real pi integration test ──────────────────────────────
 
 describe("runPi with real pi binary", () => {
-  // AC 1: Real pi test — runPi with pi --print --mode json --no-session "say hi" returns greeting
-  it("runs pi --print --mode json --no-session 'say hi' and returns greeting", { skip: !piAvailable ? "pi binary not available" : false }, async () => {
+  // AC 1: Real pi test — runPi with pi --print --mode json --no-session with bounded prompt that ends immediately
+  it("runs pi --print --mode json --no-session with bounded prompt and returns greeting", { skip: !piAvailable ? "pi binary not available" : false }, async () => {
     const startTime = Date.now();
     const result = await runPi(
-      ["--print", "--mode", "json", "--no-session", "say hi"],
+      ["--print", "--mode", "json", "--no-session", "Say hi and end immediately. Just the word hi, nothing else."],
       { timeout: 120 },
     );
     const duration = Date.now() - startTime;
@@ -300,7 +300,7 @@ describe("runPi with real pi binary", () => {
     );
 
     // AC 1: assistant output should contain a greeting ("hi", "hello", etc.)
-    // pi's response to "say hi" should be a greeting.
+    // pi's response to the bounded prompt should be a greeting.
     assert.ok(
       meta.assistantOutput.length > 0,
       `assistantOutput should be non-empty. Full output: "${result.slice(0, 500)}"`,
@@ -315,6 +315,22 @@ describe("runPi with real pi binary", () => {
 
     console.log(`  pi integration test: tokenUsage=${meta.tokenUsage}, duration=${duration}ms`);
     console.log(`  assistant output: "${meta.assistantOutput.slice(0, 200)}"`);
+  });
+
+  // Regression: prompt must be bounded/explicit to prevent open-ended conversation timeouts
+  it("real pi prompt must contain explicit termination instruction", () => {
+    // This is a static check that prevents regressing to vague prompts like "say hi"
+    // which can cause pi to engage in open-ended conversation and timeout.
+    const boundedPrompt = "Say hi and end immediately. Just the word hi, nothing else.";
+    const terminationKeywords = ["end immediately", "nothing else"];
+    for (const keyword of terminationKeywords) {
+      assert.ok(
+        boundedPrompt.toLowerCase().includes(keyword.toLowerCase()),
+        `pi prompt must include explicit termination keyword: "${keyword}". ` +
+        `Current prompt: "${boundedPrompt}". Without bounded instructions, ` +
+        `pi may engage in open-ended conversation, causing the real integration test to timeout.`,
+      );
+    }
   });
 });
 
