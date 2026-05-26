@@ -21,7 +21,7 @@ import { parseLogsSelector, lookupRunIdByNumber } from "./logs-selector.js";
 import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startMcp, stopMcp, getMcpStatus, isMcpRunning, startControlPlane, stopControlPlane, getControlPlaneStatus, isControlPlaneRunning } from "../server/daemonctl.js";
 import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "../server/mcp-server.js";
 import { DEFAULT_CONTROL_PORT } from "../server/control-server.js";
-import { pauseRunWithDaemon, resumeRunWithDaemon, nudgeWithDaemon, ensureDaemonControlAvailable } from "../server/control-client.js";
+import { pauseRunWithDaemon, resumeRunWithDaemon, nudgeWithDaemon } from "../server/control-client.js";
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
 import { ensureCliSymlink } from "../installer/symlink.js";
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
@@ -1657,15 +1657,6 @@ async function main() {
       process.exit(1);
     }
     let response = await nudgeWithDaemon();
-    if (response === null) {
-      try {
-        await ensureDaemonControlAvailable();
-        response = await nudgeWithDaemon();
-      } catch {
-        process.stderr.write("Failed to nudge: control plane is not reachable.\n");
-        process.exit(1);
-      }
-    }
     if (response === null) {
       process.stderr.write("Failed to nudge: control plane is not reachable.\n");
       process.exit(1);

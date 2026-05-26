@@ -1714,6 +1714,23 @@ describe("nudge command", { concurrency: 1 }, () => {
     }
   });
 
+  it("tamandua nudge with daemon unreachable does NOT auto-start a daemon", () => {
+    // Regression: nudge must not call ensureDaemonControlAvailable which would
+    // auto-start a daemon. Verify no daemon PID file is created.
+    const result = cli(["nudge"], { TAMANDUA_CONTROL_PORT: "65532" });
+    try {
+      assert.equal(result.status, 1);
+      // Check that no daemon was started: no tamandua.pid file in HOME dir
+      const pidFile = path.join(result.testEnv.homeDir, ".tamandua", "tamandua.pid");
+      assert.equal(fs.existsSync(pidFile), false, "daemon should not be auto-started by nudge");
+      // Also check that no port file was created
+      const portFile = path.join(result.testEnv.homeDir, ".tamandua", "port");
+      assert.equal(fs.existsSync(portFile), false, "daemon port file should not exist");
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("tamandua nudge with daemon running and no runs prints zero-runs message", async (t) => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-nudge-test-"));
     const { reserveDistinctRandomPorts, cleanChildEnv: testCleanChildEnv } = await import("../../tests/helpers/test-env.ts");
