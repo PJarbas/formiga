@@ -18,7 +18,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getDb, getSystemTokenSpend } from "../db.js";
+import { getDb, getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession } from "../db.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { getMcpStatus } from "./daemonctl.js";
@@ -478,6 +478,120 @@ function handleHealth(_req: http.IncomingMessage, res: http.ServerResponse): voi
   }
 }
 
+// ── AutoResearch Session API Handlers ──────────────────────────────
+
+function handleAutoresearchSessions(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const sessions = getAutoresearchSessions();
+    const enriched = sessions.map((s) => {
+      const summary = summarizeAutoresearch(s.cwd);
+      return {
+        id: s.id,
+        cwd: s.cwd,
+        goal: s.goal,
+        metric_name: s.metric_name,
+        metric_unit: s.metric_unit,
+        direction: s.direction,
+        command: s.command,
+        created_at: s.created_at,
+        updated_at: s.updated_at,
+        last_seen_at: s.last_seen_at,
+        last_run_at: s.last_run_at,
+        total_runs: s.total_runs,
+        baseline_metric: s.baseline_metric,
+        best_metric: s.best_metric,
+        best_run: s.best_run,
+        files_missing: s.files_missing,
+        summary: summary.exists ? summary : undefined,
+      };
+    });
+
+    console.log(`[dashboard] GET /api/autoresearch/sessions → ${sessions.length} sessions`);
+    jsonResponse(res, { sessions: enriched });
+  } catch (err) {
+    errorResponse(res, `Failed to list AutoResearch sessions: ${(err as Error).message}`);
+  }
+}
+
+function handleAutoresearchSessionById(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  sessionId: string,
+): void {
+  try {
+    const session = getAutoresearchSessionById(sessionId);
+    if (!session) {
+      errorResponse(res, `Session not found: ${sessionId}`, 404);
+      return;
+    }
+
+    const cwd = session.cwd;
+    const summary = summarizeAutoresearch(cwd);
+    const entries = summary.exists ? readAutoresearchLog(cwd) : [];
+    const results = entries.filter(
+      (entry): entry is AutoresearchRunResultEntry => entry.type === "run_result",
+    );
+
+    jsonResponse(res, {
+      session,
+      exists: summary.exists,
+      reason: summary.nextPrompt,
+      summary,
+      experiments: summary.exists ? buildAutoresearchExperiments(entries) : [],
+      pendingResults: results.filter(
+        (result) => !entries.some((entry) => entry.type === "run" && entry.run === result.run),
+      ),
+      entries: entries.slice(-100),
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to get AutoResearch session: ${(err as Error).message}`);
+  }
+}
+
+// ── Backfill ────────────────────────────────────────────────────────
+
+export function backfillAutoresearchSessions(): void {
+  try {
+    const db = getDb();
+    const rows = db.prepare(`
+      SELECT context FROM runs
+      ORDER BY created_at DESC
+      LIMIT 100
+    `).all() as Array<{ context: string }>;
+
+    const seen = new Set<string>();
+    let backfilled = 0;
+
+    for (const row of rows) {
+      const cwd = resolveRunHarnessCwd({ context: row.context });
+      if (!cwd) continue;
+      try {
+        const sessionCwd = findAutoresearchSessionCwd(cwd);
+        if (!sessionCwd || seen.has(sessionCwd)) continue;
+        seen.add(sessionCwd);
+
+        // Only upsert if the cwd isn't already tracked
+        const sessionId = fs.existsSync(sessionCwd)
+          ? (() => { try { return fs.realpathSync(sessionCwd); } catch { return path.resolve(sessionCwd); } })()
+          : path.resolve(sessionCwd);
+        const existing = getAutoresearchSessionById(sessionId);
+        if (!existing) {
+          upsertAutoresearchSession(sessionCwd);
+          backfilled++;
+        }
+      } catch {
+        // Skip malformed or inaccessible cwds
+      }
+    }
+
+    if (backfilled > 0) {
+      console.log(`[dashboard] backfill: inserted ${backfilled} missing AutoResearch sessions from recent runs`);
+    }
+  } catch (err) {
+    console.error(`[dashboard] backfill error: ${(err as Error).message}`);
+  }
+}
+
 async function handlePauseRun(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -822,6 +936,19 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
+  // GET /api/autoresearch/sessions/:id (registered before /api/autoresearch/sessions to avoid prefix conflict)
+  const sessionIdMatch = pathname.match(/^\/api\/autoresearch\/sessions\/([a-zA-Z0-9_\/.%~-]+)$/);
+  if (method === "GET" && sessionIdMatch) {
+    handleAutoresearchSessionById(req, res, decodeURIComponent(sessionIdMatch[1]));
+    return;
+  }
+
+  // GET /api/autoresearch/sessions (registered before /api/autoresearch/runs)
+  if (method === "GET" && pathname === "/api/autoresearch/sessions") {
+    handleAutoresearchSessions(req, res);
+    return;
+  }
+
   // GET /api/autoresearch/runs (registered before /api/runs to avoid route conflict)
   if (method === "GET" && pathname === "/api/autoresearch/runs") {
     handleAutoresearchRuns(req, res);
@@ -923,6 +1050,8 @@ export function createDashboardServer(port: number, options: DashboardServerOpti
 
   server.listen(port, () => {
     console.log(`Tamandua dashboard listening on http://localhost:${port}`);
+    // Backfill AutoResearch sessions from recent workflow runs
+    backfillAutoresearchSessions();
   });
 
   server.on("error", (err: NodeJS.ErrnoException) => {

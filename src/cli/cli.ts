@@ -54,7 +54,7 @@ import {
   type AutoresearchDirection,
   type AutoresearchRunEntry,
 } from "../autoresearch/autoresearch.js";
-import { getDb } from "../db.js";
+import { getDb, upsertAutoresearchSession } from "../db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1240,7 +1240,7 @@ Examples:
 function getAutoresearchHelp(): string {
   return `tamandua autoresearch — Run durable optimization experiment loops
 
-Usage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop>
+Usage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|prune>
 
 AutoResearch stores a project-local session in:
   autoresearch.config.json   Session configuration
@@ -1256,11 +1256,13 @@ Subcommands:
   loop            Run a bounded experiment loop with live terminal progress
   status          Summarize baseline, best run, failures, and next prompt
   next            Print the ratchet prompt for the next experiment
+  prune           Remove stale AutoResearch registry rows from SQLite (DB only)
 
 Examples:
   tamandua autoresearch init --goal "reduce validation loss" --metric val_bpb --direction lower --command "uv run train.py"
   tamandua autoresearch run-experiment
-  tamandua autoresearch log-experiment --status auto --description "try smaller LR" --learned "stable but slower" --next-focus "test warmup"`;
+  tamandua autoresearch log-experiment --status auto --description "try smaller LR" --learned "stable but slower" --next-focus "test warmup"
+  tamandua autoresearch prune --older-than 30d`;
 }
 
 function getAutoresearchInitHelp(): string {
@@ -1394,6 +1396,32 @@ Examples:
   tamandua autoresearch loop --prompt --timeout 10m --max-iterations 10`;
 }
 
+function getAutoresearchPruneHelp(): string {
+  return `tamandua autoresearch prune — Remove stale AutoResearch registry rows
+
+Usage: tamandua autoresearch prune --older-than <duration> [--missing] [--dry-run]
+
+Prunes (removes) stale autoresearch_sessions registry rows from the SQLite DB.
+This never touches project-local autoresearch.jsonl or config files — those
+remain safe on disk.
+
+Options:
+  --older-than <d>   Prune sessions older than the given duration (required).
+  --missing          Only prune sessions whose cwd/config/log files no longer exist.
+  --dry-run          Print what would be pruned without actually deleting anything.
+
+Duration format:
+  Duration is specified as a number followed by a unit letter:
+    d — days   (e.g. 30d = 30 days)
+    h — hours  (e.g. 24h = 24 hours)
+    m — minutes(e.g. 30m = 30 minutes)
+
+Examples:
+  tamandua autoresearch prune --older-than 30d
+  tamandua autoresearch prune --older-than 7d --missing
+  tamandua autoresearch prune --older-than 30d --dry-run`;
+}
+
 function getUsageText(): string {
   return [
     "Run tamandua <command> --help for detailed command help.",
@@ -1421,6 +1449,8 @@ function getUsageText(): string {
     "tamandua autoresearch loop            Run a bounded experiment loop with live progress",
     "tamandua autoresearch status          Summarize AutoResearch state",
     "tamandua autoresearch next            Print the next experiment prompt",
+    "tamandua autoresearch prune           Remove stale AutoResearch registry rows",
+    "           --older-than <duration>    (e.g. 30d, 7d, 24h)",
     "tamandua workflow autoresearch <run-id> Show run AutoResearch progress",
     "tamandua workflow status <query>      Check run status",
     "tamandua workflow runs                List all workflow runs",
@@ -1556,6 +1586,7 @@ async function main() {
       if (action === "status") { printHelp(getAutoresearchStatusHelp()); }
       if (action === "next") { printHelp(getAutoresearchNextHelp()); }
       if (action === "loop") { printHelp(getAutoresearchLoopHelp()); }
+      if (action === "prune") { printHelp(getAutoresearchPruneHelp()); }
       printHelp(getAutoresearchHelp());
     }
     if (group === "nudge") {
@@ -2086,6 +2117,7 @@ async function main() {
       });
       console.log(`Initialized AutoResearch session for metric ${entry.metric_name} (${entry.direction}).`);
       console.log("Next: tamandua autoresearch run-experiment");
+      upsertAutoresearchSession(cwd ?? process.cwd());
       return;
     }
 
@@ -2104,6 +2136,7 @@ async function main() {
         timeoutMs,
       });
       console.log(JSON.stringify(result, null, 2));
+      upsertAutoresearchSession(cwd ?? process.cwd());
       return;
     }
 
@@ -2128,15 +2161,18 @@ async function main() {
       });
       console.log(`Logged run ${entry.run}: ${entry.status}${entry.metric === null ? "" : ` (${entry.metric})`}.`);
       console.log(`Best: ${entry.best_metric ?? "(none)"}`);
+      upsertAutoresearchSession(cwd ?? process.cwd());
       return;
     }
 
     if (action === "status") {
+      upsertAutoresearchSession(cwd ?? process.cwd());
       printAutoresearchSummary(cwd);
       return;
     }
 
     if (action === "next") {
+      upsertAutoresearchSession(cwd ?? process.cwd());
       console.log(summarizeAutoresearch(cwd).nextPrompt);
       return;
     }
@@ -2187,11 +2223,80 @@ async function main() {
         process.exit(1);
       }
       const actionMode = isMeasureOnly ? "measure-only" : "prompt";
+      upsertAutoresearchSession(cwd ?? process.cwd());
       await loopAutoresearch({ cwd, targetMetric, maxIterations, maxConsecutiveFailures, actionMode, timeoutSeconds });
       return;
     }
 
-    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop>\n`);
+    if (action === "prune") {
+      const olderThanIdx = args.indexOf("--older-than");
+      if (olderThanIdx === -1 || !args[olderThanIdx + 1]) {
+        process.stderr.write(
+          "Missing --older-than <duration>.\nUsage: tamandua autoresearch prune --older-than <duration> [--missing] [--dry-run]\n",
+        );
+        process.exit(1);
+      }
+
+      let thresholdMs: number;
+      try {
+        thresholdMs = parseDuration(args[olderThanIdx + 1]);
+      } catch (err) {
+        process.stderr.write(
+          `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+        process.exit(1);
+      }
+
+      const dryRun = args.includes("--dry-run");
+      const missingOnly = args.includes("--missing");
+      const cutoff = new Date(Date.now() - thresholdMs).toISOString();
+
+      const { getAutoresearchSessions, deleteAutoresearchSession } = await import("../db.js");
+      const sessions = getAutoresearchSessions({ includeMissing: true });
+
+      const candidates = sessions.filter((s) => {
+        // Check if session is older than threshold
+        const updatedAt = s.updated_at;
+        if (!updatedAt || updatedAt >= cutoff) return false;
+
+        // If --missing, only include sessions whose files are gone
+        if (missingOnly && !s.files_missing) return false;
+
+        return true;
+      });
+
+      if (candidates.length === 0) {
+        console.log("No sessions to prune.");
+        return;
+      }
+
+      for (const s of candidates) {
+        const reasonParts: string[] = [];
+        if (s.files_missing) reasonParts.push("missing files");
+        reasonParts.push(`last seen ${s.last_seen_at ?? "never"}`);
+        const reason = reasonParts.join(", ");
+
+        if (dryRun) {
+          console.log(
+            `[DRY RUN] Would prune: ${s.cwd} (${s.metric_name ?? "unknown metric"}) — ${reason}`,
+          );
+        } else {
+          deleteAutoresearchSession(s.id);
+          console.log(
+            `Pruned: ${s.cwd} (${s.metric_name ?? "unknown metric"}) — ${reason}`,
+          );
+        }
+      }
+
+      if (dryRun) {
+        console.log(`\nDry run: ${candidates.length} session(s) would be pruned.`);
+      } else {
+        console.log(`\nPruned ${candidates.length} session(s).`);
+      }
+      return;
+    }
+
+    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|prune>\n`);
     process.exit(1);
   }
 

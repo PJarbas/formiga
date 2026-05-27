@@ -287,8 +287,8 @@ describe("dashboard AutoResearch progress", () => {
 
       const html = await response.text();
       assert.match(html, /<section class="section" id="autoresearch-section">/);
-      assert.match(html, /id="autoresearch-run-select"/);
-      assert.match(html, /fetch\(`\/api\/runs\/\$\{encodeURIComponent\(runId\)\}\/autoresearch`\)/);
+      assert.match(html, /id="autoresearch-session-select"/);
+      assert.match(html, /fetch\(`\/api\/autoresearch\/sessions\/\$\{encodeURIComponent\(sessionId\)\}`\)/);
       assert.match(html, /id="autoresearch-timeline"/);
       assert.match(html, /id="autoresearch-metric-chart"/);
       assert.match(html, /renderAutoresearchTraceChart/);
@@ -2914,6 +2914,536 @@ describe("dashboard cancel UI", () => {
       assert.match(html, /handleCancel\(/);
     } finally {
       await stopDashboard(server);
+    }
+  });
+});
+
+// ── AutoResearch Session API tests ───────────────────────────────────
+
+describe("dashboard AutoResearch session API", () => {
+  it("GET /api/autoresearch/sessions returns empty array when no sessions registered", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-sessions-empty-"));
+    const homeDir = path.join(root, "home");
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/sessions`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as { sessions: unknown[] };
+        assert.ok(Array.isArray(body.sessions));
+        assert.equal(body.sessions.length, 0);
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/autoresearch/sessions returns registered sessions with required fields", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-sessions-fields-"));
+    const homeDir = path.join(root, "home");
+    const projectDir = path.join(root, "project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      // Create autoresearch config and log files
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.config.json"),
+        JSON.stringify({
+          goal: "Optimize latency",
+          metricName: "p95_ms",
+          metricUnit: "ms",
+          direction: "lower",
+          command: "./bench.sh",
+        }),
+      );
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.jsonl"),
+        [
+          JSON.stringify({
+            type: "run", run: 1, created_at: "2026-05-26T10:00:00.000Z",
+            status: "baseline", metric: 42.5, metric_name: "p95_ms", direction: "lower",
+            description: "baseline", baseline_metric: 42.5, best_metric: 42.5, improvement_ratio: 0,
+            asi: { hypothesis: "measure baseline" },
+          }),
+          JSON.stringify({
+            type: "run", run: 2, created_at: "2026-05-26T10:05:00.000Z",
+            status: "keep", metric: 38.0, metric_name: "p95_ms", direction: "lower",
+            description: "cached", baseline_metric: 42.5, best_metric: 38.0, improvement_ratio: 0.106,
+            asi: { hypothesis: "add cache" },
+          }),
+        ].join("\n") + "\n",
+      );
+
+      const db = getDb();
+      const { upsertAutoresearchSession } = await import("../../dist/db.js");
+      upsertAutoresearchSession(projectDir);
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/sessions`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as {
+          sessions: Array<{
+            id: string;
+            cwd: string;
+            goal: string | null;
+            metric_name: string | null;
+            best_metric: number | null;
+            total_runs: number;
+            last_seen_at: string;
+            files_missing: number;
+          }>;
+        };
+        assert.ok(Array.isArray(body.sessions));
+        assert.equal(body.sessions.length, 1);
+
+        const session = body.sessions[0];
+        assert.equal(session.cwd, projectDir);
+        assert.equal(session.goal, "Optimize latency");
+        assert.equal(session.metric_name, "p95_ms");
+        assert.equal(session.best_metric, 38.0);
+        assert.equal(session.total_runs, 2);
+        assert.equal(session.files_missing, 0);
+        assert.ok(typeof session.id === "string" && session.id.length > 0);
+        assert.ok(typeof session.last_seen_at === "string");
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/autoresearch/sessions/:id returns full session detail with experiments", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-session-by-id-"));
+    const homeDir = path.join(root, "home");
+    const projectDir = path.join(root, "project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.config.json"),
+        JSON.stringify({
+          goal: "Reduce bundle size",
+          metricName: "bundle_kb",
+          direction: "lower",
+          command: "./measure.sh",
+        }),
+      );
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.jsonl"),
+        [
+          JSON.stringify({
+            type: "run", run: 1, created_at: "2026-05-26T10:00:00.000Z",
+            status: "baseline", metric: 512.0, metric_name: "bundle_kb", direction: "lower",
+            description: "baseline", baseline_metric: 512.0, best_metric: 512.0, improvement_ratio: 0,
+            asi: { hypothesis: "measure baseline", learned: "current build is 512kb", next_focus: "tree shake" },
+          }),
+          JSON.stringify({
+            type: "run", run: 2, created_at: "2026-05-26T10:05:00.000Z",
+            status: "keep", metric: 480.0, metric_name: "bundle_kb", direction: "lower",
+            description: "tree shake", baseline_metric: 512.0, best_metric: 480.0, improvement_ratio: 0.0625,
+            duration_ms: 3200, commit_before: "abc1234", commit_after: "def5678",
+            asi: { hypothesis: "enable tree shaking", learned: "tree shaking saves 32kb", next_focus: "minify css" },
+          }),
+        ].join("\n") + "\n",
+      );
+
+      const db = getDb();
+      const { upsertAutoresearchSession } = await import("../../dist/db.js");
+      upsertAutoresearchSession(projectDir);
+
+      // Get the session id (realpath of projectDir)
+      const realpath = fs.realpathSync(projectDir);
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/sessions/${encodeURIComponent(realpath)}`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as {
+          session: { id: string; cwd: string; goal: string; best_metric: number; total_runs: number };
+          exists: boolean;
+          summary: { bestMetric: number; bestRun: number; totalRuns: number };
+          experiments: Array<{ run: number; status: string; metric: number; description: string; hypothesis: string; learned: string; next_focus: string }>;
+        };
+
+        assert.equal(body.exists, true);
+        assert.equal(body.session.cwd, projectDir);
+        assert.equal(body.session.goal, "Reduce bundle size");
+        assert.equal(body.session.best_metric, 480.0);
+        assert.equal(body.session.total_runs, 2);
+
+        assert.ok(body.summary);
+        assert.equal(body.summary.bestMetric, 480.0);
+        assert.equal(body.summary.bestRun, 2);
+        assert.equal(body.summary.totalRuns, 2);
+
+        assert.equal(body.experiments.length, 2);
+        assert.equal(body.experiments[0].run, 1);
+        assert.equal(body.experiments[0].status, "baseline");
+        assert.equal(body.experiments[0].metric, 512.0);
+        assert.equal(body.experiments[0].hypothesis, "measure baseline");
+        assert.equal(body.experiments[0].learned, "current build is 512kb");
+        assert.equal(body.experiments[0].next_focus, "tree shake");
+
+        assert.equal(body.experiments[1].run, 2);
+        assert.equal(body.experiments[1].status, "keep");
+        assert.equal(body.experiments[1].hypothesis, "enable tree shaking");
+        assert.equal(body.experiments[1].learned, "tree shaking saves 32kb");
+        assert.equal(body.experiments[1].next_focus, "minify css");
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/autoresearch/sessions/:id returns 404 for unknown session", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-session-404-"));
+    const homeDir = path.join(root, "home");
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/sessions/nonexistent`);
+        assert.equal(response.status, 404);
+        const body = await response.json() as { error: string };
+        assert.match(body.error, /Session not found/);
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("backfillAutoresearchSessions inserts missing sessions from recent runs", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-backfill-"));
+    const homeDir = path.join(root, "home");
+    const projectDir = path.join(root, "project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      // Create autoresearch project files
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.config.json"),
+        JSON.stringify({
+          goal: "Backfill test",
+          metricName: "coverage",
+          direction: "higher",
+          command: "./cov.sh",
+        }),
+      );
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.jsonl"),
+        JSON.stringify({
+          type: "run", run: 1, created_at: "2026-05-27T10:00:00.000Z",
+          status: "baseline", metric: 0.55, metric_name: "coverage", direction: "higher",
+          description: "baseline", baseline_metric: 0.55, best_metric: 0.55, improvement_ratio: 0,
+          asi: { hypothesis: "measure baseline" },
+        }) + "\n",
+      );
+
+      const db = getDb();
+
+      // Create a run that points to the project dir but has no autoresearch session yet
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+        VALUES (?, 1, 'do-now', 'backfill-task', 'completed', ?, 0, '2026-05-27T10:00:00.000Z', '2026-05-27T10:01:00.000Z')
+      `).run(
+        "run-backfill",
+        JSON.stringify({ working_directory_for_harness: projectDir }),
+      );
+
+      // Verify no session exists yet
+      const { getAutoresearchSessionById, getAutoresearchSessions } = await import("../../dist/db.js");
+      const sessionsBefore = getAutoresearchSessions();
+      assert.equal(sessionsBefore.length, 0);
+
+      // Run backfill
+      const { backfillAutoresearchSessions } = await import("../../dist/server/dashboard.js");
+      backfillAutoresearchSessions();
+
+      // Verify session was created
+      const sessionsAfter = getAutoresearchSessions();
+      assert.equal(sessionsAfter.length, 1);
+      assert.equal(sessionsAfter[0].cwd, projectDir);
+      assert.equal(sessionsAfter[0].goal, "Backfill test");
+      assert.equal(sessionsAfter[0].metric_name, "coverage");
+      assert.equal(sessionsAfter[0].baseline_metric, 0.55);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("backfillAutoresearchSessions does not duplicate existing sessions", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-backfill-no-dup-"));
+    const homeDir = path.join(root, "home");
+    const projectDir = path.join(root, "project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.config.json"),
+        JSON.stringify({
+          goal: "No duplicate test",
+          metricName: "latency_ms",
+          direction: "lower",
+          command: "./bench.sh",
+        }),
+      );
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.jsonl"),
+        JSON.stringify({
+          type: "run", run: 1, created_at: "2026-05-27T10:00:00.000Z",
+          status: "baseline", metric: 100, metric_name: "latency_ms", direction: "lower",
+          description: "baseline", baseline_metric: 100, best_metric: 100, improvement_ratio: 0,
+          asi: { hypothesis: "measure" },
+        }) + "\n",
+      );
+
+      const db = getDb();
+
+      // First upsert the session
+      const { upsertAutoresearchSession, getAutoresearchSessions } = await import("../../dist/db.js");
+      upsertAutoresearchSession(projectDir);
+      const sessionsBefore = getAutoresearchSessions();
+      assert.equal(sessionsBefore.length, 1);
+
+      // Create a run that would trigger backfill
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+        VALUES (?, 1, 'do-now', 'task', 'completed', ?, 0, '2026-05-27T10:00:00.000Z', '2026-05-27T10:01:00.000Z')
+      `).run(
+        "run-no-dup",
+        JSON.stringify({ working_directory_for_harness: projectDir }),
+      );
+
+      // Run backfill - should not create a duplicate
+      const { backfillAutoresearchSessions } = await import("../../dist/server/dashboard.js");
+      backfillAutoresearchSessions();
+
+      const sessionsAfter = getAutoresearchSessions();
+      assert.equal(sessionsAfter.length, 1, "backfill should not create duplicate sessions");
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("backfillAutoresearchSessions handles runs without harness cwd gracefully", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-backfill-no-cwd-"));
+    const homeDir = path.join(root, "home");
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      const db = getDb();
+
+      // Create a run with no harness cwd
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+        VALUES (?, 1, 'do-now', 'no-harness-task', 'completed', '{}', 0, '2026-05-27T10:00:00.000Z', '2026-05-27T10:01:00.000Z')
+      `).run("run-no-harness");
+
+      const { backfillAutoresearchSessions } = await import("../../dist/server/dashboard.js");
+      // Should not throw
+      assert.doesNotThrow(() => backfillAutoresearchSessions());
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("existing /api/autoresearch/runs still works after session API added", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-runs-backcompat-"));
+    const homeDir = path.join(root, "home");
+    const projectDir = path.join(root, "project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.config.json"),
+        JSON.stringify({
+          goal: "Back compat",
+          metricName: "total_µs",
+          direction: "lower",
+          command: "./bench.sh",
+        }),
+      );
+
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+        VALUES (?, 1, 'do-now', 'back-compat-task', 'running', ?, 0, '2026-05-27T10:00:00.000Z', '2026-05-27T10:01:00.000Z')
+      `).run(
+        "run-backcompat",
+        JSON.stringify({ working_directory_for_harness: projectDir }),
+      );
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        // Old /api/autoresearch/runs endpoint still works
+        const runsResponse = await fetch(`${baseUrl}/api/autoresearch/runs`);
+        assert.equal(runsResponse.status, 200);
+        const runsBody = await runsResponse.json() as { runs: Array<{ id: string }> };
+        assert.ok(Array.isArray(runsBody.runs));
+        assert.equal(runsBody.runs.length, 1);
+        assert.equal(runsBody.runs[0].id, "run-backcompat");
+
+        // Old /api/runs/:id/autoresearch endpoint still works
+        const detailResponse = await fetch(`${baseUrl}/api/runs/run-backcompat/autoresearch`);
+        assert.equal(detailResponse.status, 200);
+        const detailBody = await detailResponse.json() as { exists: boolean };
+        assert.equal(detailBody.exists, true);
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("multiple sessions are ordered by updated_at DESC", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-sessions-order-"));
+    const homeDir = path.join(root, "home");
+    const projectDir1 = path.join(root, "project1");
+    const projectDir2 = path.join(root, "project2");
+    fs.mkdirSync(projectDir1, { recursive: true });
+    fs.mkdirSync(projectDir2, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      for (const dir of [projectDir1, projectDir2]) {
+        fs.writeFileSync(
+          path.join(dir, "autoresearch.config.json"),
+          JSON.stringify({
+            goal: "test",
+            metricName: "ms",
+            direction: "lower",
+            command: "./test.sh",
+          }),
+        );
+        fs.writeFileSync(
+          path.join(dir, "autoresearch.jsonl"),
+          JSON.stringify({
+            type: "run", run: 1, created_at: "2026-05-27T10:00:00.000Z",
+            status: "baseline", metric: 10, metric_name: "ms", direction: "lower",
+            description: "baseline", baseline_metric: 10, best_metric: 10, improvement_ratio: 0,
+            asi: { hypothesis: "test" },
+          }) + "\n",
+        );
+      }
+
+      const db = getDb();
+      const { upsertAutoresearchSession } = await import("../../dist/db.js");
+
+      // Upsert project1 first, then project2 (so project2 is most recently updated)
+      upsertAutoresearchSession(projectDir1);
+      // Small sleep to ensure different timestamps
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      upsertAutoresearchSession(projectDir2);
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/sessions`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as { sessions: Array<{ cwd: string }> };
+        assert.equal(body.sessions.length, 2);
+        // Most recently updated first
+        assert.equal(body.sessions[0].cwd, projectDir2);
+        assert.equal(body.sessions[1].cwd, projectDir1);
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

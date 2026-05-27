@@ -2338,3 +2338,551 @@ describe("nudge command", { concurrency: 1 }, () => {
     }
   });
 });
+
+describe("autoresearch CLI session registration", () => {
+  /** Create a shared HOME/state directory for all CLI calls in a test, so they share the same DB. */
+  function makeSharedEnv() {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cli-shared-"));
+    const homeDir = path.join(tmpDir, "home");
+    const stateDir = path.join(tmpDir, "state");
+    fs.mkdirSync(homeDir, { recursive: true });
+    fs.mkdirSync(stateDir, { recursive: true });
+    const dbPath = path.join(stateDir, "tamandua.db");
+    return { tmpDir, homeDir, stateDir, dbPath };
+  }
+
+  /** Run a CLI command with a shared HOME, so DB operations are visible across calls. */
+  function cliShared(sharedEnv: { homeDir: string; stateDir: string }, args: string[]) {
+    return cli(args, { HOME: sharedEnv.homeDir, TAMANDUA_STATE_DIR: sharedEnv.stateDir });
+  }
+
+  function initSession(sharedEnv: { homeDir: string; stateDir: string; tmpDir: string }, cwd: string, opts?: {
+    goal?: string;
+    metric?: string;
+    direction?: string;
+    command?: string;
+  }) {
+    const result = cliShared(sharedEnv, ["autoresearch", "init",
+      "--goal", opts?.goal ?? "test session",
+      "--metric", opts?.metric ?? "score",
+      "--direction", opts?.direction ?? "lower",
+      "--command", opts?.command ?? "echo METRIC score=0.5",
+      "--cwd", cwd,
+    ]);
+    if (result.status !== 0) throw new Error(`init failed: ${result.stderr}`);
+    // Clean up the init's testEnv (we only needed the shared env)
+    fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+  }
+
+  function openDb(dbPath: string) {
+    // Import DatabaseSync lazily here if needed, but we can use dynamic import
+    return import("node:sqlite").then(({ DatabaseSync }) => new DatabaseSync(dbPath));
+  }
+
+  it("init upserts a new session row in the DB", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+
+      const result = cliShared(env, ["autoresearch", "init",
+        "--goal", "test init upsert",
+        "--metric", "latency_ms",
+        "--direction", "lower",
+        "--command", "echo METRIC latency_ms=100",
+        "--cwd", cwd,
+      ]);
+      try {
+        assert.equal(result.status, 0);
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1, "should have exactly one session row");
+          const row = rows[0];
+          assert.equal(row.metric_name, "latency_ms");
+          assert.equal(row.direction, "lower");
+          assert.equal(row.goal, "test init upsert");
+          assert.equal(row.files_missing, 0);
+          assert.ok(row.created_at, "created_at should be set");
+          assert.ok(row.updated_at, "updated_at should be set");
+          assert.ok(row.last_seen_at, "last_seen_at should be set");
+          assert.equal(row.total_runs, 0, "new session should have 0 runs");
+        } finally {
+          db.close();
+        }
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("run-experiment refreshes last_seen_at after execution", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd, { goal: "test run-expt", metric: "score", command: "echo METRIC score=0.3" });
+
+      const result = cliShared(env, ["autoresearch", "run-experiment", "--cwd", cwd]);
+      try {
+        assert.equal(result.status, 0);
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1);
+          const row = rows[0];
+          assert.ok(row.last_seen_at, "last_seen_at should be refreshed");
+          assert.equal(row.files_missing, 0);
+        } finally {
+          db.close();
+        }
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("log-experiment refreshes best_metric and total_runs", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd, { goal: "test log-expt", metric: "score", command: "echo METRIC score=0.3" });
+
+      // First, run an experiment to create a baseline
+      const runResult = cliShared(env, ["autoresearch", "run-experiment", "--cwd", cwd]);
+      try {
+        assert.equal(runResult.status, 0);
+      } finally {
+        fs.rmSync(runResult.testEnv.tmpDir, { recursive: true, force: true });
+      }
+
+      // Now log-experiment to mark as keep
+      const result = cliShared(env, ["autoresearch", "log-experiment",
+        "--description", "baseline run",
+        "--status", "auto",
+        "--cwd", cwd,
+      ]);
+      try {
+        assert.equal(result.status, 0);
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1);
+          const row = rows[0];
+          assert.equal(row.total_runs, 1, "should have 1 run after log-experiment");
+          assert.ok(row.best_metric !== null, "best_metric should be set");
+          assert.ok(row.last_seen_at, "last_seen_at should be refreshed");
+          assert.equal(row.files_missing, 0);
+        } finally {
+          db.close();
+        }
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("status refreshes last_seen_at", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd, { goal: "test status", metric: "score", command: "echo METRIC score=0.3" });
+
+      const result = cliShared(env, ["autoresearch", "status", "--cwd", cwd]);
+      try {
+        assert.equal(result.status, 0);
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1);
+          const row = rows[0];
+          assert.ok(row.last_seen_at, "last_seen_at should be refreshed");
+          assert.equal(row.files_missing, 0);
+        } finally {
+          db.close();
+        }
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("next refreshes last_seen_at", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd, { goal: "test next", metric: "score", command: "echo METRIC score=0.3" });
+
+      const result = cliShared(env, ["autoresearch", "next", "--cwd", cwd]);
+      try {
+        assert.equal(result.status, 0);
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1);
+          const row = rows[0];
+          assert.ok(row.last_seen_at, "last_seen_at should be refreshed");
+          assert.equal(row.files_missing, 0);
+        } finally {
+          db.close();
+        }
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("loop refreshes session on start", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd, { goal: "test loop", metric: "score", command: "echo METRIC score=0.4" });
+
+      const result = cliShared(env, ["autoresearch", "loop",
+        "--measure-only",
+        "--max-iterations", "1",
+        "--cwd", cwd,
+      ]);
+      try {
+        assert.equal(result.status, 0);
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1);
+          const row = rows[0];
+          assert.ok(row.last_seen_at, "last_seen_at should be refreshed by loop");
+          assert.equal(row.files_missing, 0);
+        } finally {
+          db.close();
+        }
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("project-local files are not modified by DB operations", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd, { goal: "test no touch", metric: "score", command: "echo METRIC score=0.3" });
+
+      // Snapshot the config and log files before any CLI ops
+      const configBefore = fs.readFileSync(path.join(cwd, "autoresearch.config.json"), "utf-8");
+      const logBefore = fs.statSync(path.join(cwd, "autoresearch.jsonl")).mtimeMs;
+
+      // Run several CLI commands that trigger upserts
+      for (const args of [
+        ["autoresearch", "status", "--cwd", cwd],
+        ["autoresearch", "next", "--cwd", cwd],
+      ]) {
+        const r = cliShared(env, args);
+        try {
+          assert.equal(r.status, 0);
+        } finally {
+          fs.rmSync(r.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      }
+
+      // Verify config and log are unchanged
+      const configAfter = fs.readFileSync(path.join(cwd, "autoresearch.config.json"), "utf-8");
+      const logAfter = fs.statSync(path.join(cwd, "autoresearch.jsonl")).mtimeMs;
+      assert.equal(configAfter, configBefore, "config.json should not be modified");
+      assert.equal(logAfter, logBefore, "log.jsonl mtime should not change");
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("multiple sessions are tracked independently", async () => {
+    const env = makeSharedEnv();
+    try {
+      const sessionA = path.join(env.tmpDir, "session-a");
+      const sessionB = path.join(env.tmpDir, "session-b");
+      fs.mkdirSync(sessionA);
+      fs.mkdirSync(sessionB);
+
+      // Init both sessions
+      for (const [cwd, metric] of [[sessionA, "latency"], [sessionB, "throughput"]] as [string, string][]) {
+        const r = cliShared(env, ["autoresearch", "init",
+          "--goal", `test ${metric}`,
+          "--metric", metric,
+          "--direction", metric === "latency" ? "lower" : "higher",
+          "--command", `echo METRIC ${metric}=42`,
+          "--cwd", cwd,
+        ]);
+        try {
+          assert.equal(r.status, 0);
+        } finally {
+          fs.rmSync(r.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      }
+
+      const db = await openDb(env.dbPath);
+      try {
+        const rows = db.prepare("SELECT * FROM autoresearch_sessions ORDER BY cwd").all() as Array<Record<string, unknown>>;
+        assert.equal(rows.length, 2);
+        assert.equal(rows[0].metric_name, "latency");
+        assert.equal(rows[0].direction, "lower");
+        assert.equal(rows[1].metric_name, "throughput");
+        assert.equal(rows[1].direction, "higher");
+      } finally {
+        db.close();
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("autoresearch prune CLI", () => {
+  /** Create a shared HOME/state directory for all CLI calls in a test, so they share the same DB. */
+  function makeSharedEnv() {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cli-shared-"));
+    const homeDir = path.join(tmpDir, "home");
+    const stateDir = path.join(tmpDir, "state");
+    fs.mkdirSync(homeDir, { recursive: true });
+    fs.mkdirSync(stateDir, { recursive: true });
+    const dbPath = path.join(stateDir, "tamandua.db");
+    return { tmpDir, homeDir, stateDir, dbPath };
+  }
+
+  function cliShared(sharedEnv: { homeDir: string; stateDir: string }, args: string[]) {
+    return cli(args, { HOME: sharedEnv.homeDir, TAMANDUA_STATE_DIR: sharedEnv.stateDir });
+  }
+
+  function openDb(dbPath: string) {
+    return import("node:sqlite").then(({ DatabaseSync }) => new DatabaseSync(dbPath));
+  }
+
+  function initSession(sharedEnv: { homeDir: string; stateDir: string; tmpDir: string }, cwd: string) {
+    const result = cliShared(sharedEnv, ["autoresearch", "init",
+      "--goal", "test prune",
+      "--metric", "score",
+      "--direction", "lower",
+      "--command", "echo METRIC score=0.5",
+      "--cwd", cwd,
+    ]);
+    if (result.status !== 0) throw new Error(`init failed: ${result.stderr}`);
+    fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+  }
+
+  it("tamandua autoresearch prune --help shows prune-specific help", () => {
+    const result = cli(["autoresearch", "prune", "--help"]);
+    try {
+      assert.equal(result.status, 0);
+      assert.match(result.stdout ?? "", /Remove stale AutoResearch registry rows/);
+      assert.match(result.stdout ?? "", /--older-than/);
+      assert.match(result.stdout ?? "", /--missing/);
+      assert.match(result.stdout ?? "", /--dry-run/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch prune without --older-than exits with error", () => {
+    const result = cli(["autoresearch", "prune"]);
+    try {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr ?? "", /Missing --older-than/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints No sessions to prune when no sessions exist", () => {
+    const env = makeSharedEnv();
+    try {
+      const result = cliShared(env, ["autoresearch", "prune", "--older-than", "30d"]);
+      try {
+        assert.equal(result.status, 0);
+        assert.match(result.stdout ?? "", /No sessions to prune/);
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes sessions older than threshold", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd);
+
+      // Prune with --older-than 0m (everything is old)
+      const result = cliShared(env, ["autoresearch", "prune", "--older-than", "0m"]);
+      try {
+        assert.equal(result.status, 0);
+        assert.match(result.stdout ?? "", /Pruned:/);
+        assert.match(result.stdout ?? "", /Pruned 1 session/);
+
+        // Verify session is gone from DB
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 0, "session should be gone from DB");
+        } finally {
+          db.close();
+        }
+
+        // Verify project-local files still exist
+        assert.ok(fs.existsSync(path.join(cwd, "autoresearch.config.json")), "config file should still exist");
+        assert.ok(fs.existsSync(path.join(cwd, "autoresearch.jsonl")), "log file should still exist");
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("--dry-run prints but does not delete", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd);
+
+      const result = cliShared(env, ["autoresearch", "prune", "--older-than", "0m", "--dry-run"]);
+      try {
+        assert.equal(result.status, 0);
+        assert.match(result.stdout ?? "", /\[DRY RUN\] Would prune:/);
+        assert.match(result.stdout ?? "", /Dry run: 1 session/);
+
+        // Verify session is still in DB
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1, "session should still be in DB after dry run");
+        } finally {
+          db.close();
+        }
+
+        // Verify project-local files still exist
+        assert.ok(fs.existsSync(path.join(cwd, "autoresearch.config.json")), "config file should still exist");
+        assert.ok(fs.existsSync(path.join(cwd, "autoresearch.jsonl")), "log file should still exist");
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("--missing only prunes sessions with missing files", async () => {
+    const env = makeSharedEnv();
+    try {
+      // Create two sessions: one with files present, one with files missing
+      const presentCwd = path.join(env.tmpDir, "present");
+      const missingCwd = path.join(env.tmpDir, "missing");
+      fs.mkdirSync(presentCwd);
+      fs.mkdirSync(missingCwd);
+      initSession(env, presentCwd);
+      initSession(env, missingCwd);
+
+      // Delete the missing session's directory
+      fs.rmSync(missingCwd, { recursive: true });
+
+      // Re-upsert both sessions — the missing one should get files_missing=1
+      // Run status on the missing cwd to trigger re-upsert with files_missing
+      const statusResult = cliShared(env, ["autoresearch", "status", "--cwd", missingCwd]);
+      try {
+        // status will fail because the dir doesn't exist, but the upsert still happens
+        // (upsertAutoresearchSession handles missing dirs gracefully)
+      } finally {
+        fs.rmSync(statusResult.testEnv.tmpDir, { recursive: true, force: true });
+      }
+
+      // Prune with --older-than 0m --missing
+      const result = cliShared(env, ["autoresearch", "prune", "--older-than", "0m", "--missing"]);
+      try {
+        assert.equal(result.status, 0);
+        assert.match(result.stdout ?? "", /Pruned:.*missing/);
+        assert.match(result.stdout ?? "", /Pruned 1 session/);
+
+        // Verify: missing session gone, present session still in DB
+        const db = await openDb(env.dbPath);
+        try {
+          const rows = db.prepare("SELECT * FROM autoresearch_sessions").all() as Array<Record<string, unknown>>;
+          assert.equal(rows.length, 1, "only one session should remain in DB");
+          assert.equal(rows[0].cwd, presentCwd, "present session should remain");
+        } finally {
+          db.close();
+        }
+
+        // Verify project-local files for present session still exist
+        assert.ok(fs.existsSync(path.join(presentCwd, "autoresearch.config.json")), "config file should still exist");
+        assert.ok(fs.existsSync(path.join(presentCwd, "autoresearch.jsonl")), "log file should still exist");
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prune output includes cwd, metric, last_seen_at, and reason", async () => {
+    const env = makeSharedEnv();
+    try {
+      const cwd = path.join(env.tmpDir, "session");
+      fs.mkdirSync(cwd);
+      initSession(env, cwd);
+
+      // Prune with --older-than 0m (everything is old)
+      const result = cliShared(env, ["autoresearch", "prune", "--older-than", "0m"]);
+      try {
+        assert.equal(result.status, 0);
+        const stdout = result.stdout ?? "";
+        // Should contain cwd, metric name, and last_seen_at
+        assert.match(stdout, new RegExp(cwd));
+        assert.match(stdout, /score/);
+        assert.match(stdout, /last seen/);
+      } finally {
+        fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+      }
+    } finally {
+      fs.rmSync(env.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch --help lists prune subcommand", () => {
+    const result = cli(["autoresearch", "--help"]);
+    try {
+      assert.equal(result.status, 0);
+      assert.match(result.stdout ?? "", /prune/);
+      assert.match(result.stdout ?? "", /Remove stale AutoResearch registry rows/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch prune with invalid duration exits with error", () => {
+    const result = cli(["autoresearch", "prune", "--older-than", "invalid"]);
+    try {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr ?? "", /Invalid duration/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+});

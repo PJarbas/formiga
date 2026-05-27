@@ -124,6 +124,43 @@ discovers the nearest `autoresearch.config.json` / `autoresearch.jsonl`, and
 renders the experiment trace. Gray points are attempted experiments; green points
 and the green line are the kept best-so-far frontier.
 
+### Session Registry
+
+Tamandua maintains a SQLite registry of AutoResearch sessions so the dashboard
+can discover them directly without scanning workflow runs. The registry lives in
+a table called `autoresearch_sessions` inside the main Tamandua database
+(`~/.tamandua/tamandua.db`).
+
+- **Project-local files are the source of truth.** `autoresearch.config.json`,
+  `autoresearch.jsonl`, `autoresearch.md`, and `autoresearch.sh` remain on disk
+  in your project. The DB registry is an index/cache for discovery and dashboard
+  UX — it never modifies your project files.
+- **Sessions are registered automatically.** Every `tamandua autoresearch` command
+  (init, run-experiment, log-experiment, status, next, loop) updates or creates
+  the registry entry for that project directory.
+- **Backfill on dashboard start.** When the dashboard starts, it scans recent
+  workflow runs for harness directories that contain AutoResearch files and
+  backfills any missing registry entries.
+
+### Pruning Stale Registry Entries
+
+Use `tamandua autoresearch prune` to clean up stale registry rows without
+removing any project-local files.
+
+```bash
+# Prune sessions not updated in 30 days
+tamandua autoresearch prune --older-than 30d
+
+# Prune only sessions whose project files no longer exist
+tamandua autoresearch prune --older-than 7d --missing
+
+# Preview what would be pruned without deleting
+tamandua autoresearch prune --older-than 30d --dry-run
+```
+
+The prune command only touches the SQLite registry — your `autoresearch.jsonl`,
+config files, and experiment history remain untouched on disk.
+
 ### Example Experiment
 
 For a test-coverage loop, a single experiment should be narrow enough to explain
