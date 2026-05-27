@@ -354,6 +354,64 @@ describe("autoresearch loop", () => {
     // Verify the prompt is passed positionally
     assert.ok(recorded.includes("test prompt"), `expected prompt in args: ${JSON.stringify(recorded)}`);
   });
+
+  it("closes pi stdin so pi does not hang waiting for input (regression test for stdin-left-open bug)", async () => {
+    // Regression test: the runPiAgent function previously spawned pi with
+    // stdio: ["pipe","pipe","pipe"] and never wrote to or closed stdin.
+    // pi in --print mode waits for stdin EOF before processing argv, so
+    // it would hang until the 300s timeout. The fix uses ["ignore","pipe","pipe"].
+    const cwd = makeTempDir();
+    const recordFile = path.join(cwd, "pi-args.json");
+    const fakePiPath = path.join(cwd, "pi");
+
+    // Fake pi that waits for stdin EOF, writes JSONL output, and records argv.
+    // With stdin ignored/closed, process.stdin emits "end" immediately and the
+    // output is produced. With stdin left open (the bug), it hangs forever.
+    const messageEnd = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "STATUS: done\\nCHANGES: stdin correctly ignored\\nHYPOTHESIS: ignore stdin for prompt mode\\nLEARNED: pi waits for stdin EOF\\nNEXT_FOCUS: none" }],
+      },
+    });
+    fs.writeFileSync(fakePiPath, [
+      `#!/usr/bin/env -S ${process.execPath}`,
+      `const fs = require("node:fs");`,
+      `const recordFile = ${JSON.stringify(recordFile)};`,
+      `fs.writeFileSync(recordFile, JSON.stringify(process.argv.slice(1)));`,
+      `process.stdin.resume();`,
+      `process.stdin.on("end", () => {`,
+      `  console.log(${JSON.stringify(JSON.stringify({ type: "session", version: 1 }))});`,
+      `  console.log(${JSON.stringify(messageEnd)});`,
+      `  console.log(${JSON.stringify(JSON.stringify({ type: "agent_end" }))});`,
+      `  process.exit(0);`,
+      `});`,
+    ].join("\n"));
+    fs.chmodSync(fakePiPath, 0o755);
+
+    // Spawn with the fix: stdio: ["ignore", "pipe", "pipe"]
+    const child = spawnSync(fakePiPath, ["--print", "--no-session", "--mode", "json", "test prompt"], {
+      cwd,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000, // 10s safety net — should complete in <1s
+    });
+
+    assert.equal(child.status, 0, `fake pi exited ${child.status}: ${child.stderr}`);
+    assert.ok(child.stdout.includes("STATUS: done"), `expected STATUS in stdout: ${child.stdout}`);
+
+    // Verify argv correctness (same checks as the existing argv test)
+    const recorded = JSON.parse(fs.readFileSync(recordFile, "utf-8"));
+    assert.ok(recorded.includes("--print"), `expected --print in args: ${JSON.stringify(recorded)}`);
+    assert.ok(recorded.includes("--no-session"), `expected --no-session in args: ${JSON.stringify(recorded)}`);
+    assert.ok(recorded.includes("--mode"), `expected --mode in args: ${JSON.stringify(recorded)}`);
+    const modeIdx = recorded.indexOf("--mode");
+    assert.equal(recorded[modeIdx + 1], "json", `expected --mode json in args: ${JSON.stringify(recorded)}`);
+    assert.ok(!recorded.includes("--no-tui"), `--no-tui should NOT be in args: ${JSON.stringify(recorded)}`);
+    assert.ok(!recorded.includes("--cwd"), `--cwd should NOT be in args: ${JSON.stringify(recorded)}`);
+    assert.ok(!recorded.includes("--message"), `--message should NOT be in args: ${JSON.stringify(recorded)}`);
+    assert.ok(recorded.includes("test prompt"), `expected prompt in args: ${JSON.stringify(recorded)}`);
+  });
 });
 
 describe("pi JSONL stream parsing in autoresearch context", () => {

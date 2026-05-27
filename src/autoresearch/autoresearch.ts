@@ -736,7 +736,7 @@ async function runPiAgent(cwd: string, prompt: string, timeoutMs = 300_000): Pro
     const args = ["--print", "--no-session", "--mode", "json", prompt];
     const child = spawn(piCmd, args, {
       cwd,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
