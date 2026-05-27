@@ -136,6 +136,25 @@ export type LogExperimentOptions = {
   revertDiscard?: boolean;
 };
 
+export type LoopAutoresearchOptions = {
+  cwd?: string;
+  targetMetric?: number;
+  maxIterations?: number;
+  maxConsecutiveFailures?: number;
+};
+
+export type LoopAutoresearchResult = {
+  iterations: number;
+  bestMetric: number | null;
+  bestRun: number | null;
+  kept: number;
+  discarded: number;
+  crashed: number;
+  checksFailed: number;
+  stopReason: string;
+  cancelled: boolean;
+};
+
 type CommandResult = {
   exitCode: number | null;
   stdout: string;
@@ -287,8 +306,8 @@ export function initExperiment(options: InitExperimentOptions): AutoresearchSess
     "1. Inspect `autoresearch.jsonl`, the current best result, and the previous learning.",
     "2. Choose one narrow hypothesis for the next experiment.",
     "3. Edit only the files needed for that hypothesis.",
-    "4. Run `tamandua autoresearch run`.",
-    "5. Run `tamandua autoresearch log --status auto --description ... --hypothesis ... --learned ... --next-focus ...`.",
+    "4. Run `tamandua autoresearch run-experiment`.",
+    "5. Run `tamandua autoresearch log-experiment --status auto --description ... --hypothesis ... --learned ... --next-focus ...`.",
     "6. Use the logged keep/discard result to define the next experiment.",
     "",
     "The loop is a ratchet: every iteration must learn from measured evidence before proposing the next experiment.",
@@ -688,6 +707,129 @@ async function runHook(paths: AutoresearchPaths, name: "before" | "after", paylo
     child.on("close", () => { clearTimeout(timeout); resolve(); });
     child.on("error", () => { clearTimeout(timeout); resolve(); });
   });
+}
+
+export async function loopAutoresearch(options: LoopAutoresearchOptions = {}): Promise<LoopAutoresearchResult> {
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const config = readSessionConfig(cwd);
+  const maxIterations = options.maxIterations ?? 20;
+  const maxConsecutiveFailures = options.maxConsecutiveFailures ?? 3;
+
+  let bestMetric: number | null = null;
+  let bestRun: number | null = null;
+  let iterations = 0;
+  let consecutiveFailures = 0;
+  let kept = 0;
+  let discarded = 0;
+  let crashed = 0;
+  let checksFailed = 0;
+  let stopReason: string | null = null;
+  let lastCompletedIteration = 0;
+  let cancelled = false;
+
+  const sigintHandler = () => {
+    cancelled = true;
+    process.stdout.write("\n");
+    if (lastCompletedIteration > 0) {
+      process.stdout.write(`\nCancelled after iteration ${lastCompletedIteration}/${maxIterations}.\n`);
+      process.stdout.write(`Last completed: iteration ${lastCompletedIteration}\n`);
+    } else {
+      process.stdout.write(`\nCancelled before first iteration completed.\n`);
+    }
+    process.stdout.write(`autoresearch.jsonl is intact.\n`);
+    process.exit(0);
+  };
+
+  process.on("SIGINT", sigintHandler);
+
+  try {
+    while (iterations < maxIterations) {
+      iterations++;
+      const summary = summarizeAutoresearch(cwd);
+      const nextPromptLines = summary.nextPrompt.split("\n");
+      const nextFocusLine = nextPromptLines.find((line) => line.startsWith("Next focus:"));
+      const nextFocus = nextFocusLine?.replace("Next focus: ", "") ?? "Explore improvements";
+
+      process.stdout.write(`[${iterations}/${maxIterations}] Focus: ${nextFocus.slice(0, 80)}${nextFocus.length > 80 ? "..." : ""}\n`);
+
+      const result = await runExperiment({ cwd });
+      lastCompletedIteration = iterations;
+
+      const description = result.status === "measured"
+        ? `Loop iteration ${iterations}: ${result.metric}`
+        : `Loop iteration ${iterations}: ${result.status}`;
+
+      const logEntry = await logExperiment({
+        cwd,
+        status: "auto",
+        description,
+      });
+
+      if (logEntry.status === "crash") {
+        crashed++;
+        consecutiveFailures++;
+      } else if (logEntry.status === "checks_failed") {
+        checksFailed++;
+        consecutiveFailures++;
+      } else {
+        consecutiveFailures = 0;
+        if (logEntry.status === "keep" || logEntry.status === "baseline") {
+          kept++;
+        } else {
+          discarded++;
+        }
+      }
+
+      if (result.metric !== null) {
+        if (bestMetric === null || isImprovement(result.metric, bestMetric, config.direction)) {
+          bestMetric = result.metric;
+          bestRun = iterations;
+        }
+      }
+
+      const metricStr = result.metric !== null ? String(result.metric) : "crash";
+      const bestStr = bestMetric !== null ? String(bestMetric) : "-";
+      process.stdout.write(`[${iterations}/${maxIterations}] ${config.metricName}=${metricStr} decision=${logEntry.status} best=${bestStr} failures=${consecutiveFailures}\n`);
+
+      if (options.targetMetric !== undefined && result.metric !== null) {
+        const targetReached = config.direction === "lower"
+          ? result.metric <= options.targetMetric
+          : result.metric >= options.targetMetric;
+        if (targetReached) {
+          stopReason = `Target metric reached: ${config.metricName}=${result.metric} (target: ${options.targetMetric})`;
+          break;
+        }
+      }
+
+      if (consecutiveFailures >= maxConsecutiveFailures) {
+        stopReason = `Too many consecutive failures (${consecutiveFailures}/${maxConsecutiveFailures})`;
+        break;
+      }
+    }
+
+    if (stopReason === null) {
+      stopReason = `Max iterations reached (${maxIterations})`;
+    }
+
+    process.stdout.write(`\nLoop complete. ${stopReason}\n`);
+    process.stdout.write(`Iterations: ${iterations}\n`);
+    process.stdout.write(`Best: ${bestMetric !== null ? `${config.metricName}=${bestMetric}` : "(none)"}${bestRun ? ` (run ${bestRun})` : ""}\n`);
+    process.stdout.write(`Kept: ${kept}  Discarded: ${discarded}  Crashed: ${crashed}  Checks failed: ${checksFailed}\n`);
+
+    return {
+      iterations,
+      bestMetric,
+      bestRun,
+      kept,
+      discarded,
+      crashed,
+      checksFailed,
+      stopReason,
+      cancelled,
+    };
+  } finally {
+    process.off("SIGINT", sigintHandler);
+  }
 }
 
 function escapeRegExp(value: string): string {

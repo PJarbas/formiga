@@ -844,8 +844,9 @@ describe("--help infrastructure", () => {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /Run durable optimization experiment loops/);
       assert.match(result.stdout ?? "", /init.*Create a new AutoResearch session/);
-      assert.match(result.stdout ?? "", /run.*Run the configured experiment command/);
-      assert.match(result.stdout ?? "", /log.*Log the keep\/discard decision/);
+      assert.match(result.stdout ?? "", /run-experiment.*Run the configured experiment command/);
+      assert.match(result.stdout ?? "", /log-experiment.*Log the keep\/discard decision/);
+      assert.match(result.stdout ?? "", /loop.*Run a bounded experiment loop/);
       assert.match(result.stdout ?? "", /status.*Summarize baseline/);
       assert.match(result.stdout ?? "", /next.*Print the ratchet prompt/);
       assert.match(result.stdout ?? "", /autoresearch\.jsonl/);
@@ -855,8 +856,8 @@ describe("--help infrastructure", () => {
     }
   });
 
-  it("tamandua autoresearch log --help documents the ratchet fields", () => {
-    const result = cli(["autoresearch", "log", "--help"]);
+  it("tamandua autoresearch log-experiment --help documents the ratchet fields", () => {
+    const result = cli(["autoresearch", "log-experiment", "--help"]);
     try {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /Record experiment learning and decision/);
@@ -867,6 +868,82 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /checks_failed/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch run-experiment --help shows correct help", () => {
+    const result = cli(["autoresearch", "run-experiment", "--help"]);
+    try {
+      assert.equal(result.status, 0);
+      assert.match(result.stdout ?? "", /Execute the current experiment/);
+      assert.match(result.stdout ?? "", /--cwd/);
+      assert.match(result.stdout ?? "", /--command/);
+      assert.match(result.stdout ?? "", /--metric-regex/);
+      assert.match(result.stdout ?? "", /--checks-command/);
+      assert.match(result.stdout ?? "", /--timeout-seconds/);
+      assert.match(result.stdout ?? "", /run_result/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch run (old) exits with error and shows unknown action", () => {
+    const result = cli(["autoresearch", "run"]);
+    try {
+      assert.equal(result.status, 1, `Expected exit code 1, got ${result.status}`);
+      assert.match(result.stderr ?? "", /Unknown autoresearch action: run/);
+      assert.match(result.stderr ?? "", /init\|run-experiment\|log-experiment\|status\|next\|loop/);
+      assert.doesNotMatch(result.stderr ?? "", /run\|/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch log (old) exits with error and shows unknown action", () => {
+    const result = cli(["autoresearch", "log"]);
+    try {
+      assert.equal(result.status, 1, `Expected exit code 1, got ${result.status}`);
+      assert.match(result.stderr ?? "", /Unknown autoresearch action: log/);
+      assert.match(result.stderr ?? "", /init\|run-experiment\|log-experiment\|status\|next\|loop/);
+      assert.doesNotMatch(result.stderr ?? "", /\|log\|/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop --max-iterations 1 completes successfully with simple metric command", () => {
+    const testEnv = makeTestEnv();
+    try {
+      const initResult = cli(["autoresearch", "init",
+        "--goal", "test single iteration",
+        "--metric", "score",
+        "--direction", "lower",
+        "--command", "echo METRIC score=0.5",
+        "--cwd", testEnv.tmpDir,
+      ]);
+      try {
+        assert.equal(initResult.status, 0);
+        const loopResult = cli(["autoresearch", "loop",
+          "--max-iterations", "1",
+          "--cwd", testEnv.tmpDir,
+        ]);
+        try {
+          assert.equal(loopResult.status, 0);
+          assert.match(loopResult.stdout ?? "", /\[1\/1\]/);
+          assert.match(loopResult.stdout ?? "", /Loop complete/);
+          assert.match(loopResult.stdout ?? "", /Max iterations reached/);
+          assert.match(loopResult.stdout ?? "", /Iterations: 1/);
+          assert.match(loopResult.stdout ?? "", /Best:/);
+        } finally {
+          fs.rmSync(loopResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      } finally {
+        if (initResult.testEnv.tmpDir !== testEnv.tmpDir) {
+          fs.rmSync(initResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      fs.rmSync(testEnv.tmpDir, { recursive: true, force: true });
     }
   });
 
@@ -903,6 +980,227 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /tamandua workflow autoresearch abc12345/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop --help shows stop conditions and flags", () => {
+    const result = cli(["autoresearch", "loop", "--help"]);
+    try {
+      assert.equal(result.status, 0);
+      assert.match(result.stdout ?? "", /Run a bounded experiment loop/);
+      assert.match(result.stdout ?? "", /--target-metric/);
+      assert.match(result.stdout ?? "", /--max-iterations/);
+      assert.match(result.stdout ?? "", /--max-consecutive-failures/);
+      assert.match(result.stdout ?? "", /--cwd/);
+      assert.match(result.stdout ?? "", /Ctrl-C/);
+      assert.match(result.stdout ?? "", /Target metric reached/);
+      assert.match(result.stdout ?? "", /Max iterations reached/);
+      assert.match(result.stdout ?? "", /Too many consecutive failures/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua --help includes loop in autoresearch listing", () => {
+    const result = cli(["--help"]);
+    try {
+      assert.equal(result.status, 0);
+      assert.match(result.stdout ?? "", /autoresearch loop\s+Run a bounded experiment loop/);
+      assert.match(result.stdout ?? "", /autoresearch run-experiment/);
+      assert.match(result.stdout ?? "", /autoresearch log-experiment/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch badcommand shows loop in unknown action error", () => {
+    const result = cli(["autoresearch", "badcommand"]);
+    try {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr ?? "", /Unknown autoresearch action/);
+      assert.match(result.stderr ?? "", /init\|run-experiment\|log-experiment\|status\|next\|loop/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop --max-iterations 2 runs experiment loop", () => {
+    const testEnv = makeTestEnv();
+    try {
+      const initResult = cli(["autoresearch", "init",
+        "--goal", "test loop",
+        "--metric", "score",
+        "--direction", "lower",
+        "--command", "echo METRIC score=0.5",
+        "--cwd", testEnv.tmpDir,
+      ]);
+      try {
+        assert.equal(initResult.status, 0);
+        const loopResult = cli(["autoresearch", "loop",
+          "--max-iterations", "2",
+          "--cwd", testEnv.tmpDir,
+        ]);
+        try {
+          assert.equal(loopResult.status, 0);
+          assert.match(loopResult.stdout ?? "", /\[1\/2\]/);
+          assert.match(loopResult.stdout ?? "", /\[2\/2\]/);
+          assert.match(loopResult.stdout ?? "", /Loop complete/);
+          assert.match(loopResult.stdout ?? "", /Max iterations reached/);
+          assert.match(loopResult.stdout ?? "", /Best:/);
+          assert.match(loopResult.stdout ?? "", /Iterations: 2/);
+        } finally {
+          fs.rmSync(loopResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      } finally {
+        if (initResult.testEnv.tmpDir !== testEnv.tmpDir) {
+          fs.rmSync(initResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      fs.rmSync(testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop stops when target metric is reached", () => {
+    const testEnv = makeTestEnv();
+    try {
+      const initResult = cli(["autoresearch", "init",
+        "--goal", "test target",
+        "--metric", "loss",
+        "--direction", "lower",
+        "--command", "echo METRIC loss=0.1",
+        "--cwd", testEnv.tmpDir,
+      ]);
+      try {
+        assert.equal(initResult.status, 0);
+        const loopResult = cli(["autoresearch", "loop",
+          "--max-iterations", "5",
+          "--target-metric", "0.2",
+          "--cwd", testEnv.tmpDir,
+        ]);
+        try {
+          assert.equal(loopResult.status, 0);
+          assert.match(loopResult.stdout ?? "", /Target metric reached/);
+          assert.match(loopResult.stdout ?? "", /Iterations: 1/);
+        } finally {
+          fs.rmSync(loopResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      } finally {
+        if (initResult.testEnv.tmpDir !== testEnv.tmpDir) {
+          fs.rmSync(initResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      fs.rmSync(testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop stops after max consecutive failures", () => {
+    const testEnv = makeTestEnv();
+    try {
+      const initResult = cli(["autoresearch", "init",
+        "--goal", "test failures",
+        "--metric", "val",
+        "--direction", "lower",
+        "--command", "exit 1",
+        "--cwd", testEnv.tmpDir,
+      ]);
+      try {
+        assert.equal(initResult.status, 0);
+        const loopResult = cli(["autoresearch", "loop",
+          "--max-iterations", "10",
+          "--max-consecutive-failures", "2",
+          "--cwd", testEnv.tmpDir,
+        ]);
+        try {
+          assert.equal(loopResult.status, 0);
+          assert.match(loopResult.stdout ?? "", /Too many consecutive failures/);
+          assert.match(loopResult.stdout ?? "", /Iterations: 2/);
+        } finally {
+          fs.rmSync(loopResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      } finally {
+        if (initResult.testEnv.tmpDir !== testEnv.tmpDir) {
+          fs.rmSync(initResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      fs.rmSync(testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop shows progress format with metric and decision", () => {
+    const testEnv = makeTestEnv();
+    try {
+      const initResult = cli(["autoresearch", "init",
+        "--goal", "test progress",
+        "--metric", "val",
+        "--direction", "lower",
+        "--command", "echo METRIC val=0.3",
+        "--cwd", testEnv.tmpDir,
+      ]);
+      try {
+        assert.equal(initResult.status, 0);
+        const loopResult = cli(["autoresearch", "loop",
+          "--max-iterations", "1",
+          "--cwd", testEnv.tmpDir,
+        ]);
+        try {
+          assert.equal(loopResult.status, 0);
+          assert.match(loopResult.stdout ?? "", /\[1\/1\] Focus:/);
+          assert.match(loopResult.stdout ?? "", /val=0\.3/);
+          assert.match(loopResult.stdout ?? "", /decision=baseline/);
+          assert.match(loopResult.stdout ?? "", /best=0\.3/);
+          assert.match(loopResult.stdout ?? "", /failures=0/);
+          assert.match(loopResult.stdout ?? "", /Kept: 1/);
+        } finally {
+          fs.rmSync(loopResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      } finally {
+        if (initResult.testEnv.tmpDir !== testEnv.tmpDir) {
+          fs.rmSync(initResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      fs.rmSync(testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop preserves jsonl after completion", () => {
+    const testEnv = makeTestEnv();
+    try {
+      const initResult = cli(["autoresearch", "init",
+        "--goal", "test jsonl",
+        "--metric", "x",
+        "--direction", "higher",
+        "--command", "echo METRIC x=10",
+        "--cwd", testEnv.tmpDir,
+      ]);
+      try {
+        assert.equal(initResult.status, 0);
+        const loopResult = cli(["autoresearch", "loop",
+          "--max-iterations", "2",
+          "--cwd", testEnv.tmpDir,
+        ]);
+        try {
+          assert.equal(loopResult.status, 0);
+          const jsonlPath = path.join(testEnv.tmpDir, "autoresearch.jsonl");
+          assert.ok(fs.existsSync(jsonlPath));
+          const lines = fs.readFileSync(jsonlPath, "utf-8").trim().split("\n");
+          assert.ok(lines.length >= 5, `Expected >= 5 lines, got ${lines.length}`);
+          for (const line of lines) {
+            JSON.parse(line);
+          }
+        } finally {
+          fs.rmSync(loopResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      } finally {
+        if (initResult.testEnv.tmpDir !== testEnv.tmpDir) {
+          fs.rmSync(initResult.testEnv.tmpDir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      fs.rmSync(testEnv.tmpDir, { recursive: true, force: true });
     }
   });
 

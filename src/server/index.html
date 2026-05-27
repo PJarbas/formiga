@@ -462,7 +462,7 @@
         <span id="autoresearch-feedback" style="font-size:11px;color:#8b949e;"></span>
       </div>
       <div id="autoresearch-content">
-        <div class="empty-state">Select a run to inspect AutoResearch progress.</div>
+        <div class="empty-state">No AutoResearch runs found</div>
       </div>
     </section>
 
@@ -554,12 +554,21 @@
         const data = await res.json();
         latestRuns = data.runs || [];
         renderRuns(latestRuns);
-        updateAutoresearchRunSelector(latestRuns);
-        if (selectedAutoresearchRunId) fetchAutoresearchProgress();
         document.getElementById("status-dot").classList.remove("error");
       } catch (err) {
         document.getElementById("status-dot").classList.add("error");
         console.error("Failed to fetch runs:", err);
+      }
+    }
+
+    async function fetchAutoresearchRuns() {
+      try {
+        const res = await fetch("/api/autoresearch/runs");
+        const data = await res.json();
+        updateAutoresearchRunSelector(data.runs || []);
+        if (selectedAutoresearchRunId) fetchAutoresearchProgress();
+      } catch (err) {
+        console.error("Failed to fetch autoresearch runs:", err);
       }
     }
 
@@ -666,7 +675,7 @@
 
       select.innerHTML = runs.length
         ? runs.map(r => `<option value="${esc(r.id)}">${esc(`#${r.run_number ?? "-"} ${r.id.slice(0, 8)} ${r.workflow_id}`)}</option>`).join("")
-        : '<option value="">No runs</option>';
+        : '<option value="">No AutoResearch runs found</option>';
       select.value = nextValue;
       selectedAutoresearchRunId = nextValue || null;
       select.onchange = () => {
@@ -680,7 +689,7 @@
       const feedback = document.getElementById("autoresearch-feedback");
       if (!runId) {
         document.getElementById("autoresearch-content").innerHTML =
-          '<div class="empty-state">No workflow runs available.</div>';
+          '<div class="empty-state">No AutoResearch runs found</div>';
         return;
       }
 
@@ -905,6 +914,7 @@
     function refreshAll() {
       fetchMcpStatus();
       fetchRuns();
+      fetchAutoresearchRuns();
       fetchEvents();
       fetchLogsTail();
       fetchStats();

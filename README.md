@@ -56,8 +56,8 @@ tamandua autoresearch init \
   --direction lower \
   --command "uv run train.py"
 
-tamandua autoresearch run
-tamandua autoresearch log --status auto \
+tamandua autoresearch run-experiment
+tamandua autoresearch log-experiment --status auto \
   --description "try lower learning rate" \
   --hypothesis "smaller LR improves stability" \
   --learned "validation improved but training slowed" \
@@ -90,8 +90,8 @@ tamandua autoresearch init \
   --metric-regex "^([0-9]\\.[0-9]{3})$" \
   --checks-command "./measure-test-coverage.sh"
 
-tamandua autoresearch run
-tamandua autoresearch log --status auto \
+tamandua autoresearch run-experiment
+tamandua autoresearch log-experiment --status auto \
   --description "baseline coverage" \
   --hypothesis "establish current coverage" \
   --learned "baseline recorded" \
@@ -106,7 +106,7 @@ tamandua workflow install do-now
 tamandua dashboard start
 
 tamandua workflow run do-now \
-  "In the target repo, create or verify ./measure-test-coverage.sh, initialize tamandua autoresearch, then run 10 bounded experiments. Before each edit run tamandua autoresearch next. Only add or change tests/fixtures/test config. After each experiment run tamandua autoresearch run and tamandua autoresearch log --status auto with description, hypothesis, learned, and next-focus. Stop and report best metric, commits, and remaining gaps." \
+  "In the target repo, create or verify ./measure-test-coverage.sh, initialize tamandua autoresearch, then run 10 bounded experiments. Before each edit run tamandua autoresearch next. Only add or change tests/fixtures/test config. After each experiment run tamandua autoresearch run-experiment and tamandua autoresearch log-experiment --status auto with description, hypothesis, learned, and next-focus. Stop and report best metric, commits, and remaining gaps." \
   --working-directory-for-harness /path/that/contains/or/is/the/project \
   --pi-as-harness
 ```
@@ -143,8 +143,8 @@ tamandua autoresearch next
 # coverage without requiring Spark or changing runtime code."
 
 # 3. Measure and log the result.
-tamandua autoresearch run
-tamandua autoresearch log --status auto \
+tamandua autoresearch run-experiment
+tamandua autoresearch log-experiment --status auto \
   --description "cover batch_processor pure helpers" \
   --hypothesis "pure-helper tests increase coverage without Spark" \
   --learned "coverage increased from 0.336 to 0.477; helper paths are now covered" \
@@ -171,7 +171,7 @@ dashboard includes an AutoResearch panel that reads that directory's
 `autoresearch.jsonl` and shows best/baseline metrics, kept/discarded counts,
 failures, and the recent learning timeline.
 
-The core loop is `init -> run -> log -> next`. `log --status auto` classifies a
+The core loop is `init -> run-experiment -> log-experiment -> next`. `log --status auto` classifies a
 run as `baseline`, `keep`, `discard`, `crash`, or `checks_failed` by comparing the
 latest metric with prior accepted results. The `next` prompt carries the ratchet:
 it restates the goal, best result, last learning, and next focus before the agent

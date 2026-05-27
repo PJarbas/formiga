@@ -299,6 +299,327 @@ describe("dashboard AutoResearch progress", () => {
       await stopDashboard(server);
     }
   });
+
+  it("GET /api/autoresearch/runs returns empty array when no runs have AutoResearch state", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-empty-"));
+    const homeDir = path.join(root, "home");
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      // Insert a run without a harness cwd at all
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "run-no-harness",
+        1,
+        "do-now",
+        "simple task",
+        "completed",
+        JSON.stringify({ workspace_mode: "direct" }),
+        "2026-05-26T10:00:00.000Z",
+        "2026-05-26T10:01:00.000Z",
+      );
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as { runs: unknown[] };
+        assert.ok(Array.isArray(body.runs));
+        assert.equal(body.runs.length, 0);
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/autoresearch/runs returns only runs with autoresearch.config.json in harness cwd", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-filtered-"));
+    const homeDir = path.join(root, "home");
+    const projectDirWithAr = path.join(root, "project-with-ar");
+    const projectDirNoAr = path.join(root, "project-no-ar");
+    fs.mkdirSync(projectDirWithAr, { recursive: true });
+    fs.mkdirSync(projectDirNoAr, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      // Create an autoresearch config in one project dir
+      fs.writeFileSync(
+        path.join(projectDirWithAr, "autoresearch.config.json"),
+        JSON.stringify({
+          goal: "Optimize performance",
+          metricName: "total_µs",
+          direction: "lower",
+          command: "./bench.sh",
+        }),
+      );
+      // Don't put an autoresearch config in the other
+
+      const db = getDb();
+      // Run WITH autoresearch state
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "run-with-ar",
+        1,
+        "do-now",
+        "optimization task",
+        "running",
+        JSON.stringify({ working_directory_for_harness: projectDirWithAr }),
+        "2026-05-26T10:00:00.000Z",
+        "2026-05-26T10:01:00.000Z",
+      );
+      // Run WITHOUT autoresearch state
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "run-no-ar",
+        2,
+        "do-now",
+        "plain task",
+        "running",
+        JSON.stringify({ working_directory_for_harness: projectDirNoAr }),
+        "2026-05-26T10:02:00.000Z",
+        "2026-05-26T10:03:00.000Z",
+      );
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as { runs: Array<{ id: string }> };
+        assert.ok(Array.isArray(body.runs));
+        assert.equal(body.runs.length, 1);
+        assert.equal(body.runs[0].id, "run-with-ar");
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/autoresearch/runs excludes runs without working_directory_for_harness", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-no-cwd-"));
+    const homeDir = path.join(root, "home");
+    const projectDir = path.join(root, "project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      // Create config in project dir
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.config.json"),
+        JSON.stringify({
+          goal: "test",
+          metricName: "total_µs",
+          direction: "lower",
+          command: "./bench.sh",
+        }),
+      );
+
+      const db = getDb();
+      // Run without any harness-related context keys
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "run-no-harness-context",
+        1,
+        "do-now",
+        "task",
+        "running",
+        JSON.stringify({ workspace_mode: "direct" }),
+        "2026-05-26T10:00:00.000Z",
+        "2026-05-26T10:01:00.000Z",
+      );
+      // Run with harness cwd that has no config
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "run-with-cwd-no-config",
+        2,
+        "do-now",
+        "task 2",
+        "running",
+        JSON.stringify({ working_directory_for_harness: "/tmp/nonexistent-dir" }),
+        "2026-05-26T10:02:00.000Z",
+        "2026-05-26T10:03:00.000Z",
+      );
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as { runs: unknown[] };
+        assert.ok(Array.isArray(body.runs));
+        assert.equal(body.runs.length, 0);
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/autoresearch/runs excludes runs with harness cwd but no config file", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-cwd-no-config-"));
+    const homeDir = path.join(root, "home");
+    const projectDir = path.join(root, "project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      // Create a valid project directory but do NOT create autoresearch.config.json inside it
+      // The directory exists, but has no AutoResearch state
+
+      const db = getDb();
+      // Run with harness cwd pointing to a real directory that has NO config file
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "run-cwd-exists-no-config",
+        1,
+        "do-now",
+        "task with cwd but no config",
+        "running",
+        JSON.stringify({ working_directory_for_harness: projectDir }),
+        "2026-05-27T10:00:00.000Z",
+        "2026-05-27T10:01:00.000Z",
+      );
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as { runs: unknown[] };
+        assert.ok(Array.isArray(body.runs));
+        assert.equal(body.runs.length, 0, "run with valid cwd but no config should be excluded");
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GET /api/autoresearch/runs response shape matches expected { runs: [...] } format", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-shape-"));
+    const homeDir = path.join(root, "home");
+    const projectDir = path.join(root, "project");
+    fs.mkdirSync(projectDir, { recursive: true });
+    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const previousHome = process.env.HOME;
+    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    process.env.HOME = homeDir;
+    process.env.TAMANDUA_DB_PATH = dbPath;
+
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, "autoresearch.config.json"),
+        JSON.stringify({
+          goal: "Improve latency",
+          metricName: "latency_ms",
+          direction: "lower",
+          command: "./bench.sh",
+        }),
+      );
+
+      const db = getDb();
+      db.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "run-ar-shape",
+        1,
+        "do-now",
+        "latency improvement",
+        "running",
+        JSON.stringify({ working_directory_for_harness: projectDir }),
+        "2026-05-26T10:00:00.000Z",
+        "2026-05-26T10:01:00.000Z",
+      );
+
+      const { server, baseUrl } = await startDashboard();
+
+      try {
+        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
+        assert.equal(response.status, 200);
+        const body = await response.json() as { runs: unknown[] };
+        assert.ok(Array.isArray(body.runs));
+        assert.equal(body.runs.length, 1);
+
+        const run = body.runs[0] as Record<string, unknown>;
+        assert.equal(run.id, "run-ar-shape");
+        // Verify it has the same fields as /api/runs
+        assert.ok("workflow_id" in run);
+        assert.ok("task" in run);
+        assert.ok("status" in run);
+        assert.ok("created_at" in run);
+        assert.ok("updated_at" in run);
+        assert.ok("run_number" in run);
+        assert.ok("total_steps" in run);
+        assert.ok("completed_steps" in run);
+        assert.ok("failed_steps" in run);
+        assert.ok("running_steps" in run);
+        assert.ok("waiting_steps" in run);
+        assert.ok("no_hurry" in run);
+        assert.equal(typeof run.no_hurry, "boolean");
+      } finally {
+        await stopDashboard(server);
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
+      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("dashboard stats API", () => {

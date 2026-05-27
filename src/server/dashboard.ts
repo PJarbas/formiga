@@ -6,6 +6,7 @@
  * Routes:
  *   GET /                        -> index.html (dashboard UI)
  *   GET /runs/:id/kanban         -> kanban.html (per-run swim-lane view)
+ *   GET /api/autoresearch/runs   -> list workflow runs with AutoResearch state
  *   GET /api/runs                -> list all workflow runs
  *   GET /api/runs/:id            -> detail for a specific run
  *   GET /api/runs/:id/autoresearch -> AutoResearch progress for a run's harness cwd
@@ -348,6 +349,62 @@ function handleRunAutoresearch(
     });
   } catch (err) {
     errorResponse(res, `Failed to get AutoResearch progress: ${(err as Error).message}`);
+  }
+}
+
+function handleAutoresearchRuns(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const db = getDb();
+
+    const rawRuns = db.prepare(`
+      SELECT
+        r.id,
+        r.workflow_id,
+        r.task,
+        r.status,
+        r.context,
+        r.created_at,
+        r.updated_at,
+        r.run_number,
+        r.tokens_spent,
+        COUNT(s.id) AS total_steps,
+        SUM(CASE WHEN s.status = 'done' THEN 1 ELSE 0 END) AS completed_steps,
+        SUM(CASE WHEN s.status = 'failed' THEN 1 ELSE 0 END) AS failed_steps,
+        SUM(CASE WHEN s.status = 'running' THEN 1 ELSE 0 END) AS running_steps,
+        SUM(CASE WHEN s.status = 'waiting' THEN 1 ELSE 0 END) AS waiting_steps
+      FROM runs r
+      LEFT JOIN steps s ON s.run_id = r.id
+      GROUP BY r.id
+      ORDER BY r.created_at DESC
+      LIMIT 100
+    `).all() as Array<Record<string, unknown>>;
+
+    const filtered = rawRuns.filter((row) => {
+      const cwd = resolveRunHarnessCwd({ context: row.context as string | null | undefined });
+      if (!cwd) return false;
+      try {
+        const sessionCwd = findAutoresearchSessionCwd(cwd);
+        return !!sessionCwd;
+      } catch {
+        return false;
+      }
+    });
+
+    const runs = filtered.map((row) => {
+      let no_hurry = false;
+      try {
+        const ctx = JSON.parse(String(row.context ?? "{}"));
+        no_hurry = ctx.no_hurry_save_tokens_mode === "true";
+      } catch {
+        // malformed context → no_hurry stays false
+      }
+      return { ...row, no_hurry };
+    });
+
+    console.log(`[dashboard] GET /api/autoresearch/runs → ${runs.length} of ${rawRuns.length} total runs have AutoResearch state`);
+    jsonResponse(res, { runs });
+  } catch (err) {
+    errorResponse(res, `Failed to list AutoResearch runs: ${(err as Error).message}`);
   }
 }
 
@@ -762,6 +819,12 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /api/health
   if (method === "GET" && pathname === "/api/health") {
     handleHealth(req, res);
+    return;
+  }
+
+  // GET /api/autoresearch/runs (registered before /api/runs to avoid route conflict)
+  if (method === "GET" && pathname === "/api/autoresearch/runs") {
+    handleAutoresearchRuns(req, res);
     return;
   }
 
