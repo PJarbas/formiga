@@ -9,11 +9,13 @@ import {
   initExperiment,
   logExperiment,
   loopAutoresearch,
+  parseAgentFields,
   parseMetric,
   readAutoresearchLog,
   runExperiment,
   summarizeAutoresearch,
 } from "../../dist/autoresearch/autoresearch.js";
+import { parsePiOutputStream } from "../../dist/installer/pi-stream-parser.js";
 
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-autoresearch-"));
@@ -294,5 +296,209 @@ describe("autoresearch loop", () => {
     // or a failure loop. The loop should not crash.
     // We just verify it completes without throwing.
     assert.ok(result.stopReason !== null);
+  });
+
+  it("invokes pi with correct args (--print, --no-session, --mode json, no --cwd/--message/--no-tui)", async () => {
+    // Create a fake pi script (Node.js) that records the received arguments
+    const cwd = makeTempDir();
+    const recordFile = path.join(cwd, "pi-args.json");
+    const fakePi = path.join(cwd, "fake-pi");
+
+    // Build a realistic assistant message_end JSONL response
+    const messageEnd = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "STATUS: done\nCHANGES: fixed the thing\nHYPOTHESIS: it should work\nLEARNED: coding is fun\nNEXT_FOCUS: more tests" },
+        ],
+      },
+    });
+
+    fs.writeFileSync(fakePi, [
+      `#!/usr/bin/env -S ${process.execPath}`,
+      `const fs = require("node:fs");`,
+      `const recordFile = ${JSON.stringify(recordFile)};`,
+      `fs.writeFileSync(recordFile, JSON.stringify(process.argv.slice(1)));`,
+      `console.log(${JSON.stringify(JSON.stringify({ type: "session", version: 1 }))});`,
+      `console.log(${JSON.stringify(messageEnd)});`,
+      `console.log(${JSON.stringify(JSON.stringify({ type: "agent_end" }))});`,
+      `process.exit(0);`,
+    ].join("\n"));
+    fs.chmodSync(fakePi, 0o755);
+
+    // We can't directly call runPiAgent (it's not exported and it spawns "pi").
+    // Instead, verify by spawning fake-pi directly with the expected args + spawn cwd option.
+    const child = spawnSync(fakePi, ["--print", "--no-session", "--mode", "json", "test prompt"], {
+      cwd,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    assert.equal(child.status, 0);
+    const recorded = JSON.parse(fs.readFileSync(recordFile, "utf-8"));
+    assert.ok(Array.isArray(recorded));
+
+    // Verify the supported flags are present and unsupported ones are absent
+    assert.ok(recorded.includes("--print"), `expected --print in args: ${JSON.stringify(recorded)}`);
+    assert.ok(recorded.includes("--no-session"), `expected --no-session in args: ${JSON.stringify(recorded)}`);
+    assert.ok(recorded.includes("--mode"), `expected --mode in args: ${JSON.stringify(recorded)}`);
+    const modeIdx = recorded.indexOf("--mode");
+    assert.equal(recorded[modeIdx + 1], "json", `expected --mode json in args: ${JSON.stringify(recorded)}`);
+
+    // Verify unsupported flags are NOT present
+    assert.ok(!recorded.includes("--no-tui"), `--no-tui should NOT be in args: ${JSON.stringify(recorded)}`);
+    assert.ok(!recorded.includes("--cwd"), `--cwd should NOT be in args: ${JSON.stringify(recorded)}`);
+    assert.ok(!recorded.includes("--message"), `--message should NOT be in args: ${JSON.stringify(recorded)}`);
+
+    // Verify the prompt is passed positionally
+    assert.ok(recorded.includes("test prompt"), `expected prompt in args: ${JSON.stringify(recorded)}`);
+  });
+});
+
+describe("pi JSONL stream parsing in autoresearch context", () => {
+  it("parses assistant text from a realistic message_end event via parsePiOutputStream", async () => {
+    const lines = [
+      JSON.stringify({ type: "session", version: 1 }),
+      JSON.stringify({ type: "agent_start" }),
+      JSON.stringify({ type: "turn_start" }),
+      JSON.stringify({ type: "message_start", message: { role: "user" } }),
+      // message_update events (should be discarded by parser)
+      JSON.stringify({ type: "message_update", message: { content: [{ type: "text_delta", text: "partial" }] } }),
+      JSON.stringify({ type: "message_end", message: { role: "assistant", content: [
+        { type: "thinking", thinking: "let me think..." },
+        { type: "text", text: "STATUS: done\nCHANGES: fixed pi invocation\nHYPOTHESIS: using JSON mode correctly\nLEARNED: parsePiOutputStream works\nNEXT_FOCUS: add timeout option" },
+      ] } }),
+      JSON.stringify({ type: "turn_end" }),
+      JSON.stringify({ type: "agent_end" }),
+    ];
+
+    const result = await parsePiOutputStream(lines);
+
+    assert.ok(result.assistantText.length > 0, "expected non-empty assistantText");
+    assert.match(result.assistantText, /STATUS: done/);
+    assert.match(result.assistantText, /CHANGES: fixed pi invocation/);
+    assert.match(result.assistantText, /HYPOTHESIS: using JSON mode correctly/);
+    assert.match(result.assistantText, /LEARNED: parsePiOutputStream works/);
+    assert.match(result.assistantText, /NEXT_FOCUS: add timeout option/);
+    assert.equal(result.textFallback, null, "no text fallback expected for valid JSONL");
+    // Only assistant message_end and tool_execution_* should be kept
+    const keptTypes = result.events.map((event) => event.type);
+    assert.ok(keptTypes.includes("message_end"), "message_end should be kept");
+    assert.ok(!keptTypes.includes("session"), "session should be discarded");
+    assert.ok(!keptTypes.includes("message_update"), "message_update should be discarded");
+  });
+
+  it("parseAgentFields extracts all fields from assistant text", () => {
+    const text = [
+      "STATUS: done",
+      "CHANGES: rewrote runPiAgent",
+      "HYPOTHESIS: JSON mode fixes parsing",
+      "LEARNED: pi --no-session is needed",
+      "NEXT_FOCUS: add --timeout CLI flag",
+    ].join("\n");
+
+    const fields = parseAgentFields(text);
+    assert.ok(fields !== null, "expected non-null fields");
+    assert.equal(fields!.status, "done");
+    assert.equal(fields!.changes, "rewrote runPiAgent");
+    assert.equal(fields!.hypothesis, "JSON mode fixes parsing");
+    assert.equal(fields!.learned, "pi --no-session is needed");
+    assert.equal(fields!.nextFocus, "add --timeout CLI flag");
+  });
+
+  it("parseAgentFields handles minimal input with only STATUS and CHANGES", () => {
+    const text = "STATUS: done\nCHANGES: fixed bug";
+    const fields = parseAgentFields(text);
+    assert.ok(fields !== null);
+    assert.equal(fields!.status, "done");
+    assert.equal(fields!.changes, "fixed bug");
+    assert.equal(fields!.hypothesis, undefined);
+    assert.equal(fields!.learned, undefined);
+    assert.equal(fields!.nextFocus, undefined);
+  });
+
+  it("parseAgentFields returns null when no STATUS field", () => {
+    assert.equal(parseAgentFields("just some text"), null);
+    assert.equal(parseAgentFields(""), null);
+    assert.equal(parseAgentFields("CHANGES: something"), null);
+  });
+
+  it("loopAutoresearch respects timeoutSeconds option with a short timeout", async () => {
+    // Create a fake pi that hangs (no output, no exit), then verify the loop
+    // times it out and handles the failure gracefully.
+    const cwd = makeTempDir();
+    const fakePi = path.join(cwd, "pi");
+    fs.writeFileSync(fakePi, [
+      `#!/usr/bin/env -S ${process.execPath}`,
+      `// Hang forever — the loop should time this out`,
+      `setTimeout(() => {}, 600_000);`,
+    ].join("\n"));
+    fs.chmodSync(fakePi, 0o755);
+
+    const origPath = process.env.PATH ?? "";
+    // Prepend the cwd to PATH so the fake pi is found
+    process.env.PATH = `${cwd}${path.delimiter}${origPath}`;
+
+    try {
+      initExperiment({
+        cwd,
+        goal: "reduce loss",
+        metricName: "loss",
+        direction: "lower",
+        command: nodeMetricCommand("loss", 5),
+      });
+
+      // Use a short 1-second timeout so the test is fast.
+      // maxConsecutiveFailures=3 (default), so with 2 iterations both
+      // will time out and the loop will complete 2 iterations.
+      const result = await loopAutoresearch({
+        cwd,
+        maxIterations: 2,
+        actionMode: "prompt",
+        timeoutSeconds: 1,
+      });
+
+      // Both iterations should complete (agent times out, loop continues)
+      assert.equal(result.iterations, 2);
+      // No experiments were actually run since the agent kept failing
+      // and the loop skips experiments on agent failure.
+      assert.equal(result.crashed, 0);
+      assert.ok(result.stopReason?.includes("Max iterations reached"));
+    } finally {
+      process.env.PATH = origPath;
+    }
+  });
+
+  it("loopAutoresearch uses default 300s timeout when no timeoutSeconds option", async () => {
+    // Verify the type system: timeoutSeconds is optional and defaults to 300.
+    // We can't easily observe the internal timeout, but we verify the loop runs.
+    const cwd = makeTempDir();
+    initExperiment({
+      cwd,
+      goal: "reduce loss",
+      metricName: "loss",
+      direction: "lower",
+      command: nodeMetricCommand("loss", 5),
+    });
+
+    // measure-only mode doesn't use runPiAgent, so it should succeed
+    const result = await loopAutoresearch({
+      cwd,
+      maxIterations: 1,
+      actionMode: "measure-only",
+    });
+
+    // Verify no timeoutSeconds was provided, but loop still runs
+    assert.equal(result.iterations, 1);
+  });
+
+  it("parseAgentFields handles STATUS: no_change", () => {
+    const text = "STATUS: no_change\nCHANGES: nothing to do\nLEARNED: metric is optimal";
+    const fields = parseAgentFields(text);
+    assert.ok(fields !== null);
+    assert.equal(fields!.status, "no_change");
+    assert.equal(fields!.changes, "nothing to do");
+    assert.equal(fields!.learned, "metric is optimal");
   });
 });

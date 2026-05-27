@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { parsePiOutputStream } from "../installer/pi-stream-parser.js";
 
 export type AutoresearchDirection = "lower" | "higher";
 export type AutoresearchDecision = "baseline" | "keep" | "discard" | "crash" | "checks_failed";
@@ -142,6 +143,8 @@ export type LoopAutoresearchOptions = {
   maxIterations?: number;
   maxConsecutiveFailures?: number;
   actionMode?: "measure-only" | "prompt";
+  /** Per-pi-action timeout in seconds (default: 300 = 5 minutes). */
+  timeoutSeconds?: number;
 };
 
 export type LoopAutoresearchResult = {
@@ -712,25 +715,25 @@ async function runHook(paths: AutoresearchPaths, name: "before" | "after", paylo
   });
 }
 
-function parsePiOutput(stdout: string): { status: string; changes: string; hypothesis?: string; learned?: string; nextFocus?: string } | null {
-  const statusMatch = stdout.match(/^STATUS:\s*(.+)$/m);
+export function parseAgentFields(text: string): { status: string; changes: string; hypothesis?: string; learned?: string; nextFocus?: string } | null {
+  const statusMatch = text.match(/^STATUS:\s*(.+)$/m);
   if (!statusMatch) return null;
   const status = statusMatch[1].trim();
-  const changesMatch = stdout.match(/^CHANGES:\s*(.+)$/m);
+  const changesMatch = text.match(/^CHANGES:\s*(.+)$/m);
   const changes = changesMatch?.[1].trim() ?? "";
-  const hypothesisMatch = stdout.match(/^HYPOTHESIS:\s*(.+)$/m);
+  const hypothesisMatch = text.match(/^HYPOTHESIS:\s*(.+)$/m);
   const hypothesis = hypothesisMatch?.[1].trim();
-  const learnedMatch = stdout.match(/^LEARNED:\s*(.+)$/m);
+  const learnedMatch = text.match(/^LEARNED:\s*(.+)$/m);
   const learned = learnedMatch?.[1].trim();
-  const nextFocusMatch = stdout.match(/^NEXT_FOCUS:\s*(.+)$/m);
+  const nextFocusMatch = text.match(/^NEXT_FOCUS:\s*(.+)$/m);
   const nextFocus = nextFocusMatch?.[1].trim();
   return { status, changes, hypothesis, learned, nextFocus };
 }
 
-async function runPiAgent(cwd: string, prompt: string): Promise<{ success: boolean; stdout: string; stderr: string; hypothesis?: string; learned?: string; nextFocus?: string }> {
+async function runPiAgent(cwd: string, prompt: string, timeoutMs = 300_000): Promise<{ success: boolean; stdout: string; stderr: string; hypothesis?: string; learned?: string; nextFocus?: string }> {
   return new Promise((resolve) => {
     const piCmd = "pi";
-    const args = ["--print", "--no-tui", "--cwd", cwd, "--message", prompt, "--mode", "json"];
+    const args = ["--print", "--no-session", "--mode", "json", prompt];
     const child = spawn(piCmd, args, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
@@ -745,20 +748,23 @@ async function runPiAgent(cwd: string, prompt: string): Promise<{ success: boole
       resolve(result);
     };
     const timer = setTimeout(() => {
-      settle({ success: false, stdout, stderr: "pi agent timed out after 60s" });
-    }, 60_000);
+      settle({ success: false, stdout, stderr: `pi agent timed out after ${Math.round(timeoutMs / 1000)}s` });
+    }, timeoutMs);
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       clearTimeout(timer);
-      const parsed = parsePiOutput(stdout);
+      const lines = stdout.split(/\r?\n/);
+      const parsedStream = await parsePiOutputStream(lines);
+      const assistantText = parsedStream.assistantText || (parsedStream.textFallback ?? "");
+      const fields = parseAgentFields(assistantText);
       settle({
-        success: code === 0 && parsed?.status === "done",
+        success: code === 0 && fields?.status === "done",
         stdout,
         stderr,
-        hypothesis: parsed?.hypothesis,
-        learned: parsed?.learned,
-        nextFocus: parsed?.nextFocus,
+        hypothesis: fields?.hypothesis,
+        learned: fields?.learned,
+        nextFocus: fields?.nextFocus,
       });
     });
     child.on("error", (err) => {
@@ -850,7 +856,8 @@ export async function loopAutoresearch(options: LoopAutoresearchOptions = {}): P
         ].join("\n");
 
         process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] Invoking agent...\n`);
-        const agentResult = await runPiAgent(cwd, agentPrompt);
+        const timeoutMs = (options.timeoutSeconds ?? 300) * 1000;
+        const agentResult = await runPiAgent(cwd, agentPrompt, timeoutMs);
 
         if (!agentResult.success) {
           process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] Agent failed or reported no change.\n`);

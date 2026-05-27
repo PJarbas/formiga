@@ -78,21 +78,23 @@ function printEvents(events: TamanduaEvent[]): void {
 }
 
 function parseDuration(input: string): number {
-  const match = input.match(/^(\d+)([dhm])$/);
+  const match = input.match(/^(\d+)([smhd])$/);
   if (!match) {
     throw new Error(
-      `Invalid duration format: "${input}". Use <number><unit> where unit is d, h, or m (e.g. 7d, 24h, 30m).`,
+      `Invalid duration format: "${input}". Use <number><unit> where unit is s, m, h, or d (e.g. 300s, 5m, 1h, 7d).`,
     );
   }
   const value = parseInt(match[1], 10);
   const unit = match[2];
   switch (unit) {
-    case "d":
-      return value * 24 * 60 * 60 * 1000;
-    case "h":
-      return value * 60 * 60 * 1000;
+    case "s":
+      return value * 1000;
     case "m":
       return value * 60 * 1000;
+    case "h":
+      return value * 60 * 60 * 1000;
+    case "d":
+      return value * 24 * 60 * 60 * 1000;
     default:
       throw new Error(`Unknown duration unit: ${unit}`);
   }
@@ -1364,6 +1366,8 @@ Options:
                                   (compared via the configured direction)
   --max-iterations <number>       Maximum number of iterations (default: 20)
   --max-consecutive-failures <n>  Stop after N consecutive failures (default: 3)
+  --timeout <duration>            Per-pi-action timeout (default: 5m). Format: <number><s|m|h>
+                                  (e.g. 300s, 10m, 1h)
   --cwd <dir>                     Project directory (default: current directory)
 
 Stop conditions (the loop stops when any one is met):
@@ -1386,7 +1390,8 @@ and leaves autoresearch.jsonl in a consistent state.
 Examples:
   tamandua autoresearch loop --measure-only --max-iterations 10
   tamandua autoresearch loop --prompt --target-metric 0.5 --max-iterations 30
-  tamandua autoresearch loop --prompt --max-consecutive-failures 5`;
+  tamandua autoresearch loop --prompt --max-consecutive-failures 5
+  tamandua autoresearch loop --prompt --timeout 10m --max-iterations 10`;
 }
 
 function getUsageText(): string {
@@ -2155,6 +2160,20 @@ async function main() {
         process.stderr.write(`Invalid --max-consecutive-failures "${maxFailRaw}".\n`);
         process.exit(1);
       }
+      const timeoutRaw = readOption(args, "--timeout");
+      let timeoutSeconds: number | undefined;
+      if (timeoutRaw !== undefined) {
+        try {
+          timeoutSeconds = Math.floor(parseDuration(timeoutRaw) / 1000);
+          if (timeoutSeconds <= 0) {
+            process.stderr.write(`Invalid --timeout "${timeoutRaw}": must be a positive number.\n`);
+            process.exit(1);
+          }
+        } catch (err) {
+          process.stderr.write(`Invalid --timeout "${timeoutRaw}": ${err instanceof Error ? err.message : String(err)}\n`);
+          process.exit(1);
+        }
+      }
       const isMeasureOnly = args.includes("--measure-only");
       const isPrompt = args.includes("--prompt");
       if (!isMeasureOnly && !isPrompt) {
@@ -2168,7 +2187,7 @@ async function main() {
         process.exit(1);
       }
       const actionMode = isMeasureOnly ? "measure-only" : "prompt";
-      await loopAutoresearch({ cwd, targetMetric, maxIterations, maxConsecutiveFailures, actionMode });
+      await loopAutoresearch({ cwd, targetMetric, maxIterations, maxConsecutiveFailures, actionMode, timeoutSeconds });
       return;
     }
 

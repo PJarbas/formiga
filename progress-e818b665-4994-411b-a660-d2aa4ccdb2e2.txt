@@ -1,0 +1,56 @@
+# Progress Log
+Run: e818b665-4994-411b-a660-d2aa4ccdb2e2
+Task: Fix the AutoResearch loop pi action phase so it correctly drives pi in JSON mode, parses the assistant result from JSON events, and exposes a configurable per-action timeout.
+Started: 2026-05-27T12:55:00Z
+
+## Codebase Patterns
+- `parseDuration` in `src/cli/cli.ts` is the shared duration parser (used by worktree prune and now autoresearch loop). Format: `<number><s|m|h|d>`, returns milliseconds.
+- `runPiAgent` in `src/autoresearch/autoresearch.ts` is NOT exported — it's private to the module.
+- `LoopAutoresearchOptions` is the public type for `loopAutoresearch()`, threaded from CLI argument parsing.
+- Tests for autoresearch live in `src/autoresearch/autoresearch.test.ts`; CLI tests in `src/cli/cli.test.ts`.
+- The "accepts --prompt mode" test invokes real `pi` which can be slow/token-consuming.
+
+## Story Plan
+
+### US-001: Fix pi subprocess invocation and integrate JSON stream parser
+
+**Description:** As a developer, I need to fix the runPiAgent function so it invokes pi with correct flags and parses the JSONL output properly.
+
+**Acceptance Criteria:**
+- pi is invoked as `pi --print --no-session --mode json <prompt>` with spawn cwd option
+- Unsupported flags --no-tui, --cwd (as CLI arg), --message are NOT used
+- JSONL output is parsed via parsePiOutputStream to extract assistant text from message_end events
+- STATUS/CHANGES/HYPOTHESIS/LEARNED/NEXT_FOCUS fields are correctly extracted from the assistant text
+- Tests for pi invocation argv and JSONL parsing pass
+- Typecheck passes
+
+### US-002: Add configurable pi action timeout with 5-minute default and CLI --timeout option
+
+**Description:** As a developer, I need to change the pi action timeout default from 60s to 5 minutes and add a --timeout CLI option to tamandua autoresearch loop.
+
+**Acceptance Criteria:**
+- Default pi action timeout is 300 seconds (5 minutes)
+- --timeout 10m sets timeout to 10 minutes
+- --timeout 600s sets timeout to 600 seconds
+- --timeout parsing rejects invalid formats with a clear error message
+- `tamandua autoresearch loop --help` documents --timeout with accepted format
+- Tests for timeout default, parsing, and help text pass
+- Typecheck passes
+
+---
+## 2026-05-27T13:00 - US-001: Fix pi subprocess invocation and integrate JSON stream parser
+- Already completed before this session
+- runPiAgent now uses spawn(piCmd, args, { cwd }) with ['--print', '--no-session', '--mode', 'json', prompt]
+- Uses parsePiOutputStream for JSONL extraction
+- Uses parseAgentFields for STATUS/CHANGES/HYPOTHESIS/LEARNED/NEXT_FOCUS
+
+## 2026-05-27T13:05 - US-002: Add configurable pi action timeout with 5-minute default and CLI --timeout option
+- Changed runPiAgent default timeout from 60_000 to 300_000 (5 minutes)
+- Added optional `timeoutSeconds` field to LoopAutoresearchOptions type
+- Threaded timeoutSeconds through loopAutoresearch → runPiAgent
+- Extended parseDuration in cli.ts to support 's' (seconds) unit
+- Added --timeout <duration> parsing in autoresearch loop CLI handler
+- Updated getAutoresearchLoopHelp() to document --timeout with accepted format
+- Files changed: src/autoresearch/autoresearch.ts, src/cli/cli.ts, src/autoresearch/autoresearch.test.ts, src/cli/cli.test.ts
+- **Learnings:** parseDuration now handles s/m/h/d; runPiAgent timeout parameter default is 300_000ms; agent failures in the loop don't count as "crashed" — they increment consecutiveFailures and skip experiment runs
+---

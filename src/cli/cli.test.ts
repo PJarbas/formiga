@@ -993,6 +993,8 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /--target-metric/);
       assert.match(result.stdout ?? "", /--max-iterations/);
       assert.match(result.stdout ?? "", /--max-consecutive-failures/);
+      assert.match(result.stdout ?? "", /--timeout/);
+      assert.match(result.stdout ?? "", /5m/);
       assert.match(result.stdout ?? "", /--cwd/);
       assert.match(result.stdout ?? "", /Ctrl-C/);
       assert.match(result.stdout ?? "", /Target metric reached/);
@@ -1306,6 +1308,47 @@ describe("--help infrastructure", () => {
       assert.match(loopResult.stderr ?? "", /one action mode at a time/);
     } finally {
       fs.rmSync(testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop --timeout parses valid formats", () => {
+    // This test verifies that valid --timeout values are accepted by the CLI.
+    // We run a measure-only loop with --timeout 600s — the loop should
+    // proceed (fail because no session exists, but not because of invalid timeout).
+    const result = cli(["autoresearch", "loop", "--measure-only", "--timeout", "600s", "--max-iterations", "1"]);
+    try {
+      // Expect a session-not-found error, NOT a timeout parsing error
+      assert.notEqual(result.status, 0);
+      assert.ok(
+        (result.stderr ?? "").includes("No autoresearch session") ||
+        (result.stderr ?? "").includes("autoresearch init"),
+        `expected session-not-found error, got: ${result.stderr}`,
+      );
+      // Should NOT contain invalid timeout error
+      assert.ok(!(result.stderr ?? "").includes("Invalid --timeout"), `should not contain invalid timeout: ${result.stderr}`);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop --timeout rejects invalid formats", () => {
+    const result = cli(["autoresearch", "loop", "--measure-only", "--timeout", "abc", "--max-iterations", "1"]);
+    try {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr ?? "", /Invalid --timeout/);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tamandua autoresearch loop --timeout 10m is accepted", () => {
+    const result = cli(["autoresearch", "loop", "--measure-only", "--timeout", "10m", "--max-iterations", "1"]);
+    try {
+      // Should fail with session-not-found, not timeout parsing error
+      assert.notEqual(result.status, 0);
+      assert.ok(!(result.stderr ?? "").includes("Invalid --timeout"), `should not contain invalid timeout: ${result.stderr}`);
+    } finally {
+      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
   });
 
