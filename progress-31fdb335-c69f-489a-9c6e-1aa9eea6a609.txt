@@ -1,0 +1,114 @@
+# Progress Log
+Run: 31fdb335-c69f-489a-9c6e-1aa9eea6a609
+Task: Add `tamandua autoresearch wizard` interactive command
+Started: 2026-05-27T18:44:00Z
+
+## Story Plan
+
+### US-001: Create wizard types and evaluator prompt builder
+**Description:** ... (see original plan)
+### US-002: Create pi JSON evaluator with injectable spawn
+**Description:** ... (see original plan)
+### US-003: Create command argv validator and shell renderer
+**Description:** ... (see original plan)
+### US-004: Create wizard interaction orchestrator
+**Description:** ... (see original plan)
+### US-005: Add wizard CLI command and help text
+**Description:** ... (see original plan)
+### US-006: Write comprehensive wizard integration tests
+**Description:** ... (see original plan)
+
+## Codebase Patterns
+
+- All TypeScript source lives in `src/`; compiled output goes to `dist/`.
+- Tests import from `../../dist/cli/...` (not `../../src/`), so build must succeed before test.
+- Tests use `node:test` and `node:assert/strict`.
+- The project uses `tsc` with `tsconfig.json` for building.
+- The `pi-stream-parser.ts` module provides `parsePiOutputStream()` for parsing pi JSONL output.
+- `bin/tamandua` is a shell wrapper that invokes `dist/cli/cli.js`.
+- `parsePiOutputStream` accepts `Iterable<string> | AsyncIterable<string>` — an array of strings works in tests.
+- Fake ChildProcess for tests: EventEmitter with PassThrough stdout/stderr, emit "close" on setImmediate.
+- `extractAssistantText()` from pi-stream-parser walks `message.content[]` array looking for `type: "text"` blocks.
+- `asRecord()` helper in pi-stream-parser excludes arrays (nulls them out).
+- Wizard modules follow pure-function pattern with dependency injection where I/O is needed (PiSpawnFn, readline injection).
+- Shared validation uses a `validateArgv` helper with required prefix, allowed flag set, and checkPromptFlag boolean.
+- Shell quoting: single-quote everything, escape embedded single quotes via `'\''`.
+- `summarizeAutoresearch(cwd)` from `src/autoresearch/autoresearch.ts` returns `{ exists: boolean, ... }` — use to check if a session is initialized.
+- Command execution in orchestrator uses `spawnAndWait` with `stdio: "inherit"` so user sees live output.
+- CLI help subprocess tests use `spawnSync` with `cleanChildEnv` and isolated temp HOME/state dirs. Always clean up temp dirs in a `finally` block. Help text may wrap at terminal width — use `\s+` in regex to span line breaks.
+
+---
+
+## 2026-05-27T20:40:00Z - US-002: Create pi JSON evaluator with injectable spawn
+- Implemented `src/cli/wizard-evaluator.ts` with `evaluateWizardResponse()`, `processWizardAssistantText()`, `extractJsonFromAssistantText()`
+- Defined `PiSpawnFn` type matching child_process.spawn signature for DI
+- Reuses `parsePiOutputStream` from `src/installer/pi-stream-parser.ts` for JSONL parsing
+- Handles raw JSON and single ```json fenced block extraction
+- Validates parsed objects against `WizardEvaluatorNotReady` and `WizardEvaluatorReady` shapes
+- Throws descriptive errors for invalid JSON, missing fields, wrong shapes
+- Files: `src/cli/wizard-evaluator.ts`, `src/cli/wizard-evaluator.test.ts`
+- 24 tests pass; 1 pre-existing README test failure unrelated to wizard
+---
+
+## 2026-05-27T21:29:00Z - US-003: Create command argv validator and shell renderer
+- Implemented `src/cli/wizard-commands.ts` exporting:
+  - `validateInitArgv(argv)` — validates init argv against allowed init flags (--goal, --metric, --unit, --direction, --command, --metric-regex, --checks-command, --cwd, --overwrite). Rejects --prompt and unknown flags.
+  - `validateLoopArgv(argv)` — validates loop argv starting with ["autoresearch", "loop", "--prompt"]. --prompt is a flag (no value allowed). Rejects unknown flags (only --target-metric, --max-iterations, --max-consecutive-failures, --timeout, --cwd allowed).
+  - `shellQuote(arg)` — single-quote shell escaping with embedded single-quote handling.
+  - `renderShellCommand(argv, binaryName?)` — renders an argv array as a pasteable shell command with the tamandua prefix.
+  - `renderWizardCommands(result, binaryName?)` — validates argvs and renders display string (single loop command or `init ; loop`), throws on invalid argv.
+- Shared `validateArgv()` helper with `checkPromptFlag` parameter handles both init and loop validation.
+- Files: `src/cli/wizard-commands.ts`, `src/cli/wizard-commands.test.ts`
+- 42 tests all pass.
+- **Learnings:**
+  - `validateLoopArgv` uses `checkPromptFlag=true` on prefix `["autoresearch", "loop"]` to enforce `--prompt` presence and no-value constraint.
+  - The `RenderedWizardCommands` interface includes structured argv arrays (not just display string) so the orchestrator can execute them via spawn rather than shell strings.
+  - The `renderWizardCommands` function throws on validation failure (vs returning an error) — the orchestrator catches and surfaces these.
+---
+
+## 2026-05-27T21:43:00Z - US-004: Create wizard interaction orchestrator
+- Implemented `src/cli/wizard-orchestrator.ts` exporting `runWizard(options)`
+- Injects `WizardTerminal`, `PiSpawnFn`, and `CommandSpawnFn` for testability
+- Real terminal uses `node:readline` with `stdin`/`stdout`; fake terminal in tests uses pre-programmed answer arrays
+- Prints AutoResearch explanation (init, loop, bounded iteration, target metric, failures, Ctrl-C)
+- Asks open-ended first question, calls `evaluateWizardResponse` with full transcript after each answer
+- Shows follow-up questions when pi returns `ready: false`
+- When `ready: true`: displays commentary, then pasteable commands via `renderWizardCommands`
+- Handles Y: spawns init (if needed) then loop; stops if init fails
+- Handles N: abort/adjust flow — abort exits cleanly, adjust re-prompts and re-evaluates
+- Recovers from pi evaluation errors and invalid command validation by re-evaluating
+- Checks AutoResearch initialization via `summarizeAutoresearch(cwd)`
+- Files: `src/cli/wizard-orchestrator.ts`, `src/cli/wizard-orchestrator.test.ts`
+- 12 tests pass; 1 pre-existing README test failure unrelated
+- **Learnings:**
+  - The fake terminal must provide enough answers for the full flow including re-evaluation questions after adjust
+  - Empty answers are handled gracefully by showing "(No response received...)" and re-prompting
+  - `spawnAndWait` with `stdio: "inherit"` lets the user see live init/loop output
+  - Command spawn in the orchestrator uses the binaryName from options, not hardcoded "tamandua"
+---
+
+## 2026-05-27T22:48:00Z - US-006: Write comprehensive wizard integration tests
+- Expanded `src/cli/wizard.test.ts` from 15 tests to 32 tests (+17 new)
+- New prompt tests: empty configSummary, missing configSummary, long transcripts (20 entries), flag section isolation (init flags not in loop section, loop flags not in init section)
+- Added `tamandua autoresearch wizard --help` integration tests (11 tests):
+  - Verifies exit code 0 and stdout output
+  - Validates help text includes wizard title, purpose description, init/loop commands, --cwd option, usage examples
+  - Confirms wizard does not directly create files
+  - Confirms --help suppresses update warning on stderr
+  - Tests --help works with --cwd flag present
+  - Tests wizard appears in `autoresearch --help` subcommand listing
+  - Tests wizard appears in `tamandua --help` global usage
+- CLI help tests use `spawnSync` with `cleanChildEnv` and isolated temp HOME/state dirs, matching project's parallel-safe test conventions
+- Files: `src/cli/wizard.test.ts` (32 tests)
+- All 113 wizard tests pass (32 + 42 commands + 27 evaluator + 12 orchestrator)
+- 1 pre-existing README test failure unrelated to wizard
+- **Learnings:**
+  - CLI help text wraps at terminal width in subprocess tests — regex patterns must use `\s+` for line breaks
+  - The `cleanChildEnv` helper from `tests/helpers/test-env.ts` can be imported in any test file using `../../tests/helpers/test-env.ts` relative to `src/cli/`
+  - All 15 acceptance criteria for US-006 are now met. Remaining tests were already in wizard-commands.test.ts, wizard-evaluator.test.ts, and wizard-orchestrator.test.ts
+
+---
+
+## Status
+
+ALL STORIES COMPLETE (6/6). The `tamandua autoresearch wizard` feature is fully implemented and tested.

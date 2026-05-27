@@ -1257,6 +1257,8 @@ Subcommands:
   status          Summarize baseline, best run, failures, and next prompt
   next            Print the ratchet prompt for the next experiment
   prune           Remove stale AutoResearch registry rows from SQLite (DB only)
+  wizard          Interactive setup wizard that guides you through creating
+                  an AutoResearch command sequence
 
 Examples:
   tamandua autoresearch init --goal "reduce validation loss" --metric val_bpb --direction lower --command "uv run train.py"
@@ -1422,6 +1424,29 @@ Examples:
   tamandua autoresearch prune --older-than 30d --dry-run`;
 }
 
+function getAutoresearchWizardHelp(): string {
+  return `tamandua autoresearch wizard — Interactive AutoResearch setup wizard
+
+Usage: tamandua autoresearch wizard [--cwd <dir>]
+
+Launches an interactive wizard that guides you through setting up an
+AutoResearch session. The wizard asks questions about what you want to
+improve and how to measure success, then generates the exact Tamandua
+command sequence you need.
+
+The wizard does not directly create project files. If initialization is
+needed, it generates and optionally executes the correct tamandua
+autoresearch init command. Then it generates the tamandua autoresearch
+loop command to start the optimization loop.
+
+Options:
+  --cwd <dir>    Working directory (default: current directory)
+
+Examples:
+  tamandua autoresearch wizard
+  tamandua autoresearch wizard --cwd /path/to/project`;
+}
+
 function getUsageText(): string {
   return [
     "Run tamandua <command> --help for detailed command help.",
@@ -1451,6 +1476,7 @@ function getUsageText(): string {
     "tamandua autoresearch next            Print the next experiment prompt",
     "tamandua autoresearch prune           Remove stale AutoResearch registry rows",
     "           --older-than <duration>    (e.g. 30d, 7d, 24h)",
+    "tamandua autoresearch wizard          Interactive AutoResearch setup wizard",
     "tamandua workflow autoresearch <run-id> Show run AutoResearch progress",
     "tamandua workflow status <query>      Check run status",
     "tamandua workflow runs                List all workflow runs",
@@ -1587,6 +1613,7 @@ async function main() {
       if (action === "next") { printHelp(getAutoresearchNextHelp()); }
       if (action === "loop") { printHelp(getAutoresearchLoopHelp()); }
       if (action === "prune") { printHelp(getAutoresearchPruneHelp()); }
+      if (action === "wizard") { printHelp(getAutoresearchWizardHelp()); }
       printHelp(getAutoresearchHelp());
     }
     if (group === "nudge") {
@@ -2296,7 +2323,14 @@ async function main() {
       return;
     }
 
-    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|prune>\n`);
+    if (action === "wizard") {
+      const wizardCwd = readOption(args, "--cwd");
+      const { runWizard } = await import("./wizard-orchestrator.js");
+      await runWizard({ cwd: wizardCwd, binaryName: "tamandua" });
+      return;
+    }
+
+    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|prune|wizard>\n`);
     process.exit(1);
   }
 
