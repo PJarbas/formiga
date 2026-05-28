@@ -137,6 +137,25 @@ export type LogExperimentOptions = {
   revertDiscard?: boolean;
 };
 
+export type RunLoopIterationOptions = {
+  cwd?: string;
+  prompt?: string;
+  command?: string;
+  timeoutSeconds?: number;
+  description?: string;
+  iteration?: number;
+};
+
+export type RunLoopIterationResult = {
+  run: number;
+  status: AutoresearchDecision;
+  metric: number | null;
+  agentSuccess: boolean;
+  committed: boolean;
+  reverted: boolean;
+  logEntry: AutoresearchRunEntry;
+};
+
 export type LoopAutoresearchOptions = {
   cwd?: string;
   targetMetric?: number;
@@ -171,6 +190,36 @@ type CommandResult = {
 
 const DEFAULT_MAX_OUTPUT_BYTES = 12000;
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+
+export const PROTECTED_AUTORESEARCH_FILE_NAMES = new Set([
+  "autoresearch.config.json",
+  "autoresearch.md",
+  "autoresearch.jsonl",
+  "autoresearch.sh",
+  "autoresearch.checks.sh",
+]);
+
+export function isAutoresearchProtectedFile(file: string): boolean {
+  return PROTECTED_AUTORESEARCH_FILE_NAMES.has(file) || file.startsWith("autoresearch.hooks/");
+}
+
+export function hasDirtyNonAutoresearchFiles(cwd = process.cwd()): { dirty: boolean; dirtyFiles: string[] } {
+  const status = spawnSync("git", ["status", "--porcelain"], { cwd, encoding: "utf-8" });
+  if (status.status !== 0) {
+    // Not a git repo — no dirty files
+    if (status.stderr?.includes("not a git repository")) return { dirty: false, dirtyFiles: [] };
+    throw new Error(`git status failed: ${status.stderr}`);
+  }
+  const dirtyFiles: string[] = [];
+  for (const line of status.stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const rawPath = line.slice(3).trim();
+    const file = rawPath.includes(" -> ") ? rawPath.split(" -> ").at(-1) ?? rawPath : rawPath;
+    if (!file || isAutoresearchProtectedFile(file)) continue;
+    dirtyFiles.push(file);
+  }
+  return { dirty: dirtyFiles.length > 0, dirtyFiles };
+}
 
 export function getAutoresearchPaths(cwd = process.cwd()): AutoresearchPaths {
   const root = path.resolve(cwd);
@@ -618,25 +667,35 @@ function readGitHead(cwd: string): string | undefined {
   return result.status === 0 ? result.stdout.trim() : undefined;
 }
 
-function commitAutoresearchResult(cwd: string, run: number, description: string): string | undefined {
+export function commitAutoresearchResult(cwd: string, run: number, description: string): string | undefined {
   const add = spawnSync("git", ["add", "-A"], { cwd, encoding: "utf-8" });
-  if (add.status !== 0) throw new Error(`git add failed: ${add.stderr}`);
+  if (add.status !== 0) {
+    // Not a git repo — skip commit
+    if (add.stderr?.includes("not a git repository")) return undefined;
+    throw new Error(`git add failed: ${add.stderr}`);
+  }
+  // Unstage protected AutoResearch files so they are never committed
+  const protectedResetPaths = [...PROTECTED_AUTORESEARCH_FILE_NAMES, "autoresearch.hooks"];
+  const reset = spawnSync("git", ["reset", "--", ...protectedResetPaths], { cwd, encoding: "utf-8" });
+  if (reset.status !== 0) throw new Error(`git reset (autoresearch files) failed: ${reset.stderr}`);
   const message = `autoresearch: keep run ${run}\n\n${description}`;
   const commit = spawnSync("git", ["commit", "-m", message], { cwd, encoding: "utf-8" });
-  if (commit.status !== 0) throw new Error(`git commit failed: ${commit.stderr || commit.stdout}`);
+  if (commit.status !== 0) {
+    const err = commit.stderr || commit.stdout;
+    // No non-autoresearch changes to commit — this is not an error
+    if (err.includes("nothing to commit") || err.includes("nothing added to commit")) return undefined;
+    throw new Error(`git commit failed: ${err}`);
+  }
   return readGitHead(cwd);
 }
 
 function revertExperimentChanges(cwd: string): void {
   const status = spawnSync("git", ["status", "--porcelain"], { cwd, encoding: "utf-8" });
-  if (status.status !== 0) throw new Error(`git status failed: ${status.stderr}`);
-  const protectedNames = new Set([
-    "autoresearch.config.json",
-    "autoresearch.md",
-    "autoresearch.jsonl",
-    "autoresearch.sh",
-    "autoresearch.checks.sh",
-  ]);
+  if (status.status !== 0) {
+    // Not a git repo — nothing to revert
+    if (status.stderr?.includes("not a git repository")) return;
+    throw new Error(`git status failed: ${status.stderr}`);
+  }
   const trackedPaths: string[] = [];
   const untrackedPaths: string[] = [];
   for (const line of status.stdout.split(/\r?\n/)) {
@@ -644,7 +703,7 @@ function revertExperimentChanges(cwd: string): void {
     const porcelainStatus = line.slice(0, 2);
     const rawPath = line.slice(3).trim();
     const file = rawPath.includes(" -> ") ? rawPath.split(" -> ").at(-1) ?? rawPath : rawPath;
-    if (!file || protectedNames.has(file) || file.startsWith("autoresearch.hooks/")) continue;
+    if (!file || isAutoresearchProtectedFile(file)) continue;
     if (porcelainStatus === "??") untrackedPaths.push(file);
     else trackedPaths.push(file);
   }
@@ -774,9 +833,153 @@ async function runPiAgent(cwd: string, prompt: string, timeoutMs = 300_000): Pro
   });
 }
 
+export async function runLoopIteration(options: RunLoopIterationOptions = {}): Promise<RunLoopIterationResult> {
+  const cwd = path.resolve(options.cwd ?? process.cwd());
+  const config = readSessionConfig(cwd);
+  const entries = readAutoresearchLog(cwd);
+  const baseRun = nextRunNumber(entries);
+
+  // Phase 1: Optionally invoke pi agent
+  let agentSuccess = false;
+  let hypothesis: string | undefined;
+  let learned: string | undefined;
+  let nextFocus: string | undefined;
+  let agentChanges = "";
+  const dirtyBeforeAgent = hasDirtyNonAutoresearchFiles(cwd);
+
+  if (options.prompt) {
+    const timeoutMs = (options.timeoutSeconds ?? 300) * 1000;
+    const agentResult = await runPiAgent(cwd, options.prompt, timeoutMs);
+
+    // Parse agent output text so we can detect no_change even when
+    // runPiAgent reports success=false (it only considers "done" as success).
+    const lines = agentResult.stdout.split(/\r?\n/);
+    const parsedStream = await parsePiOutputStream(lines);
+    const agentText = parsedStream.assistantText || (parsedStream.textFallback ?? "");
+    const fields = parseAgentFields(agentText);
+
+    if (agentResult.success) {
+      agentSuccess = true;
+      hypothesis = agentResult.hypothesis;
+      learned = agentResult.learned;
+      nextFocus = agentResult.nextFocus;
+      agentChanges = fields?.changes ?? "";
+    }
+
+    // Handle no_change: agent ran fine (exit code 0) but couldn't improve.
+    // If files were dirtied by the agent, revert them regardless of whether
+    // runPiAgent considered the invocation "successful".
+    if (fields?.status === "no_change") {
+      const dirtyAfterAgent = hasDirtyNonAutoresearchFiles(cwd);
+      if (dirtyAfterAgent.dirty) {
+        revertExperimentChanges(cwd);
+      }
+      return {
+        run: baseRun,
+        status: "crash",
+        metric: null,
+        agentSuccess: true, // agent ran fine but declared no_change
+        committed: false,
+        reverted: dirtyAfterAgent.dirty,
+        logEntry: await logExperiment({
+          cwd,
+          status: "crash",
+          description: options.description ?? `Loop iteration ${options.iteration ?? baseRun}: agent returned no_change but files were modified`,
+          hypothesis: agentResult.hypothesis,
+          learned: agentResult.learned,
+          nextFocus: agentResult.nextFocus,
+          revertDiscard: true,
+        }),
+      };
+    }
+
+    // Agent failed or timed out (and wasn't no_change) — revert any non-autoresearch changes made by the agent
+    if (!agentResult.success) {
+      const dirtyAfterAgent = hasDirtyNonAutoresearchFiles(cwd);
+      if (dirtyAfterAgent.dirty) {
+        revertExperimentChanges(cwd);
+      }
+      return {
+        run: baseRun,
+        status: "crash",
+        metric: null,
+        agentSuccess: false,
+        committed: false,
+        reverted: dirtyAfterAgent.dirty,
+        logEntry: await logExperiment({
+          cwd,
+          status: "crash",
+          description: options.description ?? `Loop iteration ${options.iteration ?? baseRun}: agent failed or timed out`,
+          hypothesis: agentResult.hypothesis,
+          learned: agentResult.learned,
+          nextFocus: agentResult.nextFocus,
+          revertDiscard: true,
+        }),
+      };
+    }
+  }
+
+  // Phase 2: Run experiment
+  const runResult = await runExperiment({ cwd, command: options.command });
+
+  const description = options.description ?? `Loop iteration ${options.iteration ?? baseRun}: ${runResult.status === "measured" ? runResult.metric : runResult.status}`;
+
+  // Phase 3: Log experiment with commit/revert behavior
+  const logEntry = await logExperiment({
+    cwd,
+    status: "auto",
+    description,
+    hypothesis,
+    learned,
+    nextFocus,
+    commit: true,
+    revertDiscard: true,
+  });
+
+  // logExperiment's revertDiscard only handles status=discard.
+  // Manually revert crash and checks_failed changes here.
+  if (logEntry.status === "crash" || logEntry.status === "checks_failed") {
+    revertExperimentChanges(cwd);
+  }
+
+  // Phase 4: Verify clean working tree
+  const dirtyAfter = hasDirtyNonAutoresearchFiles(cwd);
+  if (dirtyAfter.dirty) {
+    throw new Error(
+      `Working tree has dirty non-autoresearch files after runLoopIteration (run ${logEntry.run}): ${dirtyAfter.dirtyFiles.join(", ")}`,
+    );
+  }
+
+  const keep = logEntry.status === "baseline" || logEntry.status === "keep";
+  const discard = logEntry.status === "discard";
+
+  return {
+    run: logEntry.run,
+    status: logEntry.status,
+    metric: logEntry.metric,
+    agentSuccess,
+    committed: keep && Boolean(logEntry.commit_after),
+    reverted: discard || logEntry.status === "crash" || logEntry.status === "checks_failed",
+    logEntry,
+  };
+}
+
 export async function loopAutoresearch(options: LoopAutoresearchOptions = {}): Promise<LoopAutoresearchResult> {
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const config = readSessionConfig(cwd);
+
+  // Refuse to start if there are dirty non-autoresearch files (skip for non-git dirs)
+  let dirtyBeforeLoop: { dirty: boolean; dirtyFiles: string[] } = { dirty: false, dirtyFiles: [] };
+  try {
+    dirtyBeforeLoop = hasDirtyNonAutoresearchFiles(cwd);
+  } catch {
+    // Not a git repo — no dirty files to worry about
+  }
+  if (dirtyBeforeLoop.dirty) {
+    throw new Error(
+      `Working tree has dirty non-autoresearch files. Clean them before starting the loop:\n  ${dirtyBeforeLoop.dirtyFiles.join("\n  ")}`,
+    );
+  }
 
   if (!options.actionMode) {
     throw new Error(
@@ -830,17 +1033,16 @@ export async function loopAutoresearch(options: LoopAutoresearchOptions = {}): P
       const modeLabel = isMeasureOnly ? "[measure-only]" : "[prompt]";
       process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] Focus: ${nextFocus.slice(0, 80)}${nextFocus.length > 80 ? "..." : ""}\n`);
 
-      let hypothesis: string | undefined;
-      let learned: string | undefined;
-      let nextFocusOverride: string | undefined;
-
+      // Build agent prompt for prompt-mode iterations
+      let agentPrompt: string | undefined;
       if (!isMeasureOnly) {
+        process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] Invoking agent...\n`);
         const remainingIters = maxIterations - iterations;
         const targetMsg = options.targetMetric !== undefined
           ? `You have at most ${remainingIters} remaining iterations. Target: ${config.metricName} ${config.direction === "lower" ? "<=" : ">="} ${options.targetMetric}.`
           : `You have at most ${remainingIters} remaining iterations.`;
         const failureMsg = `Stop if you cannot make progress after ${maxConsecutiveFailures} consecutive attempts.`;
-        const agentPrompt = [
+        agentPrompt = [
           summary.nextPrompt,
           "",
           "INSTRUCTIONS:",
@@ -854,44 +1056,18 @@ export async function loopAutoresearch(options: LoopAutoresearchOptions = {}): P
           "  NEXT_FOCUS: what to try next",
           "- Do not run experiments yourself — the loop will measure after you finish.",
         ].join("\n");
-
-        process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] Invoking agent...\n`);
-        const timeoutMs = (options.timeoutSeconds ?? 300) * 1000;
-        const agentResult = await runPiAgent(cwd, agentPrompt, timeoutMs);
-
-        if (!agentResult.success) {
-          process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] Agent failed or reported no change.\n`);
-          consecutiveFailures++;
-          const truncatedStderr = agentResult.stderr ? ` (stderr: ${agentResult.stderr.slice(0, 120)})` : "";
-          process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] ${config.metricName}=skipped decision=agent_failure failures=${consecutiveFailures}${truncatedStderr}\n`);
-
-          if (consecutiveFailures >= maxConsecutiveFailures) {
-            stopReason = `Too many consecutive agent failures (${consecutiveFailures}/${maxConsecutiveFailures})`;
-            break;
-          }
-          continue;
-        }
-
-        hypothesis = agentResult.hypothesis;
-        learned = agentResult.learned;
-        nextFocusOverride = agentResult.nextFocus;
       }
 
-      const result = await runExperiment({ cwd });
-      lastCompletedIteration = iterations;
-
-      const description = result.status === "measured"
-        ? `Loop iteration ${iterations}: ${result.metric}`
-        : `Loop iteration ${iterations}: ${result.status}`;
-
-      const logEntry = await logExperiment({
+      const iterationResult = await runLoopIteration({
         cwd,
-        status: "auto",
-        description,
-        hypothesis,
-        learned,
-        nextFocus: nextFocusOverride,
+        prompt: agentPrompt,
+        timeoutSeconds: options.timeoutSeconds,
+        description: `Loop iteration ${iterations}`,
+        iteration: iterations,
       });
+
+      lastCompletedIteration = iterations;
+      const logEntry = iterationResult.logEntry;
 
       if (logEntry.status === "crash") {
         crashed++;
@@ -908,24 +1084,25 @@ export async function loopAutoresearch(options: LoopAutoresearchOptions = {}): P
         }
       }
 
-      if (result.metric !== null) {
-        if (bestMetric === null || isImprovement(result.metric, bestMetric, config.direction)) {
-          bestMetric = result.metric;
+      if (iterationResult.metric !== null) {
+        if (bestMetric === null || isImprovement(iterationResult.metric, bestMetric, config.direction)) {
+          bestMetric = iterationResult.metric;
           bestRun = iterations;
         }
       }
 
-      const metricStr = result.metric !== null ? String(result.metric) : "crash";
+      const metricStr = iterationResult.metric !== null ? String(iterationResult.metric) : "crash";
       const loopBestStr = bestMetric !== null ? String(bestMetric) : "-";
       const allTimeStr = allTimeBestMetric !== null ? `${allTimeBestMetric}${allTimeBestRun ? ` (run ${allTimeBestRun})` : ""}` : "-";
-      process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] ${config.metricName}=${metricStr} decision=${logEntry.status} best=${loopBestStr} (loop) | ${allTimeStr} (all-time) failures=${consecutiveFailures}\n`);
+      const transactionLabel = iterationResult.committed ? "committed" : (iterationResult.reverted ? "reverted" : "unchanged");
+      process.stdout.write(`${modeLabel} [${iterations}/${maxIterations}] ${config.metricName}=${metricStr} decision=${logEntry.status} best=${loopBestStr} (loop) | ${allTimeStr} (all-time) failures=${consecutiveFailures} ${transactionLabel}\n`);
 
-      if (options.targetMetric !== undefined && result.metric !== null) {
+      if (options.targetMetric !== undefined && iterationResult.metric !== null) {
         const targetReached = config.direction === "lower"
-          ? result.metric <= options.targetMetric
-          : result.metric >= options.targetMetric;
+          ? iterationResult.metric <= options.targetMetric
+          : iterationResult.metric >= options.targetMetric;
         if (targetReached) {
-          stopReason = `Target metric reached: ${config.metricName}=${result.metric} (target: ${options.targetMetric})`;
+          stopReason = `Target metric reached: ${config.metricName}=${iterationResult.metric} (target: ${options.targetMetric})`;
           break;
         }
       }

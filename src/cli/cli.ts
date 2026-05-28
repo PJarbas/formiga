@@ -48,11 +48,14 @@ import {
   runExperiment,
   logExperiment,
   loopAutoresearch,
+  runLoopIteration,
   readAutoresearchLog,
   summarizeAutoresearch,
   type AutoresearchDecision,
   type AutoresearchDirection,
   type AutoresearchRunEntry,
+  type RunLoopIterationOptions,
+  type RunLoopIterationResult,
 } from "../autoresearch/autoresearch.js";
 import { getDb, upsertAutoresearchSession } from "../db.js";
 
@@ -1254,6 +1257,8 @@ Subcommands:
   run-experiment  Run the configured experiment command and append a measured result
   log-experiment  Log the keep/discard decision, learning, and next focus
   loop            Run a bounded experiment loop with live terminal progress
+  run-loop-iteration
+                  Run a single transactional experiment iteration
   status          Summarize baseline, best run, failures, and next prompt
   next            Print the ratchet prompt for the next experiment
   prune           Remove stale AutoResearch registry rows from SQLite (DB only)
@@ -1398,6 +1403,41 @@ Examples:
   tamandua autoresearch loop --prompt --timeout 10m --max-iterations 10`;
 }
 
+function getAutoresearchRunLoopIterationHelp(): string {
+  return `tamandua autoresearch run-loop-iteration — Run a transactional experiment iteration
+
+Usage: tamandua autoresearch run-loop-iteration [options]
+
+Runs a single transactional AutoResearch experiment iteration. The iteration
+follows this lifecycle:
+
+  1. If --prompt is provided, invokes pi to make one candidate code change.
+  2. Runs the configured experiment command and measures the metric.
+  3. Logs the result to autoresearch.jsonl:
+     - keep/baseline results are committed (autoresearch* files excluded).
+     - discard results are reverted (candidate changes rolled back).
+     - crash/checks_failed results are reverted.
+  4. Ensures the working tree has no dirty non-autoresearch files.
+
+Options:
+  --cwd <dir>               Project directory (default: current directory)
+  --prompt <text>           pi agent prompt for code change (optional)
+  --command <cmd>           Override the configured experiment command
+  --timeout <duration>      Per-pi-action timeout (default: 5m). Format: <number><s|m|h>
+                            (e.g. 300s, 10m, 1h)
+  --iteration <n>           Iteration number (for logging)
+  --description <text>      Description of the experiment
+
+Output:
+  JSON object with run number, status, metric, agent success,
+  committed/reverted flags, and the full log entry.
+
+Examples:
+  tamandua autoresearch run-loop-iteration --prompt "try smaller LR" --iteration 1
+  tamandua autoresearch run-loop-iteration --command "uv run train.py" --iteration 5
+  tamandua autoresearch run-loop-iteration --prompt test --iteration 1`;
+}
+
 function getAutoresearchPruneHelp(): string {
   return `tamandua autoresearch prune — Remove stale AutoResearch registry rows
 
@@ -1472,6 +1512,7 @@ function getUsageText(): string {
     "tamandua autoresearch run-experiment  Run the configured experiment command",
     "tamandua autoresearch log-experiment   Log keep/discard learning for the loop",
     "tamandua autoresearch loop            Run a bounded experiment loop with live progress",
+    "tamandua autoresearch run-loop-iteration Run a single transactional experiment iteration",
     "tamandua autoresearch status          Summarize AutoResearch state",
     "tamandua autoresearch next            Print the next experiment prompt",
     "tamandua autoresearch prune           Remove stale AutoResearch registry rows",
@@ -1612,6 +1653,7 @@ async function main() {
       if (action === "status") { printHelp(getAutoresearchStatusHelp()); }
       if (action === "next") { printHelp(getAutoresearchNextHelp()); }
       if (action === "loop") { printHelp(getAutoresearchLoopHelp()); }
+      if (action === "run-loop-iteration") { printHelp(getAutoresearchRunLoopIterationHelp()); }
       if (action === "prune") { printHelp(getAutoresearchPruneHelp()); }
       if (action === "wizard") { printHelp(getAutoresearchWizardHelp()); }
       printHelp(getAutoresearchHelp());
@@ -2323,6 +2365,40 @@ async function main() {
       return;
     }
 
+    if (action === "run-loop-iteration") {
+      const timeoutRaw = readOption(args, "--timeout");
+      let timeoutSeconds: number | undefined;
+      if (timeoutRaw !== undefined) {
+        try {
+          timeoutSeconds = Math.floor(parseDuration(timeoutRaw) / 1000);
+          if (timeoutSeconds <= 0) {
+            process.stderr.write(`Invalid --timeout "${timeoutRaw}": must be a positive number.\n`);
+            process.exit(1);
+          }
+        } catch (err) {
+          process.stderr.write(`Invalid --timeout "${timeoutRaw}": ${err instanceof Error ? err.message : String(err)}\n`);
+          process.exit(1);
+        }
+      }
+      const iterationRaw = readOption(args, "--iteration");
+      const iteration = iterationRaw !== undefined ? Math.max(1, parseInt(iterationRaw, 10)) : undefined;
+      if (iterationRaw !== undefined && !Number.isFinite(iteration)) {
+        process.stderr.write(`Invalid --iteration "${iterationRaw}".\n`);
+        process.exit(1);
+      }
+      upsertAutoresearchSession(cwd ?? process.cwd());
+      const result = await runLoopIteration({
+        cwd,
+        prompt: readOption(args, "--prompt"),
+        command: readOption(args, "--command"),
+        timeoutSeconds,
+        iteration,
+        description: readOption(args, "--description"),
+      });
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
     if (action === "wizard") {
       const wizardCwd = readOption(args, "--cwd");
       const { runWizard } = await import("./wizard-orchestrator.js");
@@ -2330,7 +2406,7 @@ async function main() {
       return;
     }
 
-    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|prune|wizard>\n`);
+    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|run-loop-iteration|prune|wizard>\n`);
     process.exit(1);
   }
 

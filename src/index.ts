@@ -53,6 +53,9 @@ export {
 
 export {
   getAutoresearchPaths,
+  hasDirtyNonAutoresearchFiles,
+  isAutoresearchProtectedFile,
+  PROTECTED_AUTORESEARCH_FILE_NAMES,
   initExperiment,
   runExperiment,
   logExperiment,
@@ -61,6 +64,8 @@ export {
   readSessionConfig,
   parseMetric,
   decideStatus,
+  commitAutoresearchResult,
+  runLoopIteration,
 } from "./autoresearch/autoresearch.js";
 
 // Database
@@ -106,4 +111,6 @@ export type {
   AutoresearchRunResultEntry,
   AutoresearchSessionConfig,
   AutoresearchSummary,
+  RunLoopIterationOptions,
+  RunLoopIterationResult,
 } from "./autoresearch/autoresearch.js";

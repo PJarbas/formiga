@@ -4,8 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const CLI_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "cli", "cli.js");
 import {
+  commitAutoresearchResult,
   decideStatus,
+  hasDirtyNonAutoresearchFiles,
   initExperiment,
   logExperiment,
   loopAutoresearch,
@@ -14,6 +21,7 @@ import {
   readAutoresearchLog,
   runExperiment,
   summarizeAutoresearch,
+  runLoopIteration,
 } from "../../dist/autoresearch/autoresearch.js";
 import { parsePiOutputStream } from "../../dist/installer/pi-stream-parser.js";
 
@@ -185,6 +193,12 @@ describe("autoresearch state model", () => {
 });
 
 describe("autoresearch loop", () => {
+  function dirtyGitInit(cwd: string): void {
+    git(cwd, ["init", "--initial-branch=main"]);
+    git(cwd, ["config", "user.email", "test@tamandua.local"]);
+    git(cwd, ["config", "user.name", "Tamandua Test"]);
+  }
+
   it("rejects loopAutoresearch without actionMode", async () => {
     const cwd = makeTempDir();
     initExperiment({
@@ -277,25 +291,41 @@ describe("autoresearch loop", () => {
 
   it("accepts --prompt mode and invokes agent between iterations", async () => {
     const cwd = makeTempDir();
-    initExperiment({
-      cwd,
-      goal: "reduce loss",
-      metricName: "loss",
-      direction: "lower",
-      command: nodeMetricCommand("loss", 5),
-    });
+    // Create a fake pi that responds with STATUS: done immediately
+    const fakePi = path.join(cwd, "pi");
+    fs.writeFileSync(fakePi, [
+      `#!/usr/bin/env -S ${process.execPath}`,
+      `console.log(JSON.stringify({ type: "session", version: 1 }));`,
+      `console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "STATUS: done\\nCHANGES: test change\\nHYPOTHESIS: test hypothesis\\nLEARNED: test learned\\nNEXT_FOCUS: more tests" }] } }));`,
+      `console.log(JSON.stringify({ type: "agent_end" }));`,
+      `process.exit(0);`,
+    ].join("\n"));
+    fs.chmodSync(fakePi, 0o755);
 
-    const result = await loopAutoresearch({
-      cwd,
-      maxIterations: 1,
-      actionMode: "prompt",
-    });
+    const origPath = process.env.PATH ?? "";
+    process.env.PATH = `${cwd}${path.delimiter}${origPath}`;
 
-    // With prompt mode, the loop tries to spawn pi.
-    // If pi is not available, the agent step fails and we get 0 iterations
-    // or a failure loop. The loop should not crash.
-    // We just verify it completes without throwing.
-    assert.ok(result.stopReason !== null);
+    try {
+      initExperiment({
+        cwd,
+        goal: "reduce loss",
+        metricName: "loss",
+        direction: "lower",
+        command: nodeMetricCommand("loss", 5),
+      });
+
+      const result = await loopAutoresearch({
+        cwd,
+        maxIterations: 1,
+        actionMode: "prompt",
+      });
+
+      // The fake pi responded with STATUS: done, so the loop should complete
+      assert.ok(result.stopReason !== null);
+      assert.equal(result.iterations, 1);
+    } finally {
+      process.env.PATH = origPath;
+    }
   });
 
   it("invokes pi with correct args (--print, --no-session, --mode json, no --cwd/--message/--no-tui)", async () => {
@@ -412,6 +442,213 @@ describe("autoresearch loop", () => {
     assert.ok(!recorded.includes("--message"), `--message should NOT be in args: ${JSON.stringify(recorded)}`);
     assert.ok(recorded.includes("test prompt"), `expected prompt in args: ${JSON.stringify(recorded)}`);
   });
+
+  it("loopAutoresearch --prompt refuses to start with dirty non-autoresearch files", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "app.ts"), "initial");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "reduce loss",
+      metricName: "loss",
+      direction: "lower",
+      command: nodeMetricCommand("loss", 5),
+    });
+
+    // Make a non-autoresearch file dirty
+    fs.writeFileSync(path.join(cwd, "app.ts"), "dirty");
+
+    await assert.rejects(
+      loopAutoresearch({ cwd, maxIterations: 1, actionMode: "prompt" }),
+      /Working tree has dirty non-autoresearch files/,
+    );
+  });
+
+  it("loopAutoresearch --prompt does NOT refuse when only autoresearch files are dirty", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "app.ts"), "initial");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "reduce loss",
+      metricName: "loss",
+      direction: "lower",
+      command: nodeMetricCommand("loss", 5),
+    });
+
+    // Only autoresearch files are dirty (initExperiment already created valid jsonl)
+    fs.appendFileSync(path.join(cwd, "autoresearch.md"), "# test");
+
+    // Should not throw — autoresearch files are protected
+    const result = await loopAutoresearch({
+      cwd,
+      maxIterations: 1,
+      actionMode: "measure-only",
+    });
+    assert.equal(result.iterations, 1);
+  });
+
+  it("loopAutoresearch --measure-only refuses to start with dirty non-autoresearch files", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "app.ts"), "initial");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "reduce loss",
+      metricName: "loss",
+      direction: "lower",
+      command: nodeMetricCommand("loss", 5),
+    });
+
+    // Make a non-autoresearch file dirty
+    fs.writeFileSync(path.join(cwd, "app.ts"), "dirty");
+
+    await assert.rejects(
+      loopAutoresearch({ cwd, maxIterations: 1, actionMode: "measure-only" }),
+      /Working tree has dirty non-autoresearch files/,
+    );
+  });
+
+  it("each measure-only iteration leaves working tree clean", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "app.ts"), "initial");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "reduce loss",
+      metricName: "loss",
+      direction: "lower",
+      command: nodeMetricCommand("loss", 5),
+    });
+
+    const result = await loopAutoresearch({
+      cwd,
+      maxIterations: 3,
+      actionMode: "measure-only",
+    });
+
+    assert.equal(result.iterations, 3);
+    // After the loop, the tree must have no dirty non-autoresearch files
+    const dirtyAfter = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirtyAfter.dirty, false);
+  });
+
+  it("loopAutoresearch --prompt does NOT refuse when only autoresearch files are dirty (prompt mode)", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "app.ts"), "initial");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    // Fake pi in a separate directory (outside the repo) so it does not dirty the working tree
+    const piDir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-pi-"));
+    const fakePi = path.join(piDir, "pi");
+    fs.writeFileSync(fakePi, [
+      `#!/usr/bin/env -S ${process.execPath}`,
+      `console.log(JSON.stringify({ type: "session", version: 1 }));`,
+      `console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "STATUS: done\\nCHANGES: test change\\nHYPOTHESIS: test hypothesis\\nLEARNED: test learned\\nNEXT_FOCUS: more tests" }] } }));`,
+      `console.log(JSON.stringify({ type: "agent_end" }));`,
+      `process.exit(0);`,
+    ].join("\n"));
+    fs.chmodSync(fakePi, 0o755);
+
+    const origPath = process.env.PATH ?? "";
+    process.env.PATH = `${piDir}${path.delimiter}${origPath}`;
+
+    try {
+      initExperiment({
+        cwd,
+        goal: "reduce loss",
+        metricName: "loss",
+        direction: "lower",
+        command: nodeMetricCommand("loss", 5),
+      });
+
+      // Only autoresearch files are dirty (initExperiment already created valid jsonl)
+      fs.appendFileSync(path.join(cwd, "autoresearch.md"), "# test");
+
+      // Should not throw — autoresearch files are protected, even in prompt mode
+      const result = await loopAutoresearch({
+        cwd,
+        maxIterations: 1,
+        actionMode: "prompt",
+      });
+
+      assert.equal(result.iterations, 1);
+    } finally {
+      process.env.PATH = origPath;
+    }
+  });
+
+  it("autoresearch.jsonl survives full measure-only loop and is never committed", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "app.ts"), "initial");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "reduce loss",
+      metricName: "loss",
+      direction: "lower",
+      command: nodeMetricCommand("loss", 5),
+    });
+
+    const jsonlPath = path.join(cwd, "autoresearch.jsonl");
+    assert.ok(fs.existsSync(jsonlPath), "autoresearch.jsonl should exist after init");
+    const initialSize = fs.statSync(jsonlPath).size;
+    assert.ok(initialSize > 0, "autoresearch.jsonl should have config header");
+
+    const result = await loopAutoresearch({
+      cwd,
+      maxIterations: 3,
+      actionMode: "measure-only",
+    });
+
+    assert.equal(result.iterations, 3);
+
+    // autoresearch.jsonl exists and grew (has new entries)
+    assert.ok(fs.existsSync(jsonlPath), "autoresearch.jsonl should survive the loop");
+    const finalSize = fs.statSync(jsonlPath).size;
+    assert.ok(finalSize > initialSize, "autoresearch.jsonl should have grown across iterations");
+
+    // autoresearch.jsonl is not staged
+    const staged = spawnSync("git", ["diff", "--cached", "--name-only"], { cwd, encoding: "utf-8" });
+    assert.equal(staged.status, 0);
+    assert.ok(!staged.stdout.includes("autoresearch.jsonl"), "autoresearch.jsonl should not be staged");
+
+    // No commit contains autoresearch.jsonl (grep over git log for safety)
+    const logResult = spawnSync("git", ["log", "--oneline", "--name-only"], { cwd, encoding: "utf-8" });
+    assert.equal(logResult.status, 0);
+    // Split by commit markers: lines starting with a hex hash
+    const logLines = logResult.stdout.trim().split(/\r?\n/).filter(Boolean);
+    let currentSha = "";
+    for (const line of logLines) {
+      // Commit hash lines start with hex chars and a space
+      if (/^[0-9a-f]{7,}/.test(line)) {
+        currentSha = line.split(" ")[0];
+      } else if (currentSha && line === "autoresearch.jsonl") {
+        assert.fail(`commit ${currentSha} includes autoresearch.jsonl`);
+      }
+    }
+
+    // Working tree clean after loop
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+  });
 });
 
 describe("pi JSONL stream parsing in autoresearch context", () => {
@@ -519,9 +756,8 @@ describe("pi JSONL stream parsing in autoresearch context", () => {
 
       // Both iterations should complete (agent times out, loop continues)
       assert.equal(result.iterations, 2);
-      // No experiments were actually run since the agent kept failing
-      // and the loop skips experiments on agent failure.
-      assert.equal(result.crashed, 0);
+      // runLoopIteration now logs crash entries on agent failure
+      assert.equal(result.crashed, 2);
       assert.ok(result.stopReason?.includes("Max iterations reached"));
     } finally {
       process.env.PATH = origPath;
@@ -558,5 +794,880 @@ describe("pi JSONL stream parsing in autoresearch context", () => {
     assert.equal(fields!.status, "no_change");
     assert.equal(fields!.changes, "nothing to do");
     assert.equal(fields!.learned, "metric is optimal");
+  });
+});
+
+describe("hasDirtyNonAutoresearchFiles", () => {
+  function dirtyGitInit(cwd: string): void {
+    git(cwd, ["init", "--initial-branch=main"]);
+    git(cwd, ["config", "user.email", "test@tamandua.local"]);
+    git(cwd, ["config", "user.name", "Tamandua Test"]);
+  }
+
+  it("returns {dirty: false} for a clean working tree", () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "src.txt"), "clean");
+    git(cwd, ["add", "src.txt"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    const result = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(result.dirty, false);
+    assert.deepEqual(result.dirtyFiles, []);
+  });
+
+  it("returns {dirty: false} when only autoresearch files are modified", () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "src.txt"), "clean");
+    git(cwd, ["add", "src.txt"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    // Touch only autoresearch files
+    fs.writeFileSync(path.join(cwd, "autoresearch.jsonl"), "{}\
+");
+    fs.writeFileSync(path.join(cwd, "autoresearch.md"), "# test");
+    fs.writeFileSync(path.join(cwd, "autoresearch.config.json"), "{}");
+    fs.writeFileSync(path.join(cwd, "autoresearch.sh"), "echo test");
+    fs.writeFileSync(path.join(cwd, "autoresearch.checks.sh"), "echo check");
+    fs.mkdirSync(path.join(cwd, "autoresearch.hooks"));
+    fs.writeFileSync(path.join(cwd, "autoresearch.hooks", "before.sh"), "#!/bin/sh\necho hook");
+
+    const result = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(result.dirty, false);
+    assert.deepEqual(result.dirtyFiles, []);
+  });
+
+  it("returns {dirty: true} with correct dirtyFiles when non-protected files are modified", () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "src.txt"), "clean");
+    git(cwd, ["add", "src.txt"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    // Modify a non-protected file and add an untracked one
+    fs.writeFileSync(path.join(cwd, "src.txt"), "modified");
+    fs.writeFileSync(path.join(cwd, "new-file.ts"), "new");
+
+    const result = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(result.dirty, true);
+    assert.ok(result.dirtyFiles.includes("src.txt"));
+    assert.ok(result.dirtyFiles.includes("new-file.ts"));
+  });
+
+  it("detects dirty non-protected files alongside dirty autoresearch files", () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+    fs.writeFileSync(path.join(cwd, "src.txt"), "clean");
+    git(cwd, ["add", "src.txt"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    // Modify both protected and non-protected files
+    fs.writeFileSync(path.join(cwd, "src.txt"), "modified");
+    fs.writeFileSync(path.join(cwd, "autoresearch.jsonl"), "{}\
+");
+
+    const result = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(result.dirty, true);
+    assert.ok(result.dirtyFiles.includes("src.txt"));
+    assert.ok(!result.dirtyFiles.includes("autoresearch.jsonl"));
+  });
+
+  it("returns {dirty: false} when not a git repo", () => {
+    const cwd = makeTempDir();
+    const result = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(result.dirty, false);
+    assert.deepEqual(result.dirtyFiles, []);
+  });
+});
+
+describe("commitAutoresearchResult", () => {
+  function dirtyGitInit(cwd: string) {
+    git(cwd, ["init"]);
+    git(cwd, ["config", "user.email", "test@test.test"]);
+    git(cwd, ["config", "user.name", "Test"]);
+  }
+
+  function commit(cwd: string, args: string[]): { stdout: string; stderr: string; status: number } {
+    const result = spawnSync("git", ["commit", ...args], { cwd, encoding: "utf-8" });
+    return { stdout: result.stdout, stderr: result.stderr, status: result.status ?? -1 };
+  }
+
+  function listCommittedFiles(cwd: string, commitSha: string): string[] {
+    const result = spawnSync("git", ["diff-tree", "--no-commit-id", "--name-only", "-r", commitSha], { cwd, encoding: "utf-8" });
+    assert.equal(result.status, 0, `git diff-tree failed: ${result.stderr}`);
+    return result.stdout.trim().split(/\r?\n/).filter(Boolean);
+  }
+
+  it("commits non-autoresearch files and excludes all protected files", () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    // Create source file + initial commit
+    fs.writeFileSync(path.join(cwd, "src.ts"), "initial");
+    git(cwd, ["add", "src.ts"]);
+    git(cwd, ["commit", "-m", "initial commit"]);
+
+    // Now modify source file and create various autoresearch files
+    fs.writeFileSync(path.join(cwd, "src.ts"), "modified");
+    fs.writeFileSync(path.join(cwd, "autoresearch.jsonl"), "{}\
+");
+    fs.writeFileSync(path.join(cwd, "autoresearch.config.json"), "{}");
+    fs.writeFileSync(path.join(cwd, "autoresearch.md"), "# test");
+    fs.writeFileSync(path.join(cwd, "autoresearch.sh"), "echo hi");
+    fs.writeFileSync(path.join(cwd, "autoresearch.checks.sh"), "echo check");
+    fs.mkdirSync(path.join(cwd, "autoresearch.hooks"));
+    fs.writeFileSync(path.join(cwd, "autoresearch.hooks", "before.sh"), "#!/bin/sh\necho hook");
+    // Also add another non-autoresearch file
+    fs.writeFileSync(path.join(cwd, "other.ts"), "extra");
+
+    const result = commitAutoresearchResult(cwd, 1, "test commit");
+    assert.ok(typeof result === "string", "should return commit sha");
+    assert.ok(result.length > 0, "commit sha should not be empty");
+
+    // Check committed files do NOT include any autoresearch files
+    const committed = listCommittedFiles(cwd, result);
+    assert.ok(committed.includes("src.ts"), "src.ts should be committed");
+    assert.ok(committed.includes("other.ts"), "other.ts should be committed");
+    assert.ok(!committed.includes("autoresearch.jsonl"), "autoresearch.jsonl should NOT be committed");
+    assert.ok(!committed.includes("autoresearch.config.json"), "autoresearch.config.json should NOT be committed");
+    assert.ok(!committed.includes("autoresearch.md"), "autoresearch.md should NOT be committed");
+    assert.ok(!committed.includes("autoresearch.sh"), "autoresearch.sh should NOT be committed");
+    assert.ok(!committed.includes("autoresearch.checks.sh"), "autoresearch.checks.sh should NOT be committed");
+    assert.ok(!committed.includes("autoresearch.hooks/before.sh"), "autoresearch.hooks/before.sh should NOT be committed");
+
+    // Verify autoresearch files remain on disk (not deleted by reset)
+    assert.ok(fs.existsSync(path.join(cwd, "autoresearch.jsonl")));
+    assert.ok(fs.existsSync(path.join(cwd, "autoresearch.config.json")));
+    assert.ok(fs.existsSync(path.join(cwd, "autoresearch.hooks", "before.sh")));
+  });
+
+  it("autoresearch.jsonl is never staged or committed", () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "initial");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "updated");
+    fs.writeFileSync(path.join(cwd, "autoresearch.jsonl"), '{"type":"session"}\n');
+
+    const result = commitAutoresearchResult(cwd, 2, "update app");
+    const committed = listCommittedFiles(cwd, result);
+    assert.ok(committed.includes("app.ts"));
+    assert.ok(!committed.includes("autoresearch.jsonl"));
+
+    // Check autoresearch.jsonl is still present on disk and has expected content
+    const content = fs.readFileSync(path.join(cwd, "autoresearch.jsonl"), "utf-8");
+    assert.ok(content.includes('"type":"session"'));
+  });
+
+  it("only non-autoresearch files end up in commit when mixed", () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "main.rs"), "fn main() {}");
+    git(cwd, ["add", "main.rs"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    // Modify many files of both types
+    fs.writeFileSync(path.join(cwd, "main.rs"), "fn main() { println!(); }");
+    fs.writeFileSync(path.join(cwd, "Cargo.toml"), "[package]");
+    fs.writeFileSync(path.join(cwd, "autoresearch.jsonl"), "{}\n");
+    fs.writeFileSync(path.join(cwd, "autoresearch.md"), "# docs");
+    fs.writeFileSync(path.join(cwd, "autoresearch.sh"), "#!/bin/sh");
+    fs.writeFileSync(path.join(cwd, "README.md"), "# readme");
+
+    const result = commitAutoresearchResult(cwd, 3, "multi-file change");
+    const committed = listCommittedFiles(cwd, result);
+
+    assert.ok(committed.includes("main.rs"));
+    assert.ok(committed.includes("Cargo.toml"));
+    assert.ok(committed.includes("README.md"));
+    assert.ok(!committed.includes("autoresearch.jsonl"));
+    assert.ok(!committed.includes("autoresearch.md"));
+    assert.ok(!committed.includes("autoresearch.sh"));
+  });
+
+  it("returns undefined when only autoresearch files are changed", () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "lib.ts"), "export {}");
+    git(cwd, ["add", "lib.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    // Only modify autoresearch files
+    fs.writeFileSync(path.join(cwd, "autoresearch.jsonl"), "{}\
+");
+    fs.writeFileSync(path.join(cwd, "autoresearch.md"), "# update");
+
+    const result = commitAutoresearchResult(cwd, 4, "autoresearch only");
+    assert.equal(result, undefined, "should return undefined when only autoresearch files changed");
+
+    // Verify autoresearch files still exist on disk
+    assert.ok(fs.existsSync(path.join(cwd, "autoresearch.jsonl")));
+    assert.ok(fs.existsSync(path.join(cwd, "autoresearch.md")));
+  });
+});
+
+describe("runLoopIteration", () => {
+  function dirtyGitInit(cwd: string) {
+    git(cwd, ["init"]);
+    git(cwd, ["config", "user.email", "test@test.test"]);
+    git(cwd, ["config", "user.name", "Test"]);
+  }
+
+  function listCommittedFiles(cwd: string, commitSha: string): string[] {
+    const result = spawnSync("git", ["diff-tree", "--no-commit-id", "--name-only", "-r", commitSha], { cwd, encoding: "utf-8" });
+    assert.equal(result.status, 0, `git diff-tree failed: ${result.stderr}`);
+    return result.stdout.trim().split(/\r?\n/).filter(Boolean);
+  }
+
+  it("commits changes and returns status=keep when experiment improves metric (measure-only)", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "initial");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "improve score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 10.0),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline", hypothesis: "start" });
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "improved");
+
+    const result = await runLoopIteration({
+      cwd,
+      command: nodeMetricCommand("score", 5.0),
+      description: "improvement iteration",
+      iteration: 2,
+    });
+
+    assert.equal(result.status, "keep");
+    assert.ok(result.committed, "should have committed");
+    assert.equal(result.reverted, false);
+    assert.equal(result.metric, 5.0);
+
+    const committed = listCommittedFiles(cwd, result.logEntry.commit_after!);
+    assert.ok(committed.includes("app.ts"));
+    assert.ok(!committed.includes("autoresearch.jsonl"));
+
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+  });
+
+  it("reverts changes and returns status=discard when experiment regresses", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "improve score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 5.0),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "regression");
+
+    const result = await runLoopIteration({
+      cwd,
+      command: nodeMetricCommand("score", 10.0),
+      description: "regression iteration",
+      iteration: 2,
+    });
+
+    assert.equal(result.status, "discard");
+    assert.equal(result.committed, false);
+    assert.ok(result.reverted, "should have reverted discarded changes");
+
+    const content = fs.readFileSync(path.join(cwd, "app.ts"), "utf-8");
+    assert.equal(content, "original");
+
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+  });
+
+  it("reverts changes and returns status=crash when experiment crashes", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "improve score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 3.0),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "crash change");
+
+    const result = await runLoopIteration({
+      cwd,
+      command: "exit 1",
+      description: "crash iteration",
+      iteration: 2,
+    });
+
+    assert.equal(result.status, "crash");
+    assert.equal(result.committed, false);
+    assert.ok(result.reverted, "should have reverted");
+
+    const content = fs.readFileSync(path.join(cwd, "app.ts"), "utf-8");
+    assert.equal(content, "original");
+
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+  });
+
+  it("reverts changes and returns status=checks_failed when checks fail", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    const checksScript = path.join(cwd, "autoresearch.checks.sh");
+    fs.writeFileSync(checksScript, "#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n");
+    fs.chmodSync(checksScript, 0o755);
+
+    initExperiment({
+      cwd,
+      goal: "improve score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 7.0),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "check fail change");
+
+    const result = await runLoopIteration({
+      cwd,
+      description: "checks_failed iteration",
+      iteration: 2,
+    });
+
+    assert.equal(result.status, "checks_failed");
+    assert.equal(result.committed, false);
+    assert.ok(result.reverted, "should have reverted");
+
+    const content = fs.readFileSync(path.join(cwd, "app.ts"), "utf-8");
+    assert.equal(content, "original");
+
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+  });
+
+  it("throws if working tree is dirty after runLoopIteration", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "improve score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 1.0),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+    // Normal case: should not throw, tree clean
+    const result = await runLoopIteration({
+      cwd,
+      description: "clean iteration",
+      iteration: 2,
+    });
+
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+    assert.equal(result.status, "discard");
+  });
+
+  it("keep followed by discard preserves kept code, removes discarded edits", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "v0");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "lower score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 100),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+    // Keep: improvement
+    fs.writeFileSync(path.join(cwd, "app.ts"), "v1-kept");
+    const keepResult = await runLoopIteration({
+      cwd,
+      command: nodeMetricCommand("score", 50),
+      description: "keep improvement",
+      iteration: 2,
+    });
+    assert.equal(keepResult.status, "keep");
+    assert.ok(keepResult.committed);
+    assert.equal(fs.readFileSync(path.join(cwd, "app.ts"), "utf-8"), "v1-kept");
+
+    // Discard: regression
+    fs.writeFileSync(path.join(cwd, "app.ts"), "v2-discard");
+    const discardResult = await runLoopIteration({
+      cwd,
+      command: nodeMetricCommand("score", 90),
+      description: "regression to discard",
+      iteration: 3,
+    });
+    assert.equal(discardResult.status, "discard");
+    assert.ok(discardResult.reverted);
+
+    // Should be back to v1 (kept), not v0 or v2
+    assert.equal(fs.readFileSync(path.join(cwd, "app.ts"), "utf-8"), "v1-kept");
+
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+  });
+
+  it("autoresearch.jsonl is preserved and never committed across iterations", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "lower score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 10),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+    assert.ok(fs.existsSync(path.join(cwd, "autoresearch.jsonl")));
+    const initialSize = fs.statSync(path.join(cwd, "autoresearch.jsonl")).size;
+    assert.ok(initialSize > 0);
+
+    for (let i = 2; i <= 4; i++) {
+      fs.writeFileSync(path.join(cwd, "app.ts"), `v${i}`);
+      const result = await runLoopIteration({
+        cwd,
+        command: nodeMetricCommand("score", 10 + i),
+        description: `iteration ${i}`,
+        iteration: i,
+      });
+      const dirty = hasDirtyNonAutoresearchFiles(cwd);
+      assert.equal(dirty.dirty, false, `iteration ${i} left dirty files`);
+    }
+
+    const finalSize = fs.statSync(path.join(cwd, "autoresearch.jsonl")).size;
+    assert.ok(finalSize > initialSize, "autoresearch.jsonl should have grown");
+
+    // No commit includes autoresearch.jsonl
+    const log = spawnSync("git", ["log", "--oneline"], { cwd, encoding: "utf-8" });
+    assert.equal(log.status, 0);
+    const commits = log.stdout.trim().split(/\r?\n/).filter(Boolean);
+    for (const line of commits) {
+      const sha = line.split(" ")[0];
+      if (line.includes("initial")) continue;
+      const files = listCommittedFiles(cwd, sha);
+      assert.ok(!files.includes("autoresearch.jsonl"), `commit ${sha} should not include autoresearch.jsonl`);
+    }
+  });
+
+  it("crash reverts changes and preserves autoresearch.jsonl", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    initExperiment({
+      cwd,
+      goal: "improve score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 3.0),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+    // Record autoresearch.jsonl content before crash
+    const jsonlBefore = fs.readFileSync(path.join(cwd, "autoresearch.jsonl"), "utf-8");
+    assert.ok(jsonlBefore.length > 0);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "crash change");
+    // Append valid JSON to autoresearch.jsonl — autoresearch modifications should survive revert
+    fs.appendFileSync(path.join(cwd, "autoresearch.jsonl"), JSON.stringify({ type: "extra", note: "should survive" }) + "\n");
+
+    const result = await runLoopIteration({
+      cwd,
+      command: "exit 1",
+      description: "crash iteration",
+      iteration: 2,
+    });
+
+    assert.equal(result.status, "crash");
+    assert.equal(result.committed, false);
+    assert.ok(result.reverted, "should have reverted");
+
+    // Non-autoresearch files reverted
+    assert.equal(fs.readFileSync(path.join(cwd, "app.ts"), "utf-8"), "original");
+
+    // Autoresearch.jsonl preserved (still has extra entry appended before crash)
+    const jsonlAfter = fs.readFileSync(path.join(cwd, "autoresearch.jsonl"), "utf-8");
+    assert.ok(jsonlAfter.includes("should survive"), "autoresearch.jsonl should preserve modifications made alongside crash changes");
+    assert.ok(jsonlAfter.length > jsonlBefore.length);
+
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+  });
+
+  it("checks_failed reverts changes and preserves autoresearch.jsonl", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    const checksScript = path.join(cwd, "autoresearch.checks.sh");
+    fs.writeFileSync(checksScript, "#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n");
+    fs.chmodSync(checksScript, 0o755);
+
+    initExperiment({
+      cwd,
+      goal: "improve score",
+      metricName: "score",
+      direction: "lower",
+      command: nodeMetricCommand("score", 7.0),
+    });
+
+    await runExperiment({ cwd });
+    await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+    const jsonlBefore = fs.readFileSync(path.join(cwd, "autoresearch.jsonl"), "utf-8");
+    assert.ok(jsonlBefore.length > 0);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "checks-fail change");
+    fs.appendFileSync(path.join(cwd, "autoresearch.jsonl"), JSON.stringify({ type: "extra", note: "should survive" }) + "\n");
+
+    const result = await runLoopIteration({
+      cwd,
+      description: "checks_failed iteration",
+      iteration: 2,
+    });
+
+    assert.equal(result.status, "checks_failed");
+    assert.equal(result.committed, false);
+    assert.ok(result.reverted, "should have reverted");
+
+    assert.equal(fs.readFileSync(path.join(cwd, "app.ts"), "utf-8"), "original");
+
+    const jsonlAfter = fs.readFileSync(path.join(cwd, "autoresearch.jsonl"), "utf-8");
+    assert.ok(jsonlAfter.includes("should survive"), "autoresearch.jsonl should preserve modifications made alongside checks_failed changes");
+    assert.ok(jsonlAfter.length > jsonlBefore.length);
+
+    const dirty = hasDirtyNonAutoresearchFiles(cwd);
+    assert.equal(dirty.dirty, false);
+  });
+
+  it("prompt mode: agent failure with partial edits reverts changes", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    // Fake pi that exits non-zero after making some file changes
+    const fakePi = path.join(cwd, "pi");
+    fs.writeFileSync(fakePi, [
+      `#!/usr/bin/env -S ${process.execPath}`,
+      `const fs = require("node:fs");`,
+      `fs.writeFileSync(${JSON.stringify(path.join(cwd, "app.ts"))}, "agent-dirty");`,
+      `fs.writeFileSync(${JSON.stringify(path.join(cwd, "untracked.txt"))}, "agent created me");`,
+      `process.exit(1);`,
+    ].join("\n"));
+    fs.chmodSync(fakePi, 0o755);
+
+    const origPath = process.env.PATH ?? "";
+    process.env.PATH = `${cwd}${path.delimiter}${origPath}`;
+
+    try {
+      initExperiment({
+        cwd,
+        goal: "lower score",
+        metricName: "score",
+        direction: "lower",
+        command: nodeMetricCommand("score", 5),
+      });
+
+      await runExperiment({ cwd });
+      await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+      const result = await runLoopIteration({
+        cwd,
+        prompt: "test prompt for failing agent",
+        description: "agent failure iteration",
+        iteration: 2,
+      });
+
+      assert.equal(result.status, "crash", "agent failure should result in crash status");
+      assert.equal(result.agentSuccess, false);
+      assert.ok(result.reverted, "should have reverted agent's dirty files");
+
+      // Non-autoresearch files reverted
+      assert.equal(fs.readFileSync(path.join(cwd, "app.ts"), "utf-8"), "original");
+      assert.equal(fs.existsSync(path.join(cwd, "untracked.txt")), false, "untracked agent file should be removed");
+
+      // Autoresearch.jsonl preserved (crash entry logged)
+      assert.ok(fs.existsSync(path.join(cwd, "autoresearch.jsonl")));
+
+      const dirty = hasDirtyNonAutoresearchFiles(cwd);
+      assert.equal(dirty.dirty, false);
+    } finally {
+      process.env.PATH = origPath;
+    }
+  });
+
+  it("prompt mode: agent no_change with touched files reverts changes", async () => {
+    const cwd = makeTempDir();
+    dirtyGitInit(cwd);
+
+    fs.writeFileSync(path.join(cwd, "app.ts"), "original");
+    git(cwd, ["add", "app.ts"]);
+    git(cwd, ["commit", "-m", "initial"]);
+
+    // Fake pi that reports no_change but has modified files
+    const fakePi = path.join(cwd, "pi");
+    fs.writeFileSync(fakePi, [
+      `#!/usr/bin/env -S ${process.execPath}`,
+      `const fs = require("node:fs");`,
+      `fs.writeFileSync(${JSON.stringify(path.join(cwd, "app.ts"))}, "no-change-but-dirty");`,
+      `console.log(JSON.stringify({ type: "session", version: 1 }));`,
+      `console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "STATUS: no_change\\nCHANGES: nothing to do\\nHYPOTHESIS: already optimal\\nLEARNED: no improvement possible\\nNEXT_FOCUS: stop" }] } }));`,
+      `console.log(JSON.stringify({ type: "agent_end" }));`,
+      `process.exit(0);`,
+    ].join("\n"));
+    fs.chmodSync(fakePi, 0o755);
+
+    const origPath = process.env.PATH ?? "";
+    process.env.PATH = `${cwd}${path.delimiter}${origPath}`;
+
+    try {
+      initExperiment({
+        cwd,
+        goal: "lower score",
+        metricName: "score",
+        direction: "lower",
+        command: nodeMetricCommand("score", 5),
+      });
+
+      await runExperiment({ cwd });
+      await logExperiment({ cwd, status: "auto", description: "baseline" });
+
+      const result = await runLoopIteration({
+        cwd,
+        prompt: "test prompt for no_change agent",
+        description: "no_change iteration",
+        iteration: 2,
+      });
+
+      assert.equal(result.status, "crash", "no_change with dirty files should result in crash status");
+      assert.equal(result.agentSuccess, true, "agent ran fine but declared no_change");
+      assert.ok(result.reverted, "should have reverted agent's dirty files");
+
+      // Non-autoresearch files reverted
+      assert.equal(fs.readFileSync(path.join(cwd, "app.ts"), "utf-8"), "original");
+
+      // Autoresearch.jsonl preserved (crash entry logged)
+      assert.ok(fs.existsSync(path.join(cwd, "autoresearch.jsonl")));
+
+      const dirty = hasDirtyNonAutoresearchFiles(cwd);
+      assert.equal(dirty.dirty, false);
+    } finally {
+      process.env.PATH = origPath;
+    }
+  });
+});
+
+describe("autoresearch run-loop-iteration CLI", () => {
+  function cli(cwd: string, args: string[]): { status: number | null; stdout: string; stderr: string } {
+    const env = {
+      PATH: process.env.PATH,
+      HOME: fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cli-")),
+      TAMANDUA_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-state-")),
+    };
+    const result = spawnSync(process.execPath, [CLI_SCRIPT, ...args], {
+      cwd,
+      env,
+      encoding: "utf-8",
+      timeout: 15_000,
+    });
+    return { status: result.status, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
+  }
+
+  it("outputs JSON with run number, status, and metric", () => {
+    const cwd = makeTempDir();
+    spawnSync("git", ["init"], { cwd });
+    spawnSync("git", ["config", "user.email", "test@test.com"], { cwd });
+    spawnSync("git", ["config", "user.name", "Test"], { cwd });
+    fs.writeFileSync(path.join(cwd, "README.md"), "test\n");
+    spawnSync("git", ["add", "README.md"], { cwd });
+    spawnSync("git", ["commit", "-m", "initial"], { cwd });
+
+    initExperiment({
+      cwd,
+      goal: "test",
+      metricName: "total_ms",
+      metricUnit: "ms",
+      direction: "lower",
+      command: `echo "METRIC total_ms=42"`,
+    });
+
+    const result = cli(cwd, ["autoresearch", "run-loop-iteration", "--cwd", cwd, "--iteration", "1", "--description", "baseline"]);
+    assert.equal(result.status, 0, `CLI failed: ${result.stderr}`);
+
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(typeof parsed.run, "number");
+    assert.equal(parsed.status, "baseline");
+    assert.equal(parsed.metric, 42);
+    assert.equal(typeof parsed.agentSuccess, "boolean");
+    assert.equal(typeof parsed.committed, "boolean");
+    assert.equal(typeof parsed.reverted, "boolean");
+    assert.ok(parsed.logEntry);
+    assert.equal(parsed.logEntry.run, parsed.run);
+    assert.equal(parsed.logEntry.status, parsed.status);
+    assert.equal(parsed.logEntry.metric, parsed.metric);
+  });
+
+  it("shows help text with --help", () => {
+    const cwd = makeTempDir();
+    const result = cli(cwd, ["autoresearch", "run-loop-iteration", "--help"]);
+    assert.equal(result.status, 0);
+    assert.ok(result.stdout.includes("tamandua autoresearch run-loop-iteration"));
+    assert.ok(result.stdout.includes("--prompt"));
+    assert.ok(result.stdout.includes("--cwd"));
+    assert.ok(result.stdout.includes("--iteration"));
+    assert.ok(result.stdout.includes("--description"));
+    assert.ok(result.stdout.includes("--timeout"));
+    assert.ok(result.stdout.includes("JSON object"));
+  });
+
+  it("is listed in autoresearch --help subcommands", () => {
+    const cwd = makeTempDir();
+    const result = cli(cwd, ["autoresearch", "--help"]);
+    assert.equal(result.status, 0);
+    assert.ok(result.stdout.includes("run-loop-iteration"));
+    assert.ok(result.stdout.includes("transactional experiment iteration"));
+  });
+
+  it("is listed in global --help usage text", () => {
+    const cwd = makeTempDir();
+    const result = cli(cwd, ["--help"]);
+    assert.equal(result.status, 0);
+    assert.ok(result.stdout.includes("autoresearch run-loop-iteration"));
+  });
+
+  it("handles --iteration parsing", () => {
+    const cwd = makeTempDir();
+    spawnSync("git", ["init"], { cwd });
+    spawnSync("git", ["config", "user.email", "test@test.com"], { cwd });
+    spawnSync("git", ["config", "user.name", "Test"], { cwd });
+    fs.writeFileSync(path.join(cwd, "README.md"), "test\n");
+    spawnSync("git", ["add", "README.md"], { cwd });
+    spawnSync("git", ["commit", "-m", "initial"], { cwd });
+
+    initExperiment({
+      cwd,
+      goal: "test",
+      metricName: "total_ms",
+      metricUnit: "ms",
+      direction: "lower",
+      command: `echo "METRIC total_ms=50"`,
+    });
+
+    const result = cli(cwd, ["autoresearch", "run-loop-iteration", "--cwd", cwd, "--iteration", "5", "--description", "iter 5"]);
+    assert.equal(result.status, 0, `CLI failed: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.run, 1); // run number comes from jsonl, not --iteration
+    assert.equal(parsed.metric, 50);
+
+    // Also test invalid iteration
+    const badResult = cli(cwd, ["autoresearch", "run-loop-iteration", "--cwd", cwd, "--iteration", "not-a-number"]);
+    assert.ok(badResult.status !== 0 || badResult.stderr.includes("Invalid"));
+  });
+
+  it("handles --timeout parsing", () => {
+    const cwd = makeTempDir();
+    spawnSync("git", ["init"], { cwd });
+    spawnSync("git", ["config", "user.email", "test@test.com"], { cwd });
+    spawnSync("git", ["config", "user.name", "Test"], { cwd });
+    fs.writeFileSync(path.join(cwd, "README.md"), "test\n");
+    spawnSync("git", ["add", "README.md"], { cwd });
+    spawnSync("git", ["commit", "-m", "initial"], { cwd });
+
+    initExperiment({
+      cwd,
+      goal: "test",
+      metricName: "total_ms",
+      metricUnit: "ms",
+      direction: "lower",
+      command: `echo "METRIC total_ms=10"`,
+    });
+
+    // Valid timeout
+    const result = cli(cwd, ["autoresearch", "run-loop-iteration", "--cwd", cwd, "--timeout", "10m", "--description", "with timeout"]);
+    assert.equal(result.status, 0, `CLI failed: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.status, "baseline");
+
+    // Invalid timeout
+    const badResult = cli(cwd, ["autoresearch", "run-loop-iteration", "--cwd", cwd, "--timeout", "invalid"]);
+    assert.ok(badResult.status !== 0 || badResult.stderr.includes("Invalid"));
   });
 });
