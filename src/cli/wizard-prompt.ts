@@ -90,11 +90,25 @@ ALLOWED INIT ARGV FLAGS (initArgv must start with ["autoresearch", "init"]):
 ${ALLOWED_INIT_FLAGS.map((f) => `  ${f}`).join("\n")}
 
 ALLOWED LOOP ARGV FLAGS (loopArgv must start with ["autoresearch", "loop", "--prompt"]):
-${ALLOWED_LOOP_FLAGS.map((f) => `  ${f}`).join("\n")}
+  --target-metric <number>          OPTIONAL. A numeric target value to stop at (e.g. 100). Only
+                                    include if the user explicitly mentions a numeric target.
+                                    NEVER pass the metric name here — the metric name goes in
+                                    initArgv --metric, NOT in loopArgv --target-metric. If the
+                                    user says "optimize features" with no numeric target, OMIT
+                                    --target-metric entirely.
+  --max-iterations <number>         OPTIONAL. Maximum number of iterations to run.
+  --max-consecutive-failures <number> OPTIONAL. Stop after N consecutive failures.
+  --timeout <seconds>               OPTIONAL. Maximum runtime in seconds.
+  --cwd <path>                      REQUIRED. Working directory.
 
 IMPORTANT: --prompt is a flag (takes NO value). Do NOT follow --prompt with a value.
 
 Do NOT invent flags that are not in the allowed lists above.
+
+CRITICAL: --target-metric takes a number, never a name. The metric name (e.g. "features")
+is configured in initArgv --metric. loopArgv --target-metric is for the numeric target
+value (e.g. 100 to stop when the metric reaches 100). Only include --target-metric if the
+user explicitly says they want to stop at a specific numeric value.
 
 Return ONLY the JSON object. Prefer raw JSON. If you must wrap it, use at most ONE \`\`\`json fenced block. Do not include any other text.`;
 }

@@ -410,6 +410,48 @@ describe("buildEvaluatorPrompt", () => {
       "--goal should not be in loop flags section",
     );
   });
+
+  it("documents --target-metric as numeric and warns against passing metric names", () => {
+    const prompt = buildEvaluatorPrompt({
+      cwd: "/test",
+      initialized: false,
+      transcript: [],
+    });
+
+    // Regression: --target-metric should be documented as taking a number, not a metric name
+    const loopSection = prompt.substring(
+      prompt.indexOf("ALLOWED LOOP ARGV FLAGS"),
+    );
+
+    // Should document that --target-metric takes a numeric value
+    assert.ok(
+      loopSection.includes("--target-metric <number>"),
+      "--target-metric should be documented as accepting a number",
+    );
+
+    // Should explicitly warn against passing the metric name
+    assert.ok(
+      loopSection.includes("NEVER pass the metric name here"),
+      "should warn not to pass metric name to --target-metric",
+    );
+
+    // Should document it as OPTIONAL
+    assert.ok(
+      loopSection.includes("OPTIONAL"),
+      "--target-metric should be documented as OPTIONAL",
+    );
+
+    // CRITICAL instruction should exist in the prompt body
+    assert.ok(
+      prompt.includes("--target-metric takes a number, never a name"),
+      "prompt should have critical instruction about --target-metric",
+    );
+
+    assert.ok(
+      prompt.includes("The metric name (e.g.") && prompt.includes("is configured in initArgv --metric"),
+      "prompt should clarify that metric name goes in initArgv --metric",
+    );
+  });
 });
 
 // ── CLI --help integration test ───────────────────────────────────
