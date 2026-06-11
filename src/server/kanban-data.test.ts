@@ -181,6 +181,33 @@ describe("kanban-data: buildKanbanSnapshot", () => {
     assert.equal(snap.currentStoryId, null);
   });
 
+  it("freezes elapsed_seconds for terminal runs and leaves it null for active runs", () => {
+    const db = seedDb();
+
+    // Terminal run with SQLite-style space-separated UTC timestamps spanning 90s.
+    db.prepare(
+      "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) " +
+      "VALUES ('r-done', 1, 'feature-dev-merge', 'demo', 'completed', '{}', 0, '2026-05-01 10:00:00', '2026-05-01 10:01:30')",
+    ).run();
+    insertStep(db, "r-done", "plan", "planner", 0, "done");
+
+    const doneSnap = buildKanbanSnapshot(db, "r-done")!;
+    assert.equal(doneSnap.run.elapsed_seconds, 90);
+
+    // Active run: server must not freeze, the client uses its own clock.
+    insertRun(db, "r-live", "running");
+    insertStep(db, "r-live", "plan", "planner", 0, "running");
+
+    const liveSnap = buildKanbanSnapshot(db, "r-live")!;
+    assert.equal(liveSnap.run.elapsed_seconds, null);
+
+    // Failed/canceled runs also freeze.
+    insertRun(db, "r-fail", "failed");
+    insertStep(db, "r-fail", "plan", "planner", 0, "failed");
+    const failSnap = buildKanbanSnapshot(db, "r-fail")!;
+    assert.ok(failSnap.run.elapsed_seconds !== null);
+  });
+
   it("renders stories as cards for loop-type lanes", () => {
     const db = seedDb();
     insertRun(db, "r2", "running");

@@ -554,6 +554,14 @@ Then pipe that output into `tamandua step complete <stepId>`.
 
 On failure, call `tamandua step fail <stepId> "<clear reason>"` with actionable detail.
 
+**CRITICAL — STATUS markers are parsed by the scheduler.** Output is
+classified by exact markers: `STATUS: done` (success) or `STATUS: failed` /
+`STATUS: error` (failure). The last line of successful output must be exactly
+`STATUS: done` — not "done", not "Step completed successfully", not a summary.
+On failure, end output with `STATUS: failed` and a `REASON:` line. If neither
+marker is present, the scheduler treats the step as lost/abandoned and retries
+it — wasting a retry slot even when the work was completed.
+
 ### 2.1) MCP run start (remote)
 
 When using MCP, `tamandua.run.start` requires a harness working directory.

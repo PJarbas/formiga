@@ -39,6 +39,177 @@ That's it. Run `tamandua workflow list` to see available workflows.
 
 ---
 
+## What You Get: Bundled Workflows
+
+Tamandua ships with 21 bundled workflows organized into five families. Use `tamandua workflow list` to see available workflows, and `tamandua workflow install <id>` to install one.
+
+### Worktree Variants
+
+Worktree variants (`*-worktree`, `*-merge-worktree`) run in a detached git worktree
+created from your origin repository. Your main working copy stays untouched until the
+workflow completes. This gives you full isolation — continue working while agents
+iterate — and a clean abort path: delete the worktree and nothing in your origin repo
+has changed. The origin repository only sees changes when a `-merge` variant squashes
+the result back into the original branch.
+
+### Rugpull Handling
+
+When a merge workflow (`-merge`, `-merge-worktree`) fails at the `finalize_merge`
+step and the base branch tip has moved since the run started, Tamandua automatically
+launches a fresh replacement run with the same parameters. This "rugpull" detection
+runs after the final merge failure — if the base branch stayed put, no replacement is
+triggered. Pass `--no-relaunch-upon-rugpull` to `workflow run` to suppress the
+automatic replacement.
+
+### Feature Development
+
+Story-based feature development. The planner decomposes your task into ordered user
+stories. Each story goes through implement → verify → test before the next one starts.
+
+| Variant | Workflow ID | Agents | Pipeline |
+|---------|------------|--------|----------|
+| Local-only | `feature-dev` | 5 | plan → setup → implement → verify → test |
+| + Merge | `feature-dev-merge` | 6 | plan → setup → implement → verify → test → finalize_merge |
+| Worktree | `feature-dev-worktree` | 5 | plan → setup → implement → verify → test |
+| Worktree + Merge | `feature-dev-merge-worktree` | 6 | plan → setup → implement → verify → test → finalize_merge |
+| GitHub PR | `feature-dev-github-pr` | 6 | plan → setup → implement → verify → test → pr → review |
+
+**Local-only** stops after testing — commits stay on the feature branch, no merge or
+PR. **+ Merge** variants add a `finalize_merge` step that squash-merges all commits
+back into the original branch. **Worktree** variants run isolated in a detached worktree.
+**GitHub PR** variants create a pull request and run a code review step.
+
+### Bug Fix
+
+Bug triage and fix. The triager reproduces the bug, the investigator finds the root
+cause, the fixer patches it, and the verifier confirms the fix against acceptance
+criteria.
+
+| Variant | Workflow ID | Agents | Pipeline |
+|---------|------------|--------|----------|
+| Local-only | `bug-fix` | 5 | triage → investigate → setup → fix → verify |
+| + Merge | `bug-fix-merge` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
+| Worktree | `bug-fix-worktree` | 5 | triage → investigate → setup → fix → verify |
+| Worktree + Merge | `bug-fix-merge-worktree` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
+| GitHub PR | `bug-fix-github-pr` | 6 | triage → investigate → setup → fix → verify → pr |
+
+### Security Audit
+
+Vulnerability scanning and patching. Scans for vulnerabilities, ranks by severity,
+patches each one, re-audits after all fixes are applied, and runs regression tests.
+
+| Variant | Workflow ID | Agents | Pipeline |
+|---------|------------|--------|----------|
+| Local-only | `security-audit` | 6 | scan → prioritize → setup → fix → verify → test |
+| + Merge | `security-audit-merge` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
+| Worktree | `security-audit-worktree` | 6 | scan → prioritize → setup → fix → verify → test |
+| Worktree + Merge | `security-audit-merge-worktree` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
+| GitHub PR | `security-audit-github-pr` | 7 | scan → prioritize → setup → fix → verify → test → pr |
+
+### Quarantine Broken Tests
+
+Detect failing tests, disable them minimally, and iterate until the full test suite
+passes. Useful for establishing a clean baseline on a branch with known test failures.
+
+| Variant | Workflow ID | Agents | Pipeline |
+|---------|------------|--------|----------|
+| Local-only | `quarantine-broken-tests` | 3 | setup → quarantine → verify |
+| + Merge | `quarantine-broken-tests-merge` | 4 | setup → quarantine → verify → finalize_merge |
+| Worktree + Merge | `quarantine-broken-tests-merge-worktree` | 4 | setup → quarantine → verify → finalize_merge |
+
+### Quick Tasks
+
+Single-agent workflows for quick one-off tasks and workflow auto-selection.
+
+| Workflow ID | Agents | Pipeline | Description |
+|------------|--------|----------|-------------|
+| `do-now` | 1 | execute | Submit any task. Get back a success/failure report. No planning, no stories. |
+| `just-do-it` | 1 | dispatch | Describe what you want. Dispatches to the most appropriate workflow automatically. For coding tasks (feature-dev*, bug-fix*, security-audit*) it defaults to merge-worktree variants unless the prompt gives a specific reason otherwise. |
+| `do-review-do-verify` | 3 | do → review → do-again → verify | Two-pass execution: do the work, review it, revise, then verify the result. |
+
+Install all bundled workflows at once with:
+
+```bash
+$ tamandua workflow install --all
+```
+
+---
+
+## Why It Works
+
+- **Deterministic workflows** — Same workflow, same steps, same order. Not "hopefully the agent remembers to test."
+- **Agents verify each other** — The developer doesn't mark their own homework. A separate verifier checks every story against acceptance criteria.
+- **Fresh context, every step** — Each agent gets a clean session. No context window bloat. No hallucinated state from 50 messages ago.
+- **Retry and escalate** — Failed steps retry automatically. If retries exhaust, it escalates to you. Nothing fails silently.
+
+---
+
+## How It Works
+
+1. **Define** — Agents and steps in YAML. Each agent gets a persona, workspace, and strict acceptance criteria. No ambiguity about who does what.
+2. **Install** — One command provisions everything: agent workspaces, polling, subagent permissions. No Docker, no queues, no external services.
+3. **Run** — Agents poll for work independently. Claim a step, do the work, pass context to the next agent. SQLite tracks state. The scheduler keeps it moving.
+
+### Minimal by design
+
+YAML + SQLite + polling. That's it. No Redis, no Kafka, no container orchestrator. Tamandua is a TypeScript CLI with zero external dependencies. It runs wherever pi runs.
+
+---
+
+## Quick Example
+
+```bash
+$ tamandua workflow install feature-dev
+
+# Or install all bundled workflows at once
+$ tamandua workflow install --all
+✓ Installed workflow: feature-dev
+
+$ tamandua workflow run feature-dev "Add user authentication with OAuth"
+Run: a1fdf573
+Workflow: feature-dev
+Status: running
+
+$ tamandua workflow status "OAuth"
+Run: a1fdf573
+Workflow: feature-dev
+Steps:
+  [done   ] plan (planner)
+  [done   ] setup (setup)
+  [running] implement (developer)  Stories: 3/7 done
+  [pending] verify (verifier)
+  [pending] test (tester)
+```
+
+---
+
+## Build Your Own
+
+The bundled workflows are starting points. Define your own agents, steps, retry logic, and verification gates in plain YAML and Markdown. If you can write a prompt, you can build a workflow.
+
+```yaml
+id: my-workflow
+name: My Custom Workflow
+agents:
+  - id: researcher
+    name: Researcher
+    workspace:
+      files:
+        AGENTS.md: agents/researcher/AGENTS.md
+
+steps:
+  - id: research
+    agent: researcher
+    input: |
+      Research {{task}} and report findings.
+      Reply with STATUS: done and FINDINGS: ...
+    expects: "STATUS: done"
+```
+
+Full guide: [docs/creating-workflows.md](docs/creating-workflows.md)
+
+---
+
 ## Native AutoResearch
 
 Tamandua includes native AutoResearch primitives for measurable optimization loops.
@@ -215,177 +386,6 @@ run as `baseline`, `keep`, `discard`, `crash`, or `checks_failed` by comparing t
 latest metric with prior accepted results. The `next` prompt carries the ratchet:
 it restates the goal, best result, last learning, and next focus before the agent
 starts another experiment.
-
----
-
-## What You Get: Bundled Workflows
-
-Tamandua ships with 21 bundled workflows organized into five families. Use `tamandua workflow list` to see available workflows, and `tamandua workflow install <id>` to install one.
-
-### Worktree Variants
-
-Worktree variants (`*-worktree`, `*-merge-worktree`) run in a detached git worktree
-created from your origin repository. Your main working copy stays untouched until the
-workflow completes. This gives you full isolation — continue working while agents
-iterate — and a clean abort path: delete the worktree and nothing in your origin repo
-has changed. The origin repository only sees changes when a `-merge` variant squashes
-the result back into the original branch.
-
-### Rugpull Handling
-
-When a merge workflow (`-merge`, `-merge-worktree`) fails at the `finalize_merge`
-step and the base branch tip has moved since the run started, Tamandua automatically
-launches a fresh replacement run with the same parameters. This "rugpull" detection
-runs after the final merge failure — if the base branch stayed put, no replacement is
-triggered. Pass `--no-relaunch-upon-rugpull` to `workflow run` to suppress the
-automatic replacement.
-
-### Feature Development
-
-Story-based feature development. The planner decomposes your task into ordered user
-stories. Each story goes through implement → verify → test before the next one starts.
-
-| Variant | Workflow ID | Agents | Pipeline |
-|---------|------------|--------|----------|
-| Local-only | `feature-dev` | 5 | plan → setup → implement → verify → test |
-| + Merge | `feature-dev-merge` | 6 | plan → setup → implement → verify → test → finalize_merge |
-| Worktree | `feature-dev-worktree` | 5 | plan → setup → implement → verify → test |
-| Worktree + Merge | `feature-dev-merge-worktree` | 6 | plan → setup → implement → verify → test → finalize_merge |
-| GitHub PR | `feature-dev-github-pr` | 6 | plan → setup → implement → verify → test → pr → review |
-
-**Local-only** stops after testing — commits stay on the feature branch, no merge or
-PR. **+ Merge** variants add a `finalize_merge` step that squash-merges all commits
-back into the original branch. **Worktree** variants run isolated in a detached worktree.
-**GitHub PR** variants create a pull request and run a code review step.
-
-### Bug Fix
-
-Bug triage and fix. The triager reproduces the bug, the investigator finds the root
-cause, the fixer patches it, and the verifier confirms the fix against acceptance
-criteria.
-
-| Variant | Workflow ID | Agents | Pipeline |
-|---------|------------|--------|----------|
-| Local-only | `bug-fix` | 5 | triage → investigate → setup → fix → verify |
-| + Merge | `bug-fix-merge` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
-| Worktree | `bug-fix-worktree` | 5 | triage → investigate → setup → fix → verify |
-| Worktree + Merge | `bug-fix-merge-worktree` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
-| GitHub PR | `bug-fix-github-pr` | 6 | triage → investigate → setup → fix → verify → pr |
-
-### Security Audit
-
-Vulnerability scanning and patching. Scans for vulnerabilities, ranks by severity,
-patches each one, re-audits after all fixes are applied, and runs regression tests.
-
-| Variant | Workflow ID | Agents | Pipeline |
-|---------|------------|--------|----------|
-| Local-only | `security-audit` | 6 | scan → prioritize → setup → fix → verify → test |
-| + Merge | `security-audit-merge` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
-| Worktree | `security-audit-worktree` | 6 | scan → prioritize → setup → fix → verify → test |
-| Worktree + Merge | `security-audit-merge-worktree` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
-| GitHub PR | `security-audit-github-pr` | 7 | scan → prioritize → setup → fix → verify → test → pr |
-
-### Quarantine Broken Tests
-
-Detect failing tests, disable them minimally, and iterate until the full test suite
-passes. Useful for establishing a clean baseline on a branch with known test failures.
-
-| Variant | Workflow ID | Agents | Pipeline |
-|---------|------------|--------|----------|
-| Local-only | `quarantine-broken-tests` | 3 | setup → quarantine → verify |
-| + Merge | `quarantine-broken-tests-merge` | 4 | setup → quarantine → verify → finalize_merge |
-| Worktree + Merge | `quarantine-broken-tests-merge-worktree` | 4 | setup → quarantine → verify → finalize_merge |
-
-### Quick Tasks
-
-Single-agent workflows for quick one-off tasks and workflow auto-selection.
-
-| Workflow ID | Agents | Pipeline | Description |
-|------------|--------|----------|-------------|
-| `do-now` | 1 | execute | Submit any task. Get back a success/failure report. No planning, no stories. |
-| `just-do-it` | 1 | dispatch | Describe what you want. Dispatches to the most appropriate workflow automatically. For coding tasks (feature-dev*, bug-fix*, security-audit*) it defaults to merge-worktree variants unless the prompt gives a specific reason otherwise. |
-| `do-review-do-verify` | 3 | do → review → do-again → verify | Two-pass execution: do the work, review it, revise, then verify the result. |
-
-Install all bundled workflows at once with:
-
-```bash
-$ tamandua workflow install --all
-```
-
----
-
-## Why It Works
-
-- **Deterministic workflows** — Same workflow, same steps, same order. Not "hopefully the agent remembers to test."
-- **Agents verify each other** — The developer doesn't mark their own homework. A separate verifier checks every story against acceptance criteria.
-- **Fresh context, every step** — Each agent gets a clean session. No context window bloat. No hallucinated state from 50 messages ago.
-- **Retry and escalate** — Failed steps retry automatically. If retries exhaust, it escalates to you. Nothing fails silently.
-
----
-
-## How It Works
-
-1. **Define** — Agents and steps in YAML. Each agent gets a persona, workspace, and strict acceptance criteria. No ambiguity about who does what.
-2. **Install** — One command provisions everything: agent workspaces, polling, subagent permissions. No Docker, no queues, no external services.
-3. **Run** — Agents poll for work independently. Claim a step, do the work, pass context to the next agent. SQLite tracks state. The scheduler keeps it moving.
-
-### Minimal by design
-
-YAML + SQLite + polling. That's it. No Redis, no Kafka, no container orchestrator. Tamandua is a TypeScript CLI with zero external dependencies. It runs wherever pi runs.
-
----
-
-## Quick Example
-
-```bash
-$ tamandua workflow install feature-dev
-
-# Or install all bundled workflows at once
-$ tamandua workflow install --all
-✓ Installed workflow: feature-dev
-
-$ tamandua workflow run feature-dev "Add user authentication with OAuth"
-Run: a1fdf573
-Workflow: feature-dev
-Status: running
-
-$ tamandua workflow status "OAuth"
-Run: a1fdf573
-Workflow: feature-dev
-Steps:
-  [done   ] plan (planner)
-  [done   ] setup (setup)
-  [running] implement (developer)  Stories: 3/7 done
-  [pending] verify (verifier)
-  [pending] test (tester)
-```
-
----
-
-## Build Your Own
-
-The bundled workflows are starting points. Define your own agents, steps, retry logic, and verification gates in plain YAML and Markdown. If you can write a prompt, you can build a workflow.
-
-```yaml
-id: my-workflow
-name: My Custom Workflow
-agents:
-  - id: researcher
-    name: Researcher
-    workspace:
-      files:
-        AGENTS.md: agents/researcher/AGENTS.md
-
-steps:
-  - id: research
-    agent: researcher
-    input: |
-      Research {{task}} and report findings.
-      Reply with STATUS: done and FINDINGS: ...
-    expects: "STATUS: done"
-```
-
-Full guide: [docs/creating-workflows.md](docs/creating-workflows.md)
 
 ---
 

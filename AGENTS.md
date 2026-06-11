@@ -32,7 +32,9 @@ tamandua/
 ├── bin/tamandua                  # Shell wrapper
 ├── src/
 │   ├── index.ts                  # Export entry
-│   ├── db.ts                     # SQLite database
+│   ├── db.ts                     # SQLite database (runs, steps, stories, worktrees, autoresearch sessions)
+│   ├── autoresearch/
+│   │   └── autoresearch.ts       # AutoResearch experiment engine (durable optimization loops, confidence scoring)
 │   ├── cli/
 │   │   ├── cli.ts                # Main CLI entry point
 │   │   ├── ant.ts                # ASCII art easter egg
@@ -50,6 +52,11 @@ tamandua/
 │   │   ├── status.ts             # Run status queries
 │   │   ├── events.ts             # Event logging
 │   │   ├── logs-tail-format.ts   # Shared logs-tail line formatting (CLI + dashboard API)
+│   │   ├── worktree-manager.ts   # Managed git worktree creation/removal for runs
+│   │   ├── run-harness.ts        # Harness (pi/hermes) invocation for runs
+│   │   ├── rugpull.ts            # Relaunch-upon-rugpull handling
+│   │   ├── pi-stream-parser.ts   # pi --mode json output stream parsing
+│   │   ├── agent-cron.ts         # Agent cron job records
 │   │   ├── paths.ts              # Path resolution
 │   │   ├── types.ts              # Shared types
 │   │   ├── pi-config.ts          # pi config reading
@@ -58,8 +65,12 @@ tamandua/
 │   │   ├── daemon.ts             # Dashboard daemon process (co-manages dashboard + MCP listeners)
 │   │   ├── daemonctl.ts          # Daemon lifecycle control
 │   │   ├── dashboard.ts          # Dashboard HTTP server
+│   │   ├── control-server.ts     # Daemon control plane (pause/resume/terminate runs)
+│   │   ├── control-client.ts     # Client for the daemon control plane
+│   │   ├── kanban-data.ts        # Kanban snapshot/card-detail builders
 │   │   ├── mcp-server.ts         # Remote MCP HTTP server bootstrap (streamable transport)
-│   │   └── index.html            # Dashboard UI
+│   │   ├── index.html            # Dashboard UI
+│   │   └── kanban.html           # Kanban board UI (per-run)
 │   ├── medic/
 │   │   ├── medic.ts              # Health check orchestration
 │   │   ├── checks.ts             # Individual health checks
@@ -68,11 +79,13 @@ tamandua/
 │       ├── logger.ts             # File logging
 │       ├── logger.test.ts        # Logger tests
 │       └── frontend-detect.ts    # Frontend file detection
-├── workflows/                    # Bundled workflow definitions
-├── agents/shared/                # Shared agent personas
+├── workflows/                    # Bundled workflow definitions (worktree variants symlink agent dirs)
+├── agents/shared/                # Shared agent personas (setup, pr, verifier — symlinked into workflows)
 ├── skills/                       # Bundled skills
 ├── docs/                         # User documentation
 ├── tests/                        # Integration tests
+├── e2e-tests/                    # End-to-end tests (smoke + real; NOT part of npm test)
+├── www/                          # Static website (tamandua.org)
 ├── scripts/                      # Build scripts
 ├── package.json
 ├── tsconfig.json
@@ -162,7 +175,14 @@ When making changes, review whether these artifacts need updating:
 - `src/server/mcp-server.ts` — MCP tools registered for agent use
 - `src/cli/cli.ts` — CLI commands that agents invoke, and per-command help functions (`get<Thing>Help()`)
 - `src/server/index.html` — dashboard UI
+- `src/server/kanban.html` — kanban board UI
 - `README.md` — project overview
+
+Output format contract: agent output is classified by exact STATUS markers
+(`STATUS: done`, `STATUS: failed`/`error`); missing markers cause the step to
+be treated as lost/abandoned and retried. Bundled personas carry a
+`## CRITICAL — STATUS Line Requirement` section — keep it when adding new
+workflow agents (see docs/creating-workflows.md).
 
 Changes that typically cascade to multiple artifacts:
 - **Step lifecycle**: step claim/complete/fail/pipeline logic
