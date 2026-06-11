@@ -2,9 +2,32 @@
 
 <p align="center"><img src="www/assets/tamandua.png" alt="Tamandua logo" width="180"></p>
 
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node.js >= 22">
+  <img src="https://img.shields.io/badge/install-from%20source-orange.svg" alt="Install from source (not on npm)">
+  <img src="https://img.shields.io/badge/workflows-23%20bundled-8a2be2.svg" alt="23 bundled workflows">
+  <a href="https://igorhvr.github.io/tamandua/"><img src="https://img.shields.io/badge/website-tamandua-1f6feb.svg" alt="Website"></a>
+</p>
+
 Build your agent team in [pi](https://github.com/mariozechner/pi-coding-agent) with one command.
 
 You don't need to hire a dev team. You need to define one. Tamandua gives you a team of specialized AI agents — planner, developer, verifier, tester, reviewer — that work together in reliable, repeatable workflows. One install. Zero infrastructure.
+
+## Contents
+
+- [Install from GitHub](#install-from-github)
+- [Install from local checkout](#install-from-local-checkout)
+- [Quickstart](#quickstart)
+- [What You Get: Bundled Workflows](#what-you-get-bundled-workflows)
+- [Why It Works](#why-it-works)
+- [How It Works](#how-it-works)
+- [Build Your Own](#build-your-own)
+- [Native AutoResearch](#native-autoresearch)
+- [Security](#security)
+- [Commands](#commands)
+- [Requirements](#requirements)
+- [License](#license) · [Origins](#origins)
 
 ### Install from GitHub
 
@@ -39,6 +62,43 @@ That's it. Run `tamandua workflow list` to see available workflows.
 
 ---
 
+## Quickstart
+
+Sixty seconds from install to a running agent team:
+
+```bash
+$ tamandua workflow install feature-dev
+
+# Or install all bundled workflows at once
+$ tamandua workflow install --all
+✓ Installed workflow: feature-dev
+
+$ tamandua workflow run feature-dev "Add user authentication with OAuth"
+Run: a1fdf573
+Workflow: feature-dev
+Status: running
+
+$ tamandua workflow status "OAuth"
+Run: a1fdf573
+Workflow: feature-dev
+Steps:
+  [done   ] plan (planner)
+  [done   ] setup (setup)
+  [running] implement (developer)  Stories: 3/7 done
+  [pending] verify (verifier)
+  [pending] test (tester)
+```
+
+Then watch your team work in real time:
+
+```bash
+$ tamandua dashboard    # web UI at http://localhost:3334
+```
+
+<p align="center"><img src="www/assets/dashboard-screenshot.png" alt="Tamandua dashboard showing workflow runs, step progress, and token usage statistics" width="800"></p>
+
+---
+
 ## What You Get: Bundled Workflows
 
 Tamandua ships with 23 bundled workflows organized into six families. Use `tamandua workflow list` to see available workflows, and `tamandua workflow install <id>` to install one.
@@ -66,6 +126,9 @@ automatic replacement.
 Story-based feature development. The planner decomposes your task into ordered user
 stories. Each story goes through implement → verify → test before the next one starts.
 
+<details>
+<summary>Show the 5 Feature Development variants</summary>
+
 | Variant | Workflow ID | Agents | Pipeline |
 |---------|------------|--------|----------|
 | Local-only | `feature-dev` | 5 | plan → setup → implement → verify → test |
@@ -73,6 +136,8 @@ stories. Each story goes through implement → verify → test before the next o
 | Worktree | `feature-dev-worktree` | 5 | plan → setup → implement → verify → test |
 | Worktree + Merge | `feature-dev-merge-worktree` | 6 | plan → setup → implement → verify → test → finalize_merge |
 | GitHub PR | `feature-dev-github-pr` | 6 | plan → setup → implement → verify → test → pr → review |
+
+</details>
 
 **Local-only** stops after testing — commits stay on the feature branch, no merge or
 PR. **+ Merge** variants add a `finalize_merge` step that squash-merges all commits
@@ -85,6 +150,9 @@ Bug triage and fix. The triager reproduces the bug, the investigator finds the r
 cause, the fixer patches it, and the verifier confirms the fix against acceptance
 criteria.
 
+<details>
+<summary>Show the 5 Bug Fix variants</summary>
+
 | Variant | Workflow ID | Agents | Pipeline |
 |---------|------------|--------|----------|
 | Local-only | `bug-fix` | 5 | triage → investigate → setup → fix → verify |
@@ -93,10 +161,15 @@ criteria.
 | Worktree + Merge | `bug-fix-merge-worktree` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
 | GitHub PR | `bug-fix-github-pr` | 6 | triage → investigate → setup → fix → verify → pr |
 
+</details>
+
 ### Security Audit
 
 Vulnerability scanning and patching. Scans for vulnerabilities, ranks by severity,
 patches each one, re-audits after all fixes are applied, and runs regression tests.
+
+<details>
+<summary>Show the 5 Security Audit variants</summary>
 
 | Variant | Workflow ID | Agents | Pipeline |
 |---------|------------|--------|----------|
@@ -106,16 +179,23 @@ patches each one, re-audits after all fixes are applied, and runs regression tes
 | Worktree + Merge | `security-audit-merge-worktree` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
 | GitHub PR | `security-audit-github-pr` | 7 | scan → prioritize → setup → fix → verify → test → pr |
 
+</details>
+
 ### Quarantine Broken Tests
 
 Detect failing tests, disable them minimally, and iterate until the full test suite
 passes. Useful for establishing a clean baseline on a branch with known test failures.
+
+<details>
+<summary>Show the 3 Quarantine Broken Tests variants</summary>
 
 | Variant | Workflow ID | Agents | Pipeline |
 |---------|------------|--------|----------|
 | Local-only | `quarantine-broken-tests` | 3 | setup → quarantine → verify |
 | + Merge | `quarantine-broken-tests-merge` | 4 | setup → quarantine → verify → finalize_merge |
 | Worktree + Merge | `quarantine-broken-tests-merge-worktree` | 4 | setup → quarantine → verify → finalize_merge |
+
+</details>
 
 ### Quick Tasks
 
@@ -159,36 +239,20 @@ $ tamandua workflow install --all
 2. **Install** — One command provisions everything: agent workspaces, polling, subagent permissions. No Docker, no queues, no external services.
 3. **Run** — Agents poll for work independently. Claim a step, do the work, pass context to the next agent. SQLite tracks state. The scheduler keeps it moving.
 
+```mermaid
+flowchart LR
+    CLI["tamandua CLI<br/>workflow run"] -->|create run| DB[("SQLite<br/>~/.tamandua/tamandua.db")]
+    CLI -->|register run| Daemon["Background daemon<br/>control plane"]
+    Daemon -->|schedules polling| Agents["Agent team<br/>planner · developer · verifier · tester"]
+    Agents -->|"pi --print"| Harness["pi harness<br/>(or Hermes, alpha)"]
+    Agents -->|claim step / write results| DB
+    DB --> Dashboard["Dashboard :3334<br/>Kanban + AutoResearch panels"]
+    DB --> MCP["Remote MCP :3338<br/>14 tools"]
+```
+
 ### Minimal by design
 
 YAML + SQLite + polling. That's it. No Redis, no Kafka, no container orchestrator. Tamandua is a TypeScript CLI with zero external dependencies. It runs wherever pi runs.
-
----
-
-## Quick Example
-
-```bash
-$ tamandua workflow install feature-dev
-
-# Or install all bundled workflows at once
-$ tamandua workflow install --all
-✓ Installed workflow: feature-dev
-
-$ tamandua workflow run feature-dev "Add user authentication with OAuth"
-Run: a1fdf573
-Workflow: feature-dev
-Status: running
-
-$ tamandua workflow status "OAuth"
-Run: a1fdf573
-Workflow: feature-dev
-Steps:
-  [done   ] plan (planner)
-  [done   ] setup (setup)
-  [running] implement (developer)  Stories: 3/7 done
-  [pending] verify (verifier)
-  [pending] test (tester)
-```
 
 ---
 
@@ -460,6 +524,8 @@ card per story. Cards are colour-coded by status (todo / running / done /
 failed) and the page polls `/api/runs/<run-id>/kanban` every 3 seconds. The
 JSON endpoint is also useful for external integrations — see
 `src/server/kanban-data.ts` for the response shape.
+
+<p align="center"><img src="www/assets/dashboard-kanban.png" alt="Tamandua kanban board showing swim-lane workflow step cards colour-coded by status" width="800"></p>
 
 ### Harness Selection
 

@@ -1623,3 +1623,143 @@ body.nav-open {
     font-size: 105%;  /* Slightly larger base font for big screens */
   }
 }
+
+/* ── Hero Screenshot ─────────────────────────────────────────────────
+   Product visual above the fold. Sits below the CTA inside #hero. */
+
+.hero-screenshot {
+  position: relative;
+  z-index: 1;
+  max-width: 980px;
+  margin: var(--space-8) auto 0;
+  padding: 0 var(--space-6);
+}
+
+.hero-screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    0 0 0 1px rgba(240, 136, 62, 0.08),
+    0 24px 64px -24px rgba(0, 0, 0, 0.7),
+    0 0 48px rgba(240, 136, 62, 0.07);
+}
+
+/* ── Terminal Window (animated Quick Example) ──────────────────────── */
+
+.terminal-window {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  margin: var(--space-5) 0;
+}
+
+.terminal-titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-border-muted);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.terminal-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.terminal-dot-red    { background: #f85149; }
+.terminal-dot-yellow { background: #d29922; }
+.terminal-dot-green  { background: #3fb950; }
+
+.terminal-title {
+  margin-left: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+
+.terminal-window pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  min-height: 22rem; /* reserve space so the replay doesn't shift layout */
+}
+
+.terminal-cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background: var(--color-accent);
+  animation: terminal-blink 1s steps(1) infinite;
+}
+
+.terminal-cursor-idle {
+  animation-duration: 1.6s;
+  opacity: 0.7;
+}
+
+@keyframes terminal-blink {
+  50% { opacity: 0; }
+}
+
+/* ── Syntax Highlighting Tokens (lightweight, hand-rolled) ─────────── */
+
+.tok-prompt  { color: var(--color-accent); font-weight: var(--fw-semibold); }
+.tok-comment { color: var(--color-text-muted); font-style: italic; }
+.tok-str     { color: #a5d6ff; }
+.tok-flag    { color: var(--color-info); }
+.tok-key     { color: var(--color-info); }
+.tok-output  { color: var(--color-text-muted); }
+.tok-done    { color: var(--color-success); }
+.tok-run     { color: var(--color-info); }
+.tok-pend    { color: var(--color-text-muted); }
+.tok-fail    { color: var(--color-danger); }
+
+/* ── Copy Button Visible Feedback ──────────────────────────────────── */
+
+.copy-btn-feedback {
+  display: none;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  margin-left: var(--space-1);
+}
+
+.copy-btn.copied {
+  min-width: 0;
+  padding: 0 var(--space-3);
+}
+
+.copy-btn.copied .copy-btn-feedback {
+  display: inline;
+}
+
+/* Reduced motion: no cursor blink, no replay (JS also skips the replay) */
+@media (prefers-reduced-motion: reduce) {
+  .terminal-cursor {
+    animation: none;
+  }
+
+  .terminal-window pre {
+    min-height: 0;
+  }
+}
+
+/* Small screens: hero screenshot edge-to-edge, terminal shorter */
+@media (max-width: 640px) {
+  .hero-screenshot {
+    padding: 0 var(--space-3);
+    margin-top: var(--space-6);
+  }
+
+  .terminal-window pre {
+    min-height: 0;
+  }
+}

@@ -139,7 +139,8 @@ document.addEventListener('DOMContentLoaded', function () {
       btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
         '<path d="M5 2V1h8v9h-1V2H5z" fill="currentColor"/>' +
         '<path d="M3 4h7v10H3V4zm1 1v8h5V5H4z" fill="currentColor"/>' +
-        '</svg>';
+        '</svg>' +
+        '<span class="copy-btn-feedback" aria-hidden="true">Copied!</span>';
       btn.setAttribute('type', 'button');
       return btn;
     }
@@ -166,21 +167,26 @@ document.addEventListener('DOMContentLoaded', function () {
 
     codeBlocks.forEach(function (pre) {
       var btn = createCopyBtn();
+      var copiedTimeout = null;
       // Make pre relatively positioned to contain the button
       pre.style.position = 'relative';
 
       btn.addEventListener('click', function () {
         var codeEl = pre.querySelector('code');
-        var text = codeEl ? codeEl.textContent : pre.textContent;
+        // Prefer the full original text when an animation is mid-replay
+        var text = codeEl
+          ? (codeEl.__fullText || codeEl.textContent)
+          : pre.textContent;
         var trimmed = text.replace(/^\n+/, '').replace(/\n+$/, '');
 
         navigator.clipboard.writeText(trimmed).then(function () {
           btn.classList.add('copied');
           btn.setAttribute('aria-label', 'Copied!');
-          var originalLabel = btn.getAttribute('aria-label');
-          setTimeout(function () {
+          if (copiedTimeout) clearTimeout(copiedTimeout);
+          copiedTimeout = setTimeout(function () {
             btn.classList.remove('copied');
             btn.setAttribute('aria-label', 'Copy code to clipboard');
+            copiedTimeout = null;
           }, 2000);
         }).catch(function () {
           // Clipboard write failed — silently ignore (graceful degradation)
@@ -189,6 +195,160 @@ document.addEventListener('DOMContentLoaded', function () {
 
       pre.appendChild(btn);
     });
+  })();
+
+  // ── 7. Lightweight Syntax Highlighting (shell + YAML) ──────────────
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function highlightShellLine(line, blockHasPrompt) {
+    var html = escapeHtml(line);
+
+    // Full-line comments
+    if (/^\s*#/.test(line)) {
+      return '<span class="tok-comment">' + html + '</span>';
+    }
+
+    var isPromptLine = /^\$\s/.test(line);
+    var isCommand = isPromptLine || !blockHasPrompt;
+
+    if (isCommand && line.trim() !== '') {
+      // Strings first, then flags (flags in our content never sit inside strings)
+      html = html.replace(/"([^"]*)"/g, '<span class="tok-str">"$1"</span>');
+      html = html.replace(/(^|\s)(--?[a-zA-Z][\w-]*)/g, function (m, pre2, flag) {
+        return pre2 + '<span class="tok-flag">' + flag + '</span>';
+      });
+      if (isPromptLine) {
+        html = html.replace(/^\$/, '<span class="tok-prompt">$</span>');
+      }
+      return html;
+    }
+
+    // Output lines: colour status markers and success ticks
+    html = html
+      .replace(/\[done\s*\]/g, '<span class="tok-done">$&</span>')
+      .replace(/\[running\]/g, '<span class="tok-run">$&</span>')
+      .replace(/\[pending\]/g, '<span class="tok-pend">$&</span>')
+      .replace(/\[failed\s*\]/g, '<span class="tok-fail">$&</span>')
+      .replace(/✓/g, '<span class="tok-done">✓</span>');
+    return '<span class="tok-output">' + html + '</span>';
+  }
+
+  function highlightYamlLine(line) {
+    var html = escapeHtml(line);
+    if (/^\s*#/.test(line)) return '<span class="tok-comment">' + html + '</span>';
+    html = html.replace(/^(\s*(?:-\s+)?)([\w.-]+)(:)/, function (m, indent, key, colon) {
+      return indent + '<span class="tok-key">' + key + '</span>' + colon;
+    });
+    html = html.replace(/&quot;[^&]*&quot;|"[^"]*"/g, function (m) {
+      return '<span class="tok-str">' + m + '</span>';
+    });
+    return html;
+  }
+
+  function highlightedLines(codeEl) {
+    var raw = codeEl.textContent;
+    var lines = raw.split('\n');
+    var isYaml = codeEl.classList.contains('language-yaml');
+    var blockHasPrompt = /^\$\s/m.test(raw);
+    return lines.map(function (line) {
+      return {
+        raw: line,
+        html: isYaml ? highlightYamlLine(line) : highlightShellLine(line, blockHasPrompt)
+      };
+    });
+  }
+
+  (function () {
+    document.querySelectorAll('pre > code').forEach(function (codeEl) {
+      var pre = codeEl.parentElement;
+      // Animated terminals are highlighted during replay (section 8)
+      if (pre.parentElement && pre.parentElement.hasAttribute('data-terminal-animate')) return;
+      var lines = highlightedLines(codeEl);
+      codeEl.innerHTML = lines.map(function (l) { return l.html; }).join('\n');
+    });
+  })();
+
+  // ── 8. Animated Terminal Replay (Quick Example) ────────────────────
+
+  (function () {
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var terminals = document.querySelectorAll('[data-terminal-animate]');
+    if (!terminals.length) return;
+
+    function highlightStatic(codeEl) {
+      codeEl.innerHTML = highlightedLines(codeEl).map(function (l) { return l.html; }).join('\n');
+    }
+
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      terminals.forEach(function (t) {
+        var codeEl = t.querySelector('pre > code');
+        if (codeEl) highlightStatic(codeEl);
+      });
+      return;
+    }
+
+    function replay(codeEl) {
+      var lines = highlightedLines(codeEl);
+      codeEl.__fullText = codeEl.textContent;
+      codeEl.innerHTML = '';
+      var cursor = document.createElement('span');
+      cursor.className = 'terminal-cursor';
+      cursor.setAttribute('aria-hidden', 'true');
+      codeEl.appendChild(cursor);
+      var lineIdx = 0;
+
+      function appendLineHtml(html, done) {
+        var span = document.createElement('span');
+        span.innerHTML = html + '\n';
+        codeEl.insertBefore(span, cursor);
+        done();
+      }
+
+      function typeCommand(line, done) {
+        var span = document.createElement('span');
+        codeEl.insertBefore(span, cursor);
+        var i = 0;
+        (function tick() {
+          if (i <= line.raw.length) {
+            span.textContent = line.raw.slice(0, i);
+            i += 2;
+            setTimeout(tick, 16);
+          } else {
+            span.innerHTML = line.html + '\n';
+            done();
+          }
+        })();
+      }
+
+      (function next() {
+        if (lineIdx >= lines.length) {
+          cursor.classList.add('terminal-cursor-idle');
+          return;
+        }
+        var line = lines[lineIdx++];
+        if (/^\$\s/.test(line.raw)) {
+          setTimeout(function () { typeCommand(line, next); }, 260);
+        } else {
+          setTimeout(function () { appendLineHtml(line.html, next); }, line.raw.trim() === '' ? 40 : 90);
+        }
+      })();
+    }
+
+    var seen = new WeakSet();
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting || seen.has(entry.target)) return;
+        seen.add(entry.target);
+        observer.unobserve(entry.target);
+        var codeEl = entry.target.querySelector('pre > code');
+        if (codeEl) replay(codeEl);
+      });
+    }, { threshold: 0.35 });
+
+    terminals.forEach(function (t) { observer.observe(t); });
   })();
 
   // ── 6. Mobile Nav Toggle (JS enhancement over CSS checkbox) ────────
