@@ -131,7 +131,7 @@ describe("autoresearch confidence", () => {
     assert.equal(high.confidence_band, "high");
   });
 
-  it("uses positive numeric metrics and ignores null or zero crash metrics", () => {
+  it("ignores crash runs and null metrics but keeps measured checks_failed metrics", () => {
     const confidence = calculateAutoresearchConfidence([
       confidenceRun(1, "baseline", 10),
       confidenceRun(2, "crash", 0),
@@ -143,6 +143,26 @@ describe("autoresearch confidence", () => {
 
     assert.equal(confidence.confidence_sample_count, 4);
     assert.equal(confidence.confidence_band, "medium");
+  });
+
+  it("includes zero and negative metrics from measured runs", () => {
+    const zero = calculateAutoresearchConfidence([
+      confidenceRun(1, "baseline", 2),
+      confidenceRun(2, "discard", 3),
+      confidenceRun(3, "keep", 0),
+    ]);
+    assert.equal(zero.confidence_sample_count, 3);
+    assert.equal(zero.confidence_score, 2);
+    assert.equal(zero.confidence_band, "high");
+
+    const negative = calculateAutoresearchConfidence([
+      confidenceRun(1, "baseline", 0),
+      confidenceRun(2, "discard", 1),
+      confidenceRun(3, "keep", -2),
+    ]);
+    assert.equal(negative.confidence_sample_count, 3);
+    assert.equal(negative.confidence_score, 2);
+    assert.equal(negative.confidence_band, "high");
   });
 
   it("handles zero MAD with zero and nonzero improvements", () => {

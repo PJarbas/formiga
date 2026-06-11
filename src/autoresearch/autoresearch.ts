@@ -614,10 +614,14 @@ export function calculateAutoresearchConfidence(
   const configEntry = entries.find((entry): entry is AutoresearchSessionEntry => entry.type === "session");
   const resolvedDirection = direction ?? configEntry?.direction ?? "lower";
   const runs = entries.filter((entry): entry is AutoresearchRunEntry => entry.type === "run");
+  // Crash runs are excluded by status: their metric values (often 0 or
+  // garbage) are untrustworthy. Any finite numeric metric from a measured
+  // run is valid — including zero and negative values (e.g. errors=0,
+  // delta metrics, negative log-likelihood).
   const numericRuns = runs.filter((entry) =>
+    entry.status !== "crash" &&
     typeof entry.metric === "number" &&
-    Number.isFinite(entry.metric) &&
-    entry.metric > 0,
+    Number.isFinite(entry.metric),
   );
   const sampleCount = numericRuns.length;
   if (sampleCount < 3) return unknownConfidence(sampleCount);

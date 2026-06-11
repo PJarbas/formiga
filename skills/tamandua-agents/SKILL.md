@@ -271,6 +271,11 @@ Options:
 - `--commit` — commit kept/baseline results with git
 - `--revert-discard` — revert non-autoresearch tracked files on discard
 
+Output includes the logged run status, the best metric so far, and a
+confidence line (band, score, MAD noise floor, sample count). Treat `low`
+confidence as a signal to rerun or confirm the current best before
+stacking more changes.
+
 Example:
 
 ```bash
@@ -402,6 +407,9 @@ Status output includes:
 - **Keep count** — experiments accepted as improvements
 - **Discard count** — experiments that did not improve or were worse
 - **Crash count** — experiments that failed to complete
+- **Confidence** — how far the best improvement sits above measured noise
+  (`high`/`medium`/`low`, scored as improvement divided by the MAD noise
+  floor across measured runs; `unknown` until 3+ measured metrics exist)
 - **Ratchet prompt** — evidence-driven prompt for the next experiment
 - **Run count** — total experiments executed
 
