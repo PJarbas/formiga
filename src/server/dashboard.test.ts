@@ -158,6 +158,23 @@ describe("dashboard logs-tail UI", () => {
       await stopDashboard(server);
     }
   });
+
+  it("renders delete modal with active-run warning and conditional force", async () => {
+    const { server, baseUrl } = await startDashboard();
+
+    try {
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+
+      const html = await response.text();
+      assert.match(html, /id="delete-modal-overlay"/);
+      assert.match(html, /id="delete-active-warning"/);
+      assert.match(html, /deleteRunActive = status === 'running' \|\| status === 'paused'/);
+      assert.match(html, /\$\{deleteRunActive \? '\?force=true' : ''\}/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
 });
 
 describe("dashboard AutoResearch progress", () => {
