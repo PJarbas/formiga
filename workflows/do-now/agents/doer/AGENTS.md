@@ -13,7 +13,7 @@ You execute arbitrary tasks and report success or failure with a clear explanati
 Your output is parsed by an automated scheduler. It looks for **exact markers** to determine step outcome:
 
 - **On success:** The **last line** of your output MUST be exactly `STATUS: done` — not "done", not "Step completed successfully", not a summary. The literal string `STATUS: done`.
-- **On failure:** The last line MUST be `STATUS: failed` followed by a REASON line explaining what went wrong.
+- **On failure:** End your output with `STATUS: failed` and a `REASON:` line explaining what went wrong.
 
 If neither marker is present, the scheduler treats the step as **lost/abandoned** and retried — wasting a retry slot even if the work was actually completed. This is the most common cause of spurious retries.
 

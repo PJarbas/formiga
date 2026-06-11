@@ -176,6 +176,17 @@ Anything a prior step emits as `KEY: value` becomes `{{key}}` (lowercased). Comm
 
 The output parser scans line-by-line for `^[A-Z_]+:` to detect the start of a new key. Anything that does not match starts a continuation of the previous key's value. Keys are stored lowercased.
 
+> **CRITICAL — STATUS line.** The scheduler classifies agent output by exact
+> markers: `STATUS: done` (success) or `STATUS: failed`/`STATUS: error`
+> (failure). If neither marker is present, the step is treated as
+> **lost/abandoned** and retried — wasting a retry slot even when the work was
+> actually completed. This is the most common cause of spurious retries. When
+> writing agent persona files (AGENTS.md), state explicitly that the last line
+> of output must be `STATUS: done` on success, or that output must end with
+> `STATUS: failed` and a `REASON:` line on failure. The bundled workflows
+> include a `## CRITICAL — STATUS Line Requirement` section for this — copy it
+> into your own personas.
+
 ```
 STATUS: done
 CHANGES: what was changed

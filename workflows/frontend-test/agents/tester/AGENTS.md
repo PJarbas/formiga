@@ -20,6 +20,15 @@ agent would kill the daemon that spawned you.
 
 4. **Check Tests** — Verify `src/server/dashboard.test.ts` exists and has tests
 
+## CRITICAL — STATUS Line Requirement
+
+Your output is parsed by an automated scheduler. It looks for **exact markers** to determine step outcome:
+
+- **On success:** The **last line** of your output MUST be exactly `STATUS: done` — not "done", not "Step completed successfully", not a summary. The literal string `STATUS: done`.
+- **On failure:** End your output with `STATUS: failed` and a `REASON:` line explaining what went wrong.
+
+If neither marker is present, the scheduler treats the step as **lost/abandoned** and retried — wasting a retry slot even if the work was actually completed. This is the most common cause of spurious retries.
+
 ## Output Format
 
 ```
