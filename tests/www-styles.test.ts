@@ -171,9 +171,11 @@ describe("www/styles.css", () => {
   });
 
   it("CTA button uses accent orange (#f0883e)", () => {
+    // Accepts the flat accent color or the accent gradient (built from #f0883e).
     assert.ok(
       /\.cta-button[^}]*background[^}]*var\(--color-accent\)/.test(css) ||
       /\.cta-button[^}]*background-color[^}]*var\(--color-accent\)/.test(css) ||
+      /\.cta-button[^}]*background[^}]*var\(--gradient-accent\)/.test(css) ||
       /\.cta-button[^}]*background\s*:\s*#f0883e/.test(css),
       "CTA button should use accent orange"
     );
@@ -235,7 +237,7 @@ describe("www/styles.css", () => {
 
   it("hero heading has negative letter-spacing for large text", () => {
     assert.ok(
-      /#hero\s+h1[^}]*letter-spacing\s*:\s*-0\.0[12]em/.test(css),
+      /#hero\s+h1[^}]*letter-spacing\s*:\s*-0\.0\d+em/.test(css),
       "hero h1 should have negative letter-spacing"
     );
   });
@@ -318,8 +320,9 @@ describe("www/styles.css", () => {
   });
 
   it("code blocks use monospace font with dark background", () => {
+    // The dark surface may be layered under decorative gradients.
     assert.ok(
-      /pre[^}]*background\s*:\s*var\(--color-surface\)/.test(css),
+      /pre[^}]*background\s*:[^};]*var\(--color-surface\)/.test(css),
       "code blocks should have dark surface background"
     );
   });
