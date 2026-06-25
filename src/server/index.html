@@ -424,14 +424,6 @@
   </div>
 
   <div class="container">
-    <!-- MCP Status Section -->
-    <section class="section">
-      <h2>MCP Server</h2>
-      <div id="mcp-status-content">
-        <div class="empty-state">Loading...</div>
-      </div>
-    </section>
-
     <!-- Runs Section -->
     <section class="section">
       <h2>Workflow Runs</h2>
@@ -544,38 +536,6 @@
     let logsTailOffset = 0;
     let latestRuns = [];
     let selectedAutoresearchSessionId = null;
-
-    async function fetchMcpStatus() {
-      try {
-        const res = await fetch("/api/mcp-status");
-        const data = await res.json();
-        renderMcpStatus(data);
-      } catch (err) {
-        console.error("Failed to fetch MCP status:", err);
-        document.getElementById("mcp-status-content").innerHTML =
-          '<div class="empty-state">Unable to fetch MCP status.</div>';
-      }
-    }
-
-    function renderMcpStatus(data) {
-      const el = document.getElementById("mcp-status-content");
-      const { running, port, path } = data;
-
-      const statusDot = running
-        ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#3fb950;margin-right:6px;" title="Running"></span>'
-        : '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#f85149;margin-right:6px;" title="Stopped"></span>';
-
-      const statusText = running ? "Running" : "Stopped";
-      const statusColor = running ? "#3fb950" : "#f85149";
-
-      let html = `<div style="display:flex;align-items:center;gap:16px;font-size:13px;">
-        <div>${statusDot}<span style="color:${statusColor};font-weight:600;">${statusText}</span></div>
-        <div>Port: <span class="mono">${port}</span></div>
-        <div>Endpoint: <span class="mono">http://localhost:${port}${esc(path)}</span></div>
-      </div>`;
-
-      el.innerHTML = html;
-    }
 
     async function fetchRuns() {
       try {
@@ -952,7 +912,6 @@
     }
 
     function refreshAll() {
-      fetchMcpStatus();
       fetchRuns();
       fetchAutoresearchSessions();
       fetchEvents();
