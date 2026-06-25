@@ -19,10 +19,12 @@
 // `../db.js` and `./step-ops.js`, avoiding cycles.
 // ══════════════════════════════════════════════════════════════════════
 
+import { getDb, incrementSystemTokenSpend } from "../../db.js";
 import { logger } from "../../lib/logger.js";
 import { emitEvent } from "../events.js";
 import { getRoleTimeoutSeconds, inferRole } from "../install.js";
 import { resolveWorkflowWorkspaceDir } from "../paths.js";
+import { completeStep, recoverOrphanedStepsForAgent } from "../step-ops.js";
 import type { WorkflowAgent, WorkflowSpec } from "../types.js";
 import { findHermesBinary } from "./binary-discovery.js";
 import { runHermes } from "./hermes-runner.js";
@@ -38,6 +40,7 @@ import {
   buildBoundedPreview,
   inFlightChildren,
   inFlightJobs,
+  setInFlightChild,
   teardownRunJobs,
   tryMarkJobInFlight,
   type CronJobInfo,
@@ -66,7 +69,6 @@ async function resolveRunIdForAttribution(metadata: PollingRoundMetadata): Promi
   }
 
   try {
-    const { getDb } = await import("../../db.js");
     const db = getDb();
     const row = db.prepare("SELECT run_id FROM steps WHERE id = ?").get(metadata.stepId) as { run_id: string } | undefined;
     if (!row?.run_id) return { runId: null, source: "none" };
@@ -82,7 +84,6 @@ interface TokenSpendUpdate {
 }
 
 async function incrementRunTokenSpend(runId: string, tokenUsage: number): Promise<TokenSpendUpdate | null> {
-  const { getDb } = await import("../../db.js");
   const db = getDb();
   const result = db
     .prepare("UPDATE runs SET tokens_spent = tokens_spent + ?, updated_at = datetime('now') WHERE id = ?")
@@ -120,8 +121,6 @@ export async function autoCompleteStepIfRunning(
     return;
   }
 
-  const { getDb } = await import("../../db.js");
-  const { completeStep } = await import("../step-ops.js");
   const db = getDb();
 
   const row = db
@@ -180,7 +179,7 @@ export async function autoCompleteStepIfRunning(
       `If this involved STORIES_JSON, ensure the STORIES_JSON line ends with a literal "]" and ` +
       `is followed by no trailing prose, comments, or markdown — only blank lines or another KEY: line.`;
     try {
-      const { recoverOrphanedStepsForAgent } = await import("../step-ops.js");
+
       const workerJobId = typeof context.jobId === "string" ? context.jobId : undefined;
       const recoveryResult = recoverOrphanedStepsForAgent(
         context.agentId as string,
@@ -244,7 +243,7 @@ async function attributePollingRoundTokenUsage(
 
   if (outputSummary.outcome === "heartbeat") {
     try {
-      const { incrementSystemTokenSpend } = await import("../../db.js");
+
       const newSystemTotal = incrementSystemTokenSpend(metadata.tokenUsage);
       emitEvent({
         ts: new Date().toISOString(),
@@ -283,7 +282,7 @@ async function attributePollingRoundTokenUsage(
 
     // Attribute to system spend instead of silently discarding.
     try {
-      const { incrementSystemTokenSpend } = await import("../../db.js");
+
       const newSystemTotal = incrementSystemTokenSpend(metadata.tokenUsage);
 
       emitEvent({
@@ -422,7 +421,6 @@ export async function executePollingRound(
   // job and skip. Without this check, timers leaked from previous CLI
   // processes would keep polling pi for completed runs.
   try {
-    const { getDb } = await import("../../db.js");
     const db = getDb();
     const row = db
       .prepare("SELECT status, scheduling_status FROM runs WHERE id = ?")
@@ -508,7 +506,7 @@ export async function executePollingRound(
     logger.info("Polling round start", context);
 
     const onSpawn = ({ pid, pgid }: { pid: number; pgid: number }) => {
-      inFlightChildren.set(job.id, { pid, pgid, killed: false });
+      setInFlightChild(job.id, { pid, pgid, killed: false });
     };
 
     let output: string;
@@ -559,7 +557,7 @@ export async function executePollingRound(
       await autoCompleteStepIfRunning(context, metadata);
     } else if (outputSummary.outcome === "other_output") {
       try {
-        const { recoverOrphanedStepsForAgent } = await import("../step-ops.js");
+  
         const recoveryResult = recoverOrphanedStepsForAgent(
           job.agentId,
           job.runId,
@@ -598,7 +596,7 @@ export async function executePollingRound(
       const isTimeout = errorMessage.includes("timed out");
       const timeoutRetryReason = isTimeout ? errorMessage : undefined;
 
-      const { recoverOrphanedStepsForAgent } = await import("../step-ops.js");
+
       const recoveryResult = recoverOrphanedStepsForAgent(
         job.agentId,
         job.runId,

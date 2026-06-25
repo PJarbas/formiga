@@ -999,10 +999,11 @@ export interface FormigaConfig {
 
 | Principio | Aplicacao |
 |-----------|-----------|
-| **Leve** | Vanilla JS/HTML/CSS, sem React/Vue. Zero build step no frontend |
-| **Responsivo** | CSS Grid + flexbox, funciona em tablet/desktop |
-| **Real-time** | Polling a cada 3s (configuravel), sem WebSocket (simplicidade) |
-| **Dark-first** | Tema escuro como padrao (DS trabalha em terminais) |
+| **Profissional** | React 18 + Vite + TypeScript. Build otimizado (code-splitting, tree-shaking), HMR no dev |
+| **Componentizado** | Cada tela como composicao de componentes reutilizaveis e tipados ponta-a-ponta com o backend |
+| **Responsivo** | Tailwind CSS (mobile-first, breakpoints utilitarios), funciona em tablet/desktop |
+| **Real-time** | Polling a cada 3s via TanStack Query (cache + revalidacao em background), sem WebSocket |
+| **Dark-first** | Tema escuro como padrao via Tailwind `dark:` + tokens CSS (DS trabalha em terminais) |
 | **Informacao densa** | Maximizar dados por pixel, sem decoracao desnecessaria |
 
 ### 12.2. Telas Principais
@@ -1336,13 +1337,19 @@ export interface LeaderboardResponse {
 | Camada | Tecnologia | Justificativa |
 |--------|-----------|---------------|
 | Server | Node.js native `http` | Ja em uso, zero deps extras |
-| Frontend | Vanilla JS + HTML | Leve, sem build step |
-| CSS | Custom properties + Grid | Responsivo sem framework |
-| Dados | SQLite queries diretas | Performance, sem ORM |
-| Polling | `setInterval` + fetch | Simples, sem WebSocket overhead |
-| Charts | Inline SVG/CSS bars | Sem D3/Chart.js (peso desnecessario) |
+| Frontend framework | **React 18 + Vite + TypeScript** | Padrao de mercado, ecossistema maduro, HMR rapido, build otimizado |
+| Styling | **Tailwind CSS** | Utility-first, tema dark via `dark:`, bundle final purgeado |
+| Componentes/Forms | Headless UI / Radix Primitives | Acessiveis (a11y), sem opiniao visual — combinam com Tailwind |
+| Data fetching | **TanStack Query** (`@tanstack/react-query`) | Cache, revalidacao em background, polling declarativo (`refetchInterval: 3000`) |
+| Roteamento | React Router (data router) | SPA com loaders/actions tipados |
+| Charts | **Apache ECharts** via `echarts-for-react` | Robusto, gr\u00e1ficos complexos (kanban heatmap, leaderboard trends), tema customizavel |
+| Tipos compartilhados | `src/shared/dashboard-types.ts` | Schemas TS importados pelo server e pelo frontend (single source of truth) |
+| Dados (backend) | SQLite queries diretas | Performance, sem ORM |
+| Build/dev | Vite + ESBuild | Dev server <100ms HMR, build com code-splitting automatico |
 
-**Nao usar**: React, Tailwind, D3, Chart.js, WebSocket. A filosofia e maxima leveza.
+**Layout no repo**: codigo React vive em `src/dashboard/` (Vite root); o backend serve os artefatos buildados (`dist/dashboard/`) atraves do `http` nativo, mantendo um unico processo em producao.
+
+**Nao usar**: WebSocket (polling resolve), Redux/MobX (TanStack Query + estado local cobrem), `create-react-app` (Vite e estado da arte), CSS-in-JS runtime (Tailwind ja resolve).
 
 ### 12.8. Fluxo de Navegacao
 

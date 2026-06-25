@@ -69,26 +69,47 @@ function readLogFromFiles(cwd: string): AutoresearchLogRunEntry[] {
   }
 }
 
+// Module-level cache to avoid repeated fs.realpathSync() calls for the
+// same cwd. Invalidate on filesystem changes by capping at 1024 entries.
+const _resolvedCwdCache = new Map<string, string>();
+const _RESOLVED_CWD_MAX = 1024;
+
 function resolveSessionCwd(cwd: string): string {
   const absolute = path.resolve(cwd);
+  const cached = _resolvedCwdCache.get(absolute);
+  if (cached) return cached;
+
+  let result: string;
   try {
-    return fs.realpathSync(absolute);
+    result = fs.realpathSync(absolute);
   } catch {
     let current = absolute;
     const missingParts: string[] = [];
     while (true) {
       const parent = path.dirname(current);
-      if (parent === current) return absolute;
+      if (parent === current) {
+        result = absolute;
+        break;
+      }
       missingParts.unshift(path.basename(current));
       current = parent;
       try {
         const realParent = fs.realpathSync(current);
-        return path.join(realParent, ...missingParts);
+        result = path.join(realParent, ...missingParts);
+        break;
       } catch {
         // Continue walking up until an existing parent can be canonicalized.
       }
     }
   }
+
+  // Evict oldest entry if at capacity
+  if (_resolvedCwdCache.size >= _RESOLVED_CWD_MAX) {
+    const firstKey = _resolvedCwdCache.keys().next().value;
+    if (firstKey !== undefined) _resolvedCwdCache.delete(firstKey);
+  }
+  _resolvedCwdCache.set(absolute, result);
+  return result;
 }
 
 export function upsertAutoresearchSession(cwd: string): AutoresearchSessionRow | null {

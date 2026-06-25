@@ -1,7 +1,7 @@
 # Checklist de Implementacao — Formiga (specs.md)
 
-Status atual: **Branch 3 concluida** — pronto para iniciar Branch 4
-Branch git ativa: `main` (Branch 3 merged via PR #2)
+Status atual: **Branch 4 concluida** — pronto para iniciar Branch 5
+Branch git ativa: `refactor/fix-perf-hot-paths` (Branch 4)
 
 ---
 
@@ -81,15 +81,15 @@ Branch git ativa: `main` (Branch 3 merged via PR #2)
 
 ---
 
-## Branch 4: refactor/fix-perf-hot-paths [PENDENTE]
+## Branch 4: refactor/fix-perf-hot-paths [CONCLUIDA]
 
-- [ ] Mover imports dinamicos para top-level em `polling-round`
-- [ ] Batch queries em `resolveStepContext` (1 JOIN)
-- [ ] Singleton SQLite com lazy migration, remover TTL de 5s
-- [ ] Memoize `resolveSessionCwd`
-- [ ] `array.join()` em `buildStoryPlanSection`
-- [ ] LRU nos Maps globais de cron-manager
-- [ ] `npm run test && npm run test:e2e` verdes
+- [x] Mover imports dinamicos para top-level em `polling-round`
+- [x] Batch queries em `resolveStepContext` (1 JOIN)
+- [x] Singleton SQLite com lazy migration, remover TTL de 5s
+- [x] Memoize `resolveSessionCwd`
+- [x] `array.join()` em `buildStoryPlanSection`
+- [x] LRU nos Maps globais de cron-manager
+- [x] `npm run test` verdes (1463/1463, 0 failures; `test:e2e` script nao existe)
 
 ---
 
@@ -117,13 +117,26 @@ Branch git ativa: `main` (Branch 3 merged via PR #2)
 
 ## Branch 6: feat/dashboard-ml-views [PENDENTE]
 
-- [ ] Tela 1: Pipeline Overview (`/`)
-- [ ] Tela 2: Kanban dos Agentes (`/kanban`)
-- [ ] Tela 3: Leaderboard (`/leaderboard`)
-- [ ] Tela 4: Agent Detail (`/agents/:name`)
-- [ ] Endpoints REST (secao 12.3)
-- [ ] Schemas TS (`MLKanbanCard`, `MLKanbanLane`, `MLKanbanSnapshot`, `LeaderboardEntry`, `LeaderboardResponse`)
-- [ ] CSS design tokens dark theme
-- [ ] Polling 3s
-- [ ] Vanilla JS — nada de React/Tailwind/Chart.js
+### Stack
+- [ ] Setup `src/dashboard/` com **Vite + React 18 + TypeScript**
+- [ ] **Tailwind CSS** configurado (tema dark via `darkMode: 'class'`, design tokens em `tailwind.config.ts`)
+- [ ] **TanStack Query** com `refetchInterval: 3000` para polling
+- [ ] **React Router** (data router) com rotas para as 4 telas
+- [ ] **Apache ECharts** (`echarts` + `echarts-for-react`) para graficos
+- [ ] Build integrado ao `npm run build` (Vite -> `dist/dashboard/`), servido pelo `http` nativo
+- [ ] Tipos compartilhados em `src/shared/dashboard-types.ts` (import tanto no server quanto no frontend)
+
+### Telas
+- [ ] Tela 1: Pipeline Overview (`/`) — header com run info + 5 cards de agentes + quick stats
+- [ ] Tela 2: Kanban dos Agentes (`/kanban`) — lanes responsivas, card-detail em dialog
+- [ ] Tela 3: Leaderboard (`/leaderboard`) — tabela ordenavel + chart ECharts de evolucao do `cv_mean`
+- [ ] Tela 4: Agent Detail (`/agents/:name`) — plano, trials, logs paginados
+
+### Backend
+- [ ] Endpoints REST (secao 12.3) servidos pelo `http` nativo
+- [ ] Schemas TS (`MLKanbanCard`, `MLKanbanLane`, `MLKanbanSnapshot`, `LeaderboardEntry`, `LeaderboardResponse`) em `src/shared/dashboard-types.ts`
+
+### Qualidade
+- [ ] Testes de componente (React Testing Library + Vitest ou node:test com jsdom)
 - [ ] `npm run test && npm run test:e2e` verdes
+- [ ] Lighthouse score >= 90 (performance) no build de producao

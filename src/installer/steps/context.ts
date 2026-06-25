@@ -21,6 +21,9 @@ import {
  * Collects context from the run's saved context, previous steps' KEY: value output,
  * and computed values like branch info, PR info, and frontend detection.
  * Optionally adds story context for loop steps.
+ *
+ * Uses a single LEFT JOIN to batch the run-context fetch + previous-steps scan
+ * into one round-trip instead of two separate queries.
  */
 export function resolveStepContext(
   runId: string,
@@ -30,21 +33,36 @@ export function resolveStepContext(
 ): Record<string, string> {
   const db = getDb();
 
-  // Start with the run's stored context
-  const run = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string } | undefined;
-  const context: Record<string, string> = run ? JSON.parse(run.context) : {};
+  // Single JOIN: run context + previous completed steps in one round-trip.
+  const rows = db
+    .prepare(
+      `SELECT r.context AS run_context, s.id AS step_id, s.output, s.step_id AS step_label, s.type
+       FROM runs r
+       LEFT JOIN steps s ON s.run_id = r.id
+         AND s.step_index < ?
+         AND s.status IN ('done', 'skipped')
+       WHERE r.id = ?
+       ORDER BY s.step_index ASC`
+    )
+    .all(stepIndex, runId) as {
+      run_context: string;
+      step_id: string | null;
+      output: string | null;
+      step_label: string | null;
+      type: string | null;
+    }[];
+
+  // Extract run context from the first row (same for all rows due to the JOIN).
+  const context: Record<string, string> =
+    rows.length > 0 && rows[0].run_context ? JSON.parse(rows[0].run_context) : {};
 
   // Always inject run_id so templates can use {{run_id}}
   context["run_id"] = runId;
 
   // Collect output from previous completed steps
-  const prevSteps = db.prepare(
-    "SELECT id, output, step_id, type FROM steps WHERE run_id = ? AND step_index < ? AND status IN ('done', 'skipped') ORDER BY step_index ASC"
-  ).all(runId, stepIndex) as { id: string; output: string | null; step_id: string; type: string }[];
-
-  for (const prev of prevSteps) {
-    if (prev.output) {
-      const parsed = parseOutputKeyValues(prev.output);
+  for (const row of rows) {
+    if (row.output) {
+      const parsed = parseOutputKeyValues(row.output);
       for (const [key, value] of Object.entries(parsed)) {
         if (!RESERVED_CONTEXT_KEYS.has(key)) {
           context[key] = value;

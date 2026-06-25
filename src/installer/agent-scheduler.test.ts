@@ -3,6 +3,7 @@ import { describe, it, afterEach, beforeEach } from "node:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { getDb } from "../../dist/db.js";
 import {
   setupAgentCrons,
   createAgentCronJob,
@@ -406,6 +407,8 @@ describe("nudgeScheduledRuns", () => {
   it("converts pending-start timer to active interval on nudge", async () => {
     createWorkflowDir("wf-pending", ["dev"]);
     const workflow = makeWorkflowSpec("wf-pending", ["dev"]);
+
+    getDb().prepare("INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, scheduling_status, created_at, updated_at) VALUES (?, 1, 'wf-pending', 'test', 'running', '{}', 0, 'active', ?, ?)").run("run-pending", new Date().toISOString(), new Date().toISOString());
 
     // Create job with stagger to get a pending-start timer
     await createAgentCronJob({

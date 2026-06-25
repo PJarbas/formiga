@@ -36,6 +36,9 @@ import {
   jobMetadata,
   pendingStartTimers,
   safeKillPgid,
+  setActiveTimer,
+  setJobMetadata,
+  setPendingStartTimer,
   teardownRunJobs,
   type CreateCronJobParams,
   type CronJobInfo,
@@ -113,7 +116,7 @@ export async function createAgentCronJob(
     createdAt: new Date().toISOString(),
   };
 
-  jobMetadata.set(id, jobInfo);
+  setJobMetadata(id, jobInfo);
 
   const startPolling = () => {
     pendingStartTimers.delete(id);
@@ -127,7 +130,7 @@ export async function createAgentCronJob(
       });
     }, intervalMs);
 
-    activeTimers.set(id, timer);
+    setActiveTimer(id, timer);
 
     logger.info("Cron job created", {
       id,
@@ -141,7 +144,7 @@ export async function createAgentCronJob(
 
   if (staggerMs > 0) {
     const pending = setTimeout(startPolling, staggerMs);
-    pendingStartTimers.set(id, pending);
+    setPendingStartTimer(id, pending);
     logger.info("Cron job scheduled with stagger", { id, runId, staggerMs });
   } else {
     startPolling();
@@ -426,7 +429,7 @@ export async function nudgeScheduledRuns(
             });
           });
         }, intervalMs);
-        activeTimers.set(jobId, newTimer);
+        setActiveTimer(jobId, newTimer);
       } else if (pendingTimer) {
         // Convert pending-start to active interval.
         clearTimeout(pendingTimer);
@@ -440,7 +443,7 @@ export async function nudgeScheduledRuns(
             });
           });
         }, intervalMs);
-        activeTimers.set(jobId, newTimer);
+        setActiveTimer(jobId, newTimer);
       }
       // If neither timer exists, the job's own startPolling() already
       // created a timer — we leave it alone.

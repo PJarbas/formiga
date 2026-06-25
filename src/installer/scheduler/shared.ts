@@ -14,7 +14,28 @@
 
 import type { WorkflowSpec, WorkflowAgent, HarnessType } from "../types.js";
 
-// ── In-memory state maps ───────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════
+// In-memory state maps (with LRU-style bounds to prevent memory leaks)
+// ════════════════════════════════════════════════════════════════════
+
+/** Maximum number of entries per collection before eviction kicks in.
+ *  Under normal operation these stay bounded by active-runs × agents-per-run;
+ *  the cap protects against leaks after crashes or cleanup failures. */
+const MAX_MAP_ENTRIES = 512;
+
+function evictIfFull<K, V>(map: Map<K, V>): void {
+  if (map.size >= MAX_MAP_ENTRIES) {
+    const firstKey = map.keys().next().value;
+    if (firstKey !== undefined) map.delete(firstKey);
+  }
+}
+
+function evictSetIfFull(set: Set<unknown>): void {
+  if (set.size >= MAX_MAP_ENTRIES) {
+    const firstValue = set.values().next().value;
+    if (firstValue !== undefined) set.delete(firstValue);
+  }
+}
 
 /** Maps job id → active setInterval handle. */
 export const activeTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -31,7 +52,14 @@ export const jobMetadata = new Map<string, CronJobInfo>();
  * finished — without this guard, setInterval would keep spawning new pi
  * every interval even though pi rounds can take 10–30 minutes.
  */
-export const inFlightJobs = new Set<string>();
+export const inFlightJobs: Set<string> & { addBounded(jobId: string): boolean } = Object.assign(new Set<string>(), {
+  addBounded(jobId: string): boolean {
+    if (inFlightJobs.has(jobId)) return false;
+    evictSetIfFull(inFlightJobs);
+    inFlightJobs.add(jobId);
+    return true;
+  },
+});
 
 export interface InFlightChild {
   pid: number;
@@ -44,6 +72,38 @@ export interface InFlightChild {
  * `removeRunCrons` and daemon shutdown to terminate process groups.
  */
 export const inFlightChildren = new Map<string, InFlightChild>();
+
+/**
+ * Bounded insert for jobMetadata. Evicts the oldest entry when at capacity.
+ */
+export function setJobMetadata(id: string, info: CronJobInfo): void {
+  evictIfFull(jobMetadata);
+  jobMetadata.set(id, info);
+}
+
+/**
+ * Bounded insert for activeTimers. Evicts the oldest entry when at capacity.
+ */
+export function setActiveTimer(id: string, timer: ReturnType<typeof setInterval>): void {
+  evictIfFull(activeTimers);
+  activeTimers.set(id, timer);
+}
+
+/**
+ * Bounded insert for pendingStartTimers. Evicts the oldest entry when at capacity.
+ */
+export function setPendingStartTimer(id: string, timer: ReturnType<typeof setTimeout>): void {
+  evictIfFull(pendingStartTimers);
+  pendingStartTimers.set(id, timer);
+}
+
+/**
+ * Bounded insert for inFlightChildren. Evicts the oldest entry when at capacity.
+ */
+export function setInFlightChild(id: string, child: InFlightChild): void {
+  evictIfFull(inFlightChildren);
+  inFlightChildren.set(id, child);
+}
 
 // ── Persona files ──────────────────────────────────────────────────────
 
@@ -114,7 +174,7 @@ export interface SetupAgentCronsOptions {
  */
 export function tryMarkJobInFlight(jobId: string): boolean {
   if (inFlightJobs.has(jobId)) return false;
-  inFlightJobs.add(jobId);
+  inFlightJobs.addBounded(jobId);
   return true;
 }
 

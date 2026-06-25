@@ -77,17 +77,17 @@ export function readProgressFile(runId: string): string {
  * Exported for testability.
  */
 export function buildStoryPlanSection(stories: Pick<Story, "storyId" | "title" | "description" | "acceptanceCriteria">[]): string {
-  let section = "## Story Plan\n\n";
+  const parts: string[] = ["## Story Plan\n\n"];
   for (const story of stories) {
-    section += `### ${story.storyId}: ${story.title}\n\n`;
-    section += `**Description:** ${story.description}\n\n`;
-    section += "**Acceptance Criteria:**\n";
+    parts.push(`### ${story.storyId}: ${story.title}\n\n`);
+    parts.push(`**Description:** ${story.description}\n\n`);
+    parts.push("**Acceptance Criteria:**\n");
     for (const ac of story.acceptanceCriteria) {
-      section += `- ${ac}\n`;
+      parts.push(`- ${ac}\n`);
     }
-    section += "\n";
+    parts.push("\n");
   }
-  return section;
+  return parts.join("");
 }
 
 /**
