@@ -241,8 +241,8 @@ function readRunEvents(homeDir: string, runId: string): Array<Record<string, unk
  * Create workflow directory in the test HOME so the daemon can register runs.
  */
 function copyWorkflowDir(homeDir: string): void {
-  const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-  const dstWorkflowDir = path.join(homeDir, ".tamandua", "workflows", "feature-dev-merge");
+  const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+  const dstWorkflowDir = path.join(homeDir, ".tamandua", "workflows", "do-review-do-verify");
   fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
   fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 }
@@ -274,13 +274,13 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run3 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
-      { stepId: "setup", agentId: "feature-dev-merge_setup" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "setup", agentId: "do-review-do-verify_setup" },
     ];
 
-    seedRunAndSteps(dbPath, run1, "feature-dev-merge", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, run2, "feature-dev-merge", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, run3, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run3, "do-review-do-verify", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -340,6 +340,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -369,13 +374,13 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run3 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
 
     // Seed runs as paused
-    seedRunAndSteps(dbPath, run1, "feature-dev-merge", "paused", "paused", steps);
-    seedRunAndSteps(dbPath, run2, "feature-dev-merge", "paused", "paused", steps);
-    seedRunAndSteps(dbPath, run3, "feature-dev-merge", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run3, "do-review-do-verify", "paused", "paused", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -427,6 +432,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -455,11 +465,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run2 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
 
-    seedRunAndSteps(dbPath, run1, "feature-dev-merge", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, run2, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -527,6 +537,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -612,24 +627,24 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
       db.prepare(
         `INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, run_number, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 0, 'draining_pause', NULL, ?, ?)`,
-      ).run(runId, "feature-dev-merge", "Drain finalize test", "running", context, now, now);
+      ).run(runId, "do-review-do-verify", "Drain finalize test", "running", context, now, now);
 
       // Step 0: done (already completed)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, loop_config, current_story_id, abandoned_count, created_at, updated_at)
-         VALUES (?, ?, 'plan', 'feature-dev-merge_planner', 0, 'test', 'STATUS: done', 'done', 4, 'single', NULL, NULL, 0, ?, ?)`,
+         VALUES (?, ?, 'plan', 'do-review-do-verify_planner', 0, 'test', 'STATUS: done', 'done', 4, 'single', NULL, NULL, 0, ?, ?)`,
       ).run(stepId1, runId, now, now);
 
       // Step 1: running (in-flight)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, loop_config, current_story_id, abandoned_count, created_at, updated_at)
-         VALUES (?, ?, 'setup', 'feature-dev-merge_setup', 1, 'test', 'STATUS: done', 'running', 4, 'single', NULL, NULL, 0, ?, ?)`,
+         VALUES (?, ?, 'setup', 'do-review-do-verify_setup', 1, 'test', 'STATUS: done', 'running', 4, 'single', NULL, NULL, 0, ?, ?)`,
       ).run(stepId2, runId, now, now);
 
       // Step 2: waiting (NOT the last step — completing step 1 should advance but NOT complete the run)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, loop_config, current_story_id, abandoned_count, created_at, updated_at)
-         VALUES (?, ?, 'implement', 'feature-dev-merge_developer', 2, 'test', 'STATUS: done', 'waiting', 4, 'single', NULL, NULL, 0, ?, ?)`,
+         VALUES (?, ?, 'implement', 'do-review-do-verify_doer', 2, 'test', 'STATUS: done', 'waiting', 4, 'single', NULL, NULL, 0, ?, ?)`,
       ).run(stepId3, runId, now, now);
 
       db.close();
@@ -678,6 +693,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -708,13 +728,13 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const canceledId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
 
-    seedRunAndSteps(dbPath, runningId, "feature-dev-merge", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, completedId, "feature-dev-merge", "completed", null, steps);
-    seedRunAndSteps(dbPath, failedId, "feature-dev-merge", "failed", null, steps);
-    seedRunAndSteps(dbPath, canceledId, "feature-dev-merge", "canceled", null, steps);
+    seedRunAndSteps(dbPath, runningId, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, completedId, "do-review-do-verify", "completed", null, steps);
+    seedRunAndSteps(dbPath, failedId, "do-review-do-verify", "failed", null, steps);
+    seedRunAndSteps(dbPath, canceledId, "do-review-do-verify", "canceled", null, steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -773,6 +793,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -803,13 +828,13 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const failedId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
 
-    seedRunAndSteps(dbPath, pausedId, "feature-dev-merge", "paused", "paused", steps);
-    seedRunAndSteps(dbPath, runningId, "feature-dev-merge", "running", null, steps);
-    seedRunAndSteps(dbPath, completedId, "feature-dev-merge", "completed", null, steps);
-    seedRunAndSteps(dbPath, failedId, "feature-dev-merge", "failed", null, steps);
+    seedRunAndSteps(dbPath, pausedId, "do-review-do-verify", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, runningId, "do-review-do-verify", "running", null, steps);
+    seedRunAndSteps(dbPath, completedId, "do-review-do-verify", "completed", null, steps);
+    seedRunAndSteps(dbPath, failedId, "do-review-do-verify", "failed", null, steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -863,6 +888,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -891,11 +921,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run2 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
 
-    seedRunAndSteps(dbPath, run1, "feature-dev-merge", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, run2, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -929,7 +959,7 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
         const pauseEvent = events.find((e) => e.event === "run.paused");
         assert.ok(pauseEvent, `Expected run.paused event for ${rid.slice(0, 8)}`);
         assert.equal(pauseEvent.runId, rid, "Event should have correct runId");
-        assert.equal(pauseEvent.workflowId, "feature-dev-merge", "Event should have correct workflowId");
+        assert.equal(pauseEvent.workflowId, "do-review-do-verify", "Event should have correct workflowId");
         assert.ok(pauseEvent.ts, "Event should have a timestamp");
       }
 
@@ -945,6 +975,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -972,11 +1007,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run2 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
 
-    seedRunAndSteps(dbPath, run1, "feature-dev-merge", "paused", "paused", steps);
-    seedRunAndSteps(dbPath, run2, "feature-dev-merge", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "paused", "paused", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -1004,7 +1039,7 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
         const resumeEvent = events.find((e) => e.event === "run.resumed");
         assert.ok(resumeEvent, `Expected run.resumed event for ${rid.slice(0, 8)}`);
         assert.equal(resumeEvent.runId, rid, "Event should have correct runId");
-        assert.equal(resumeEvent.workflowId, "feature-dev-merge", "Event should have correct workflowId");
+        assert.equal(resumeEvent.workflowId, "do-review-do-verify", "Event should have correct workflowId");
         assert.ok(resumeEvent.ts, "Event should have a timestamp");
       }
 
@@ -1020,6 +1055,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -1097,18 +1137,18 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
       db.prepare(
         `INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, run_number, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)`,
-      ).run(runId, "feature-dev-merge", "Drain no-spawn test", "running", context, now, now);
+      ).run(runId, "do-review-do-verify", "Drain no-spawn test", "running", context, now, now);
 
       // Step 0: running (in-flight)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, created_at, updated_at)
-         VALUES (?, ?, 'plan', 'feature-dev-merge_planner', 0, 'test', 'STATUS: done', 'running', 0, 'single', ?, ?)`,
+         VALUES (?, ?, 'plan', 'do-review-do-verify_planner', 0, 'test', 'STATUS: done', 'running', 0, 'single', ?, ?)`,
       ).run(stepIdRunning, runId, now, now);
 
       // Step 1: waiting (should NOT be claimed while draining)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, created_at, updated_at)
-         VALUES (?, ?, 'setup', 'feature-dev-merge_setup', 1, 'test', 'STATUS: done', 'waiting', 0, 'single', ?, ?)`,
+         VALUES (?, ?, 'setup', 'do-review-do-verify_setup', 1, 'test', 'STATUS: done', 'waiting', 0, 'single', ?, ?)`,
       ).run(crypto.randomUUID(), runId, now, now);
 
       db.close();
@@ -1172,6 +1212,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }

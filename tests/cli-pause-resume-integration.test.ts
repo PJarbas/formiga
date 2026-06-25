@@ -254,24 +254,22 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     fs.mkdirSync(tamanduaDir, { recursive: true });
 
     // Copy workflow directory so daemon can load the workflow spec
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "do-review-do-verify");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
     const dbPath = path.join(tamanduaDir, "tamandua.db");
 
     const runId = crypto.randomUUID();
-    // Create a run with all 6 agent steps from the feature-dev-merge workflow
+    // Create a run with all 4 steps from the do-review-do-verify workflow
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
-      { stepId: "setup", agentId: "feature-dev-merge_setup" },
-      { stepId: "implement", agentId: "feature-dev-merge_developer" },
-      { stepId: "verify", agentId: "feature-dev-merge_verifier" },
-      { stepId: "test", agentId: "feature-dev-merge_tester" },
-      { stepId: "finalize_merge", agentId: "feature-dev-merge_merger" },
+      { stepId: "do", agentId: "do-review-do-verify_doer" },
+      { stepId: "review", agentId: "do-review-do-verify_reviewer" },
+      { stepId: "do-again", agentId: "do-review-do-verify_doer" },
+      { stepId: "verify", agentId: "do-review-do-verify_verifier" },
     ];
-    seedRunAndSteps(dbPath, runId, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -356,6 +354,11 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -377,9 +380,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const completedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, completedRunId, "feature-dev-merge", "completed", null, steps);
+    seedRunAndSteps(dbPath, completedRunId, "do-review-do-verify", "completed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -416,9 +419,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const failedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, failedRunId, "feature-dev-merge", "failed", null, steps);
+    seedRunAndSteps(dbPath, failedRunId, "do-review-do-verify", "failed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -456,9 +459,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const runningRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, runningRunId, "feature-dev-merge", "running", null, steps);
+    seedRunAndSteps(dbPath, runningRunId, "do-review-do-verify", "running", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -491,9 +494,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const completedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, completedRunId, "feature-dev-merge", "completed", null, steps);
+    seedRunAndSteps(dbPath, completedRunId, "do-review-do-verify", "completed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -531,8 +534,8 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     fs.mkdirSync(tamanduaDir, { recursive: true });
 
     // Copy workflow directory
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "do-review-do-verify");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
@@ -540,11 +543,11 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
 
     const runId = crypto.randomUUID();
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
-      { stepId: "setup", agentId: "feature-dev-merge_setup" },
-      { stepId: "implement", agentId: "feature-dev-merge_developer" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "setup", agentId: "do-review-do-verify_setup" },
+      { stepId: "implement", agentId: "do-review-do-verify_doer" },
     ];
-    seedRunAndSteps(dbPath, runId, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -612,6 +615,11 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -634,8 +642,8 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     fs.mkdirSync(tamanduaDir, { recursive: true });
 
     // Copy workflow directory so daemon can load the workflow spec
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "do-review-do-verify");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
@@ -645,9 +653,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     // Seed a run with one step set to status='running' to simulate
     // an in-flight agent that was killed by pause-without-drain.
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, runId, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
 
     // Override the first step's status to 'running' (simulating orphaned in-flight step)
     {
@@ -733,6 +741,11 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }

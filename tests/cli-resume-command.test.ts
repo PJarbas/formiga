@@ -175,7 +175,7 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     seedRunDb(dbPath, [
       {
         id: pausedRunId,
-        workflowId: "feature-dev-merge",
+        workflowId: "do-review-do-verify",
         task: "Test paused run for resume",
         status: "paused",
         context: { working_directory_for_harness: root },
@@ -183,8 +183,8 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     ]);
 
     // Copy the workflow directory so the daemon can register the run on resume
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "do-review-do-verify");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
@@ -231,6 +231,11 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -254,7 +259,7 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     seedRunDb(dbPath, [
       {
         id: completedRunId,
-        workflowId: "feature-dev-merge",
+        workflowId: "do-review-do-verify",
         task: "Test completed run",
         status: "completed",
       },
@@ -298,7 +303,7 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     seedRunDb(dbPath, [
       {
         id: canceledRunId,
-        workflowId: "feature-dev-merge",
+        workflowId: "do-review-do-verify",
         task: "Test canceled run",
         status: "canceled",
       },
@@ -340,8 +345,8 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     fs.mkdirSync(tamanduaDir, { recursive: true });
 
     // Copy the workflow directory so the daemon can register the run on resume
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "do-review-do-verify");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
@@ -352,7 +357,7 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     seedRunDb(dbPath, [
       {
         id: failedRunId,
-        workflowId: "feature-dev-merge",
+        workflowId: "do-review-do-verify",
         task: "Test failed run for resume",
         status: "failed",
         context: { working_directory_for_harness: root },
@@ -366,7 +371,7 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
       `INSERT INTO steps (id, step_id, run_id, agent_id, step_index, input_template, expects, status, type, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      crypto.randomUUID(), stepId, failedRunId, 'feature-dev-merge_developer', 0,
+      crypto.randomUUID(), stepId, failedRunId, 'do-review-do-verify_doer', 0,
       'test input', 'STEPS_STATUS: done', 'failed', 'single', nowStr, nowStr,
     );
     db.close();
@@ -402,6 +407,11 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -425,7 +435,7 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     seedRunDb(dbPath, [
       {
         id: runningRunId,
-        workflowId: "feature-dev-merge",
+        workflowId: "do-review-do-verify",
         task: "Test running run",
         status: "running",
       },
@@ -467,7 +477,7 @@ describe("tamandua workflow resume CLI", { concurrency: 1 }, () => {
     seedRunDb(dbPath, [
       {
         id: pausedRunId,
-        workflowId: "feature-dev-merge",
+        workflowId: "do-review-do-verify",
         task: "Test paused run no daemon",
         status: "paused",
       },

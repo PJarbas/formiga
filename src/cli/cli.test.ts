@@ -312,7 +312,6 @@ describe("--help infrastructure", () => {
     try {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /tamandua get-ready/);
-      assert.match(result.stdout ?? "", /tamandua update/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -366,20 +365,6 @@ describe("--help infrastructure", () => {
     try {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("tamandua tamandua --help shows help about the ant easter egg", () => {
-    const result = cli(["tamandua", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /ASCII art easter egg/);
-      assert.match(result.stdout ?? "", /tamandua tamandua/);
-      assert.match(result.stdout ?? "", /randomly selected tamandua-themed quote/);
-      // Should NOT contain global usage
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -460,44 +445,14 @@ describe("--help infrastructure", () => {
     }
   });
 
-  // US-003: update, install, uninstall
-  it("tamandua update --help shows detailed 12-step explanation", () => {
-    const result = cli(["update", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /local source maintenance/);
-      assert.match(result.stdout ?? "", /not a package-manager update/);
-      // Step-by-step detail
-      assert.match(result.stdout ?? "", /1\. Resolves the installed/);
-      assert.match(result.stdout ?? "", /2\. Reads current git HEAD/);
-      assert.match(result.stdout ?? "", /3\. Runs git pull/);
-      assert.match(result.stdout ?? "", /4\. Reads git HEAD again/);
-      assert.match(result.stdout ?? "", /5\. If HEAD did not change/);
-      assert.match(result.stdout ?? "", /6\. If HEAD changed/);
-      assert.match(result.stdout ?? "", /7\. Takes a snapshot/);
-      assert.match(result.stdout ?? "", /8\. Checks for active runs/);
-      assert.match(result.stdout ?? "", /9\. If active runs exist/);
-      assert.match(result.stdout ?? "", /10\. Otherwise, it stops/);
-      assert.match(result.stdout ?? "", /11\. Installs every bundled/);
-      assert.match(result.stdout ?? "", /12\. Restarts only the services/);
-      // --force documented
-      assert.match(result.stdout ?? "", /--force/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
+  // US-003: install, uninstall
   it("tamandua get-ready --help explains workflow installation and dashboard startup", () => {
     const result = cli(["get-ready", "--help"]);
     try {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /Install all bundled workflows/);
-      assert.match(result.stdout ?? "", /CLI symlink/);
       assert.match(result.stdout ?? "", /starts it on the default port/);
       assert.match(result.stdout ?? "", /registers agents/);
-      assert.match(result.stdout ?? "", /MCP server/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua update/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -509,22 +464,10 @@ describe("--help infrastructure", () => {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /Fully remove Tamandua workflows/);
       assert.match(result.stdout ?? "", /Stops the dashboard daemon/);
-      assert.match(result.stdout ?? "", /Stops the standalone MCP/);
       assert.match(result.stdout ?? "", /removes every installed/);
       assert.match(result.stdout ?? "", /agent workspaces/);
       assert.match(result.stdout ?? "", /cron jobs/);
       assert.match(result.stdout ?? "", /--force/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua update/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("tamandua update shows --force flag behavior in help", () => {
-    const result = cli(["update", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /--force\s+Continue update despite active runs/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -627,40 +570,7 @@ describe("--help infrastructure", () => {
     }
   });
 
-  // US-005: mcp, dashboard, control-plane help
-  it("tamandua mcp --help shows help for all MCP subcommands", () => {
-    const result = cli(["mcp", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /Manage the standalone MCP HTTP server/);
-      assert.match(result.stdout ?? "", /start.*--port/);
-      assert.match(result.stdout ?? "", /stop/);
-      assert.match(result.stdout ?? "", /status/);
-      assert.match(result.stdout ?? "", /3338/);
-      assert.match(result.stdout ?? "", /\/mcp/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("tamandua dashboard --help shows help for all dashboard subcommands", () => {
-    const result = cli(["dashboard", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /Manage the web dashboard daemon/);
-      assert.match(result.stdout ?? "", /start.*--port/);
-      assert.match(result.stdout ?? "", /stop/);
-      assert.match(result.stdout ?? "", /status/);
-      assert.match(result.stdout ?? "", /3334/);
-      assert.match(result.stdout ?? "", /MCP server/);
-      assert.match(result.stdout ?? "", /monitoring workflow runs/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
+  // US-005: control-plane help
   it("tamandua control-plane --help shows help for all control-plane subcommands", () => {
     const result = cli(["control-plane", "--help"]);
     try {
@@ -672,30 +582,6 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /3339/);
       assert.match(result.stdout ?? "", /scheduling API/);
       assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("tamandua mcp start --help shows specific help for the start subcommand", () => {
-    const result = cli(["mcp", "start", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /Start the standalone MCP HTTP server/);
-      assert.match(result.stdout ?? "", /--port/);
-      assert.match(result.stdout ?? "", /default: 3338/);
-      assert.match(result.stdout ?? "", /already running/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("--port flag is documented in mcp start command help", () => {
-    const result = cli(["mcp", "start", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /--port N\s+Port to listen on \(default: 3338\)/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
     }
@@ -730,91 +616,6 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /tamandua logs-tail 20/);
       assert.match(result.stdout ?? "", /tamandua logs-tail abc123/);
       assert.match(result.stdout ?? "", /tamandua logs-tail #3/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  // US-007: worktree commands help
-  it("tamandua worktree --help shows all subcommands", () => {
-    const result = cli(["worktree", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /Manage git worktrees for workflow runs/);
-      assert.match(result.stdout ?? "", /list.*List all managed worktrees/);
-      assert.match(result.stdout ?? "", /status.*Show detailed info/);
-      assert.match(result.stdout ?? "", /remove.*Remove a managed worktree/);
-      assert.match(result.stdout ?? "", /prune.*Remove old completed worktrees/);
-      // Should show examples
-      assert.match(result.stdout ?? "", /tamandua worktree list/);
-      assert.match(result.stdout ?? "", /tamandua worktree status abc12345/);
-      assert.match(result.stdout ?? "", /tamandua worktree prune --completed --older-than 7d/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("tamandua worktree prune --help documents --completed and --older-than flags", () => {
-    const result = cli(["worktree", "prune", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /Remove old completed worktrees/);
-      assert.match(result.stdout ?? "", /--completed/);
-      assert.match(result.stdout ?? "", /--older-than/);
-      assert.match(result.stdout ?? "", /completed or canceled/);
-      assert.match(result.stdout ?? "", /Duration format/);
-      assert.match(result.stdout ?? "", /7d.*7 days/);
-      assert.match(result.stdout ?? "", /24h.*24 hours/);
-      assert.match(result.stdout ?? "", /30m.*30 minutes/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("tamandua worktree remove --help documents --force flag", () => {
-    const result = cli(["worktree", "remove", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /Remove a managed worktree/);
-      assert.match(result.stdout ?? "", /--force/);
-      assert.match(result.stdout ?? "", /Allow removal.*any status/);
-      assert.match(result.stdout ?? "", /non-ready/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("tamandua worktree list --help explains list output", () => {
-    const result = cli(["worktree", "list", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /List all managed worktrees/);
-      assert.match(result.stdout ?? "", /Status.*Worktree status/);
-      assert.match(result.stdout ?? "", /Run ID/);
-      assert.match(result.stdout ?? "", /Cleanup/);
-      assert.match(result.stdout ?? "", /Path/);
-      assert.match(result.stdout ?? "", /Origin/);
-      assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
-    } finally {
-      fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it("tamandua worktree status --help shows detailed fields", () => {
-    const result = cli(["worktree", "status", "--help"]);
-    try {
-      assert.equal(result.status, 0);
-      assert.match(result.stdout ?? "", /Show detailed worktree info for a run/);
-      assert.match(result.stdout ?? "", /Origin repo/);
-      assert.match(result.stdout ?? "", /Origin ref/);
-      assert.match(result.stdout ?? "", /Origin SHA/);
-      assert.match(result.stdout ?? "", /Orig branch/);
-      assert.match(result.stdout ?? "", /Worktree.*Absolute filesystem path/);
-      assert.match(result.stdout ?? "", /Cleanup/);
       assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
       fs.rmSync(result.testEnv.tmpDir, { recursive: true, force: true });
@@ -1411,8 +1212,6 @@ describe("--help infrastructure", () => {
       assert.match(result.stdout ?? "", /--no-hurry-please-save-tokens-mode/);
       assert.match(result.stdout ?? "", /token-saving mode/);
       assert.match(result.stdout ?? "", /--working-directory-for-harness/);
-      assert.match(result.stdout ?? "", /--worktree-origin-repository/);
-      assert.match(result.stdout ?? "", /--worktree-origin-ref/);
       assert.match(result.stdout ?? "", /Add dark mode toggle/);
       assert.doesNotMatch(result.stdout ?? "", /tamandua get-ready/);
     } finally {
@@ -1595,7 +1394,7 @@ describe("status command", () => {
     try {
       assert.equal(result.status, 0);
       assert.match(result.stdout ?? "", /Show detailed Tamandua system status/);
-      assert.match(result.stdout ?? "", /Services.*Dashboard, MCP, and control-plane/);
+      assert.match(result.stdout ?? "", /Services.*Dashboard.*control-plane/);
       assert.match(result.stdout ?? "", /Tamandua Info.*Source path, skill path, version/);
       assert.match(result.stdout ?? "", /Workflow Runs.*Summary of all runs/);
       assert.match(result.stdout ?? "", /Running Processes.*Active pi\/hermes/);
@@ -1627,7 +1426,6 @@ describe("status command", () => {
 
       // Services section details
       assert.match(out, /Dashboard: +DOWN/);
-      assert.match(out, /MCP: +DOWN/);
       assert.match(out, /Control-plane: +DOWN/);
 
       // Tamandua Info section details
@@ -1669,12 +1467,6 @@ describe("formatServiceStatus", () => {
 
     const result = formatServiceStatus({
       getDaemonStatus: () => ({ running: true, pid: 12345, port: 3334 }),
-      getMcpStatus: () => ({
-        running: true,
-        pid: 12346,
-        port: 3338,
-        endpoint: "/mcp",
-      }),
       getControlPlaneStatus: () => ({
         running: true,
         pid: 12347,
@@ -1685,7 +1477,6 @@ describe("formatServiceStatus", () => {
 
     assert.match(result, /Services/);
     assert.match(result, /Dashboard: +UP +\(pid 12345, port 3334, http:\/\/localhost:3334\)/);
-    assert.match(result, /MCP: +UP +\(pid 12346, port 3338, http:\/\/localhost:3338\/mcp\)/);
     assert.match(result, /Control-plane: +UP +\(pid 12347, port 3339, http:\/\/localhost:3339\/control\/health\)/);
   });
 
@@ -1694,12 +1485,6 @@ describe("formatServiceStatus", () => {
 
     const result = formatServiceStatus({
       getDaemonStatus: () => ({ running: false, pid: null, port: 3334 }),
-      getMcpStatus: () => ({
-        running: false,
-        pid: null,
-        port: 3338,
-        endpoint: "/mcp",
-      }),
       getControlPlaneStatus: () => ({
         running: false,
         pid: null,
@@ -1710,21 +1495,14 @@ describe("formatServiceStatus", () => {
 
     assert.match(result, /Services/);
     assert.match(result, /Dashboard: +DOWN \(port 3334\)/);
-    assert.match(result, /MCP: +DOWN \(port 3338, endpoint \/mcp\)/);
     assert.match(result, /Control-plane: +DOWN \(port 3339, endpoint \/control\/health\)/);
   });
 
-  it("shows mixed state: dashboard up, MCP and control-plane down", async () => {
+  it("shows mixed state: dashboard up, control-plane down", async () => {
     const { formatServiceStatus } = await import("../../dist/cli/status-format.js");
 
     const result = formatServiceStatus({
       getDaemonStatus: () => ({ running: true, pid: 42, port: 3334 }),
-      getMcpStatus: () => ({
-        running: false,
-        pid: null,
-        port: 3338,
-        endpoint: "/mcp",
-      }),
       getControlPlaneStatus: () => ({
         running: false,
         pid: null,
@@ -1735,31 +1513,7 @@ describe("formatServiceStatus", () => {
 
     assert.match(result, /Services/);
     assert.match(result, /Dashboard: +UP +\(pid 42, port 3334, http:\/\/localhost:3334\)/);
-    assert.match(result, /MCP: +DOWN/);
     assert.match(result, /Control-plane: +DOWN/);
-  });
-
-  it("shows MCP endpoint even when not running", async () => {
-    const { formatServiceStatus } = await import("../../dist/cli/status-format.js");
-
-    const result = formatServiceStatus({
-      getDaemonStatus: () => ({ running: false, pid: null, port: 3334 }),
-      getMcpStatus: () => ({
-        running: false,
-        pid: null,
-        port: 3338,
-        endpoint: "/mcp",
-      }),
-      getControlPlaneStatus: () => ({
-        running: false,
-        pid: null,
-        port: 3339,
-        endpoint: "/control/health",
-      }),
-    });
-
-    // MCP should show its endpoint even when down
-    assert.match(result, /MCP: +DOWN \(port 3338, endpoint \/mcp\)/);
   });
 
   it("defaults to real daemonctl when no overrides provided (accepts any output)", async () => {
@@ -1769,13 +1523,12 @@ describe("formatServiceStatus", () => {
     const result = formatServiceStatus();
     assert.match(result, /Services/);
     assert.match(result, /Dashboard:/);
-    assert.match(result, /MCP:/);
     assert.match(result, /Control-plane:/);
   });
 });
 
 // Direct unit tests for formatTamanduaInfo() — uses dependency injection
-// to mock paths, version, git, and version status without needing filesystem or git.
+// to mock paths, version, and git without needing filesystem or git.
 describe("formatTamanduaInfo", () => {
   it("shows source-path, skill-path, version, and tree SHA", async () => {
     const { formatTamanduaInfo } = await import("../../dist/cli/status-format.js");
@@ -1784,12 +1537,6 @@ describe("formatTamanduaInfo", () => {
       getVersion: () => "20260526T140530Z_4ad4844ff86d37cd04eaf736e8cc43ad467b0338",
       resolveSourcePath: () => "/opt/tamandua",
       resolveSkillPath: () => "/opt/tamandua/skills/tamandua-agents/SKILL.md",
-      getReadVersionStatus: () => ({
-        updateAvailable: false,
-        currentHead: "",
-        remoteHead: "",
-        checkedAt: "",
-      }),
       execSync: () => "a1b2c3d4e5f6789012345678abcdef1234567890",
     });
 
@@ -1798,8 +1545,6 @@ describe("formatTamanduaInfo", () => {
     assert.match(result, /Skill-path: +\/opt\/tamandua\/skills\/tamandua-agents\/SKILL.md/);
     assert.match(result, /Version: +20260526T140530Z_4ad4844ff86d37cd04eaf736e8cc43ad467b0338/);
     assert.match(result, /Source tree: +a1b2c3d4e5f6789012345678abcdef1234567890/);
-    // No update available — update line should NOT appear
-    assert.doesNotMatch(result, /Update:/);
   });
 
   it("shows 'unavailable' when git fails", async () => {
@@ -1809,12 +1554,6 @@ describe("formatTamanduaInfo", () => {
       getVersion: () => "20260526T140530Z_4ad4844ff86d37cd04eaf736e8cc43ad467b0338",
       resolveSourcePath: () => "/some/path",
       resolveSkillPath: () => "/some/path/skills.md",
-      getReadVersionStatus: () => ({
-        updateAvailable: false,
-        currentHead: "",
-        remoteHead: "",
-        checkedAt: "",
-      }),
       execSync: () => { throw new Error("git not found"); },
     });
 
@@ -1829,35 +1568,10 @@ describe("formatTamanduaInfo", () => {
       getVersion: () => "20260526T140530Z_4ad4844ff86d37cd04eaf736e8cc43ad467b0338",
       resolveSourcePath: () => "/some/path",
       resolveSkillPath: () => "/some/path/skills.md",
-      getReadVersionStatus: () => ({
-        updateAvailable: false,
-        currentHead: "",
-        remoteHead: "",
-        checkedAt: "",
-      }),
       execSync: () => "not-a-valid-sha",
     });
 
     assert.match(result, /Source tree: +unavailable/);
-  });
-
-  it("shows update available when version status has updateAvailable=true", async () => {
-    const { formatTamanduaInfo } = await import("../../dist/cli/status-format.js");
-
-    const result = formatTamanduaInfo({
-      getVersion: () => "20260526T140530Z_4ad4844ff86d37cd04eaf736e8cc43ad467b0338",
-      resolveSourcePath: () => "/some/path",
-      resolveSkillPath: () => "/some/path/skills.md",
-      getReadVersionStatus: () => ({
-        updateAvailable: true,
-        currentHead: "abc123",
-        remoteHead: "def456",
-        checkedAt: "2026-05-18T00:00:00Z",
-      }),
-      execSync: () => "a1b2c3d4e5f6789012345678abcdef1234567890",
-    });
-
-    assert.match(result, /Update: +available \(run 'tamandua update'\)/);
   });
 
   it("defaults to real paths and git when no overrides provided (accepts any output)", async () => {

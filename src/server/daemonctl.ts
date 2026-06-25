@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import net from "node:net";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONTROL_PORT } from "./control-server.js";
 
@@ -139,15 +139,41 @@ function checkPidFile(pidFile: string): { running: true; pid: number } | { runni
 }
 
 function processHomeMatches(pid: number, homeDir: string): boolean {
-  try {
-    const environ = fs.readFileSync(`/proc/${pid}/environ`);
-    for (const entry of environ.toString("utf-8").split("\0")) {
-      if (entry === `HOME=${homeDir}`) return true;
+  // Linux: read /proc/<pid>/environ directly
+  if (process.platform === "linux") {
+    try {
+      const environ = fs.readFileSync(`/proc/${pid}/environ`);
+      for (const entry of environ.toString("utf-8").split("\0")) {
+        if (entry === `HOME=${homeDir}`) return true;
+      }
+    } catch {
+      return false;
     }
-  } catch {
     return false;
   }
-  return false;
+
+  // macOS: use `ps eww` to read the target process's environment
+  if (process.platform === "darwin") {
+    try {
+      const result = spawnSync("ps", ["eww", "-p", String(pid), "-o", "command="], {
+        encoding: "utf-8",
+      });
+      if (result.status !== 0) return false;
+      const output = result.stdout ?? "";
+      // ps eww outputs command followed by env vars (space-separated KEY=VALUE)
+      // We need to find HOME=<homeDir> as a whole token.
+      // Split on whitespace and check each token.
+      for (const token of output.split(/\s+/)) {
+        if (token === `HOME=${homeDir}`) return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
+  // Other platforms: unsafe to assert ownership — allow signal
+  return true;
 }
 
 function canSignalPid(pid: number, opts?: DaemonctlPathOptions): boolean {
