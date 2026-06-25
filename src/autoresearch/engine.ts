@@ -7,6 +7,7 @@ import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import type { LeaderboardRepository } from "../leaderboard/repository.js";
 import { LocalArtifactStore } from "../artifacts/local-store.js";
 import { RoundManager, type RoundConfig } from "../orchestrator/round-manager.js";
+import type { FanOutExecutor } from "../orchestrator/fan-out.js";
 import { buildConfig } from "./config.js";
 import type { FormigaConfig, PipelineResult } from "./types.js";
 
@@ -15,12 +16,18 @@ export class FormigaEngine {
   private store: LocalArtifactStore;
   private roundManager: RoundManager;
   private config: FormigaConfig;
+  private executor: FanOutExecutor;
 
-  constructor(db: DatabaseSync, configOverrides?: Partial<FormigaConfig>) {
+  constructor(
+    db: DatabaseSync,
+    executor: FanOutExecutor,
+    configOverrides?: Partial<FormigaConfig>,
+  ) {
     this.config = buildConfig(configOverrides);
     this.repository = new LeaderboardRepositoryImpl(db);
     this.store = new LocalArtifactStore(this.config.workspaceRoot);
     this.roundManager = new RoundManager(this.repository);
+    this.executor = executor;
   }
 
   /** Execute the full ML pipeline for a given run. */
@@ -39,6 +46,7 @@ export class FormigaEngine {
         workspacePath: this.store.resolveWorkspace(runId),
         timeoutMs: this.config.timeouts.modelerClassic, // longest timeout as default
         maxConcurrency: this.config.maxConcurrency,
+        executor: this.executor,
       };
 
       try {

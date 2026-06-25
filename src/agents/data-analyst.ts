@@ -24,6 +24,7 @@ export const dataAnalyst: AgentRunner = {
   tools: ["Read", "Write", "Bash", "Glob", "Grep"],
   model: "sonnet",
 
+  /** @deprecated See AgentRunner.buildPrompt — the canonical prompt now lives in workflows/ml-pipeline/agents/data-analyst/AGENTS.md. */
   buildPrompt(context: AgentContext): string {
     const ws = context.workspacePath;
     const configPath = context.config ? `${ws}/artifacts/config.json` : null;

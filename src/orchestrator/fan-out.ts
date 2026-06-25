@@ -4,10 +4,26 @@
 
 import type { AgentRunner, AgentContext, AgentResult } from "../agents/interfaces.js";
 
+/**
+ * Executor injected by the caller — runs the agent through whatever harness
+ * (pi, hermes, mock) and returns a structured AgentResult. fan-out itself
+ * stays harness-agnostic: it only handles parallelism, batching, and timeout.
+ *
+ * The workflow YAML path (`workflows/ml-pipeline/workflow.yml`) does NOT use
+ * fan-out — its scheduler invokes agents via `src/installer/scheduler/pi-runner.ts`
+ * and parses output server-side. fan-out remains here as a programmatic
+ * helper for callers that drive `FormigaEngine`/`RoundManager` directly.
+ */
+export type FanOutExecutor = (
+  agent: AgentRunner,
+  context: AgentContext,
+) => Promise<AgentResult>;
+
 export interface FanOutConfig {
   agents: AgentRunner[];
   context: AgentContext;
   timeoutMs: number;
+  executor: FanOutExecutor;
   maxConcurrency?: number;
 }
 
@@ -20,28 +36,29 @@ export interface FanOutResult {
 
 /** Dispatch multiple agents in parallel. Each gets its own timeout. */
 export async function fanOut(config: FanOutConfig): Promise<FanOutResult[]> {
-  const { agents, context, timeoutMs, maxConcurrency } = config;
+  const { agents, context, timeoutMs, executor, maxConcurrency } = config;
 
   // If maxConcurrency is set, run in batches
   if (maxConcurrency && maxConcurrency > 0 && agents.length > maxConcurrency) {
     const results: FanOutResult[] = [];
     for (let i = 0; i < agents.length; i += maxConcurrency) {
       const batch = agents.slice(i, i + maxConcurrency);
-      const batchResults = await runBatch(batch, context, timeoutMs);
+      const batchResults = await runBatch(batch, context, timeoutMs, executor);
       results.push(...batchResults);
     }
     return results;
   }
 
-  return runBatch(agents, context, timeoutMs);
+  return runBatch(agents, context, timeoutMs, executor);
 }
 
 async function runBatch(
   agents: AgentRunner[],
   context: AgentContext,
   timeoutMs: number,
+  executor: FanOutExecutor,
 ): Promise<FanOutResult[]> {
-  const promises = agents.map((agent) => runWithTimeout(agent, context, timeoutMs));
+  const promises = agents.map((agent) => runWithTimeout(agent, context, timeoutMs, executor));
   const settlements = await Promise.allSettled(promises);
 
   return settlements.map((s, i) => {
@@ -61,6 +78,7 @@ async function runWithTimeout(
   agent: AgentRunner,
   context: AgentContext,
   timeoutMs: number,
+  executor: FanOutExecutor,
 ): Promise<FanOutResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -77,10 +95,7 @@ async function runWithTimeout(
 
   const workPromise = (async (): Promise<FanOutResult> => {
     try {
-      // In the real harness, this calls pi/hermes and parses output.
-      // Here we produce the prompt — the existing scheduler executes it.
-      const prompt = agent.buildPrompt(context);
-      const result = parseOutputAsResult(agent.name, prompt);
+      const result = await executor(agent, context);
       return { agentName: agent.name, result, error: null, timedOut: false };
     } catch (err) {
       return {
@@ -95,14 +110,4 @@ async function runWithTimeout(
   const result = await Promise.race([workPromise, timeoutPromise]);
   if (timer) clearTimeout(timer);
   return result;
-}
-
-function parseOutputAsResult(agentName: string, _prompt: string): AgentResult {
-  // In the real harness, the scheduler runs the prompt through pi/hermes
-  // and parses the output. Here we emit a PENDING result — the actual
-  // execution and parsing happen in the scheduler/pi-runner.ts layer.
-  return {
-    agentName,
-    status: "SUCCESS",
-  };
 }

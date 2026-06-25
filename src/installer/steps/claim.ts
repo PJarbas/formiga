@@ -96,11 +96,16 @@ export function claimStep(agentId: string, runId: string, workerOwnership?: Work
 
   // Notes on the prev-step filter:
   //  - `prev.status NOT IN ('done', 'skipped')` enforces serial pipeline progression.
-  //  - The extra exception lets verify_each work: while the loop step is "paused"
+  //  - The verify_each exception lets verify work: while the loop step is "paused"
   //    waiting for verify (status = 'running' but current_story_id IS NULL), the
   //    verify step needs to be claimable. Without this exception, completeStep's
   //    verify_each branch sets verify=pending while the loop stays running, but
   //    claimStep refuses to claim verify because the loop isn't done — deadlock.
+  //  - The parallel_group exception lets sibling steps inside the same group
+  //    claim concurrently: a sibling that is still pending/running does not
+  //    block another sibling in the same group. The post-group step still
+  //    waits because its `parallel_group` is NULL (or different), so siblings
+  //    inside the group remain in its prev set.
   // Run-scoped claim: concurrent runs of the same workflow + agent never
   // cross-claim because the WHERE clause pins to a specific run_id.
   const step = db.prepare(
@@ -117,6 +122,9 @@ export function claimStep(agentId: string, runId: string, workerOwnership?: Work
            AND NOT (prev.type = 'loop'
                     AND prev.status = 'running'
                     AND prev.current_story_id IS NULL)
+           AND NOT (s.parallel_group IS NOT NULL
+                    AND prev.parallel_group IS NOT NULL
+                    AND prev.parallel_group = s.parallel_group)
        )
     ORDER BY s.step_index ASC, s.step_id ASC
      LIMIT 1`,

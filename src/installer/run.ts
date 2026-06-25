@@ -15,6 +15,38 @@ import type { HarnessType } from "./types.js";
 
 const RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY = "working_directory_for_harness";
 
+/**
+ * Extract `key=value` tokens from a task string.
+ *
+ * Lets users seed run context inline via the task argument, e.g.
+ *   formiga workflow run ml-pipeline 'dataset_path=/tmp/x.csv target_column=price'
+ * Each whitespace-separated token matching `^[a-z_][a-z0-9_]*=...$` is moved
+ * into a context map; everything else stays as the residual task description.
+ * Values may not contain whitespace (callers needing spaces can pass the
+ * `context` parameter programmatically).
+ */
+export function extractContextKvFromTaskString(taskTitle: string): {
+  cleanedTask: string;
+  contextFromTask: Record<string, string>;
+} {
+  const contextFromTask: Record<string, string> = {};
+  const residualTokens: string[] = [];
+  const kvRegex = /^([a-z_][a-z0-9_]*)=(.+)$/;
+  for (const token of taskTitle.split(/\s+/)) {
+    if (!token) continue;
+    const m = token.match(kvRegex);
+    if (m) {
+      contextFromTask[m[1]] = m[2];
+    } else {
+      residualTokens.push(token);
+    }
+  }
+  return {
+    cleanedTask: residualTokens.join(" ").trim(),
+    contextFromTask,
+  };
+}
+
 export interface RunWorkflowParams {
   workflowId: string;
   taskTitle: string;
@@ -83,12 +115,20 @@ export async function runWorkflow(
 
   let workingDirectoryForHarness: string;
 
+  // Extract inline key=value pairs from the task string so callers can seed
+  // workflow context (e.g. `{{dataset_path}}`, `{{target_column}}`) directly
+  // from the CLI without a separate flag. Explicit `context` overrides anything
+  // parsed from the task string.
+  const { cleanedTask, contextFromTask } =
+    extractContextKvFromTaskString(taskTitle);
+
   // Seed the run context with the task description so step input templates can
   // reference {{task}} from the very first step. Without this, the planner step
   // (which always references {{task}}) fails immediately on claim with a missing
   // template key error, aborting the whole run.
   const seededContext: Record<string, string> = {
-    task: taskTitle,
+    task: cleanedTask || taskTitle,
+    ...contextFromTask,
     ...context,
     workspace_mode: workspaceMode,
     no_hurry_save_tokens_mode: String(noHurrySaveTokensMode ?? false),
@@ -134,6 +174,13 @@ export async function runWorkflow(
 
     seededContext[RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY] =
       workingDirectoryForHarness;
+
+    // Seed `{{workspace}}` so workflow templates that reference the harness
+    // working directory (e.g. ml-pipeline writes reports/artifacts to
+    // `{{workspace}}/reports/...`) resolve correctly without forcing every
+    // caller to pass `workspace=...` inline. Mirrors workingDirectoryForHarness
+    // (which is the actual cwd pi runs in).
+    seededContext.workspace = workingDirectoryForHarness;
 
     // Capture original branch for rugpull detection in direct mode — records
     // the base branch name at run creation so downstream detection can compare
@@ -212,8 +259,8 @@ export async function runWorkflow(
 
   // Insert step records for each workflow step
   const insertStep = db.prepare(
-    `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', 0, ?, ?, ?, ?, ?)`,
+    `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, parallel_group, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', 0, ?, ?, ?, ?, ?, ?)`,
   );
 
   for (let i = 0; i < workflow.steps.length; i++) {
@@ -222,6 +269,7 @@ export async function runWorkflow(
     const maxRetries = step.max_retries ?? 4;
     const stepType = step.type ?? "single";
     const loopConfig = step.loop ? JSON.stringify(step.loop) : null;
+    const parallelGroup = step.parallel_group ?? null;
     const scopedAgentId = step.agent.startsWith(`${workflow.id}_`)
       ? step.agent
       : `${workflow.id}_${step.agent}`;
@@ -237,6 +285,7 @@ export async function runWorkflow(
       maxRetries,
       stepType,
       loopConfig,
+      parallelGroup,
       now,
       now,
     );

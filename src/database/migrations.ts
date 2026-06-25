@@ -32,6 +32,7 @@ export function migrate(db: DatabaseSync): void {
       loop_config TEXT,
       current_story_id TEXT,
       abandoned_count INTEGER DEFAULT 0,
+      parallel_group TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -103,6 +104,12 @@ export function migrate(db: DatabaseSync): void {
   }
   if (!stepColNames.has("claim_updated_at")) {
     db.exec("ALTER TABLE steps ADD COLUMN claim_updated_at TEXT");
+  }
+  // ── Parallel step grouping ──
+  // Steps sharing the same parallel_group are eligible for claim concurrently;
+  // the prev-step filter in claim.ts skips siblings inside the same group.
+  if (!stepColNames.has("parallel_group")) {
+    db.exec("ALTER TABLE steps ADD COLUMN parallel_group TEXT");
   }
 
   // Indexes for run-scoped scheduling and step claim queries.

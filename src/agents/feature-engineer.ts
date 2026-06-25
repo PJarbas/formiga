@@ -23,6 +23,7 @@ export const featureEngineer: AgentRunner = {
   tools: ["Read", "Write", "Bash", "Glob", "Grep"],
   model: "sonnet",
 
+  /** @deprecated See AgentRunner.buildPrompt — the canonical prompt now lives in workflows/ml-pipeline/agents/feature-engineer/AGENTS.md. */
   buildPrompt(context: AgentContext): string {
     const ws = context.workspacePath;
     const seedSnippet = `import random, numpy as np

@@ -62,6 +62,14 @@ export type WorkflowStep = {
   expects: string;
   max_retries?: number;
   on_fail?: WorkflowStepFailure;
+  /**
+   * Steps that share the same `parallel_group` are eligible for claim
+   * concurrently — they do not block each other via the prev-step filter
+   * in claimStep(). The step *after* the group is only eligible once every
+   * step in the group has finished. Steps with the same `parallel_group`
+   * MUST be contiguous in the steps list.
+   */
+  parallel_group?: string;
 };
 
 export type Story = {

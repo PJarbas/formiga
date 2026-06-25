@@ -175,24 +175,56 @@ export function advancePipeline(runId: string): { advanced: boolean; runComplete
   }
 
   const next = db.prepare(
-    "SELECT id, step_id FROM steps WHERE run_id = ? AND status = 'waiting' ORDER BY step_index ASC LIMIT 1"
-  ).get(runId) as { id: string; step_id: string } | undefined;
+    "SELECT id, step_id, step_index, parallel_group FROM steps WHERE run_id = ? AND status = 'waiting' ORDER BY step_index ASC LIMIT 1"
+  ).get(runId) as { id: string; step_id: string; step_index: number; parallel_group: string | null } | undefined;
 
-  const incomplete = db.prepare(
-    "SELECT id FROM steps WHERE run_id = ? AND status IN ('failed', 'pending', 'running') LIMIT 1"
-  ).get(runId) as { id: string } | undefined;
-
-  if (!next && incomplete) {
-    return { advanced: false, runCompleted: false };
+  // If next exists, also block advance when any earlier step is still
+  // non-terminal (pending/running/failed). This matters for parallel_group:
+  // a sibling still pending or running must not let the post-group step
+  // race ahead.
+  if (next) {
+    const blockingPrior = db.prepare(
+      "SELECT id FROM steps WHERE run_id = ? AND step_index < ? AND status IN ('failed', 'pending', 'running') LIMIT 1"
+    ).get(runId, next.step_index) as { id: string } | undefined;
+    if (blockingPrior) {
+      return { advanced: false, runCompleted: false };
+    }
+  } else {
+    const incomplete = db.prepare(
+      "SELECT id FROM steps WHERE run_id = ? AND status IN ('failed', 'pending', 'running') LIMIT 1"
+    ).get(runId) as { id: string } | undefined;
+    if (incomplete) {
+      return { advanced: false, runCompleted: false };
+    }
   }
 
   const wfId = getWorkflowId(runId);
   if (next) {
-    db.prepare(
-      "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
-    ).run(next.id);
-    emitEvent({ ts: new Date().toISOString(), event: "pipeline.advanced", runId, workflowId: wfId, stepId: next.step_id });
-    emitEvent({ ts: new Date().toISOString(), event: "step.pending", runId, workflowId: wfId, stepId: next.step_id });
+    // Promote next from 'waiting' to 'pending'. If it belongs to a
+    // parallel_group, also promote every contiguous waiting sibling that
+    // shares the same group so the scheduler can claim them in parallel.
+    const promoted: Array<{ id: string; step_id: string }> = [];
+    if (next.parallel_group) {
+      const groupSiblings = db.prepare(
+        "SELECT id, step_id FROM steps WHERE run_id = ? AND status = 'waiting' AND parallel_group = ? AND step_index >= ? ORDER BY step_index ASC"
+      ).all(runId, next.parallel_group, next.step_index) as Array<{ id: string; step_id: string }>;
+      const promoteStmt = db.prepare(
+        "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
+      );
+      for (const sibling of groupSiblings) {
+        promoteStmt.run(sibling.id);
+        promoted.push(sibling);
+      }
+    } else {
+      db.prepare(
+        "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
+      ).run(next.id);
+      promoted.push({ id: next.id, step_id: next.step_id });
+    }
+    for (const p of promoted) {
+      emitEvent({ ts: new Date().toISOString(), event: "pipeline.advanced", runId, workflowId: wfId, stepId: p.step_id });
+      emitEvent({ ts: new Date().toISOString(), event: "step.pending", runId, workflowId: wfId, stepId: p.step_id });
+    }
     return { advanced: true, runCompleted: false };
   } else {
     db.prepare(

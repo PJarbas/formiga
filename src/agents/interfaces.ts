@@ -76,6 +76,13 @@ export interface AgentRunner {
   readonly name: string;
   readonly tools: string[];
   readonly model: string;
+  /**
+   * @deprecated Branch 7 — the runtime path for the ML pipeline is
+   * `workflows/ml-pipeline/workflow.yml`, where prompts live in
+   * `agents/<id>/AGENTS.md` and are loaded by the scheduler. `buildPrompt`
+   * is kept only for the programmatic `FormigaEngine`/`RoundManager` path
+   * and the legacy test suite; prefer editing the markdown personas.
+   */
   buildPrompt(context: AgentContext): string;
   validateOutput(output: string): ValidationResult;
 }

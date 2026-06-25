@@ -28,6 +28,7 @@ export const mlCritic: AgentRunner = {
   tools: ["Read", "Bash", "Glob", "Grep"],
   model: "sonnet",
 
+  /** @deprecated See AgentRunner.buildPrompt — the canonical prompt now lives in workflows/ml-pipeline/agents/ml-critic/AGENTS.md. */
   buildPrompt(context: AgentContext): string {
     const ws = context.workspacePath;
 

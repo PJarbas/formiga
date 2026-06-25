@@ -1,1 +1,0 @@
-formiga get-ready ; formiga workflow run feature-dev "Create a formiga logs-tail command that shows recent activity and continues showing it as it goes."

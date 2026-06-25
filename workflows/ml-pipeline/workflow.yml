@@ -1,0 +1,315 @@
+# Formiga ML Pipeline — 5-agent competitive ML workflow
+#
+# Flow:
+#   eda → features → (model-classic ∥ model-advanced) → audit
+#
+# The two modeler steps share `parallel_group: modelers` so the scheduler
+# claims them concurrently. The `audit` step is only eligible after BOTH
+# modelers complete (enforced by the prev-step filter in claim.ts).
+#
+# Inputs are passed via the `task` string as space-separated key=value pairs:
+#   formiga workflow run ml-pipeline \
+#     'dataset_path=/abs/path/train.csv target_column=price'
+
+id: ml-pipeline
+name: ML Pipeline
+version: 1
+description: |
+  Competitive ML pipeline with 5 specialized agents:
+  Data Analyst → Feature Engineer → (Modeler Classic ∥ Modeler Advanced) → ML Critic.
+  Modelers run in parallel and submit experiments to the leaderboard; the critic
+  audits each experiment read-only.
+
+polling:
+  model: default
+  timeoutSeconds: 1800
+
+run:
+  workspace: direct
+
+agents:
+  - id: data-analyst
+    name: Data Analyst
+    role: analysis
+    description: Rigorous EDA, data quality, and pre-processing recommendations.
+    timeoutSeconds: 1200
+    workspace:
+      baseDir: agents/data-analyst
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/data-analyst/AGENTS.md
+        IDENTITY.md: agents/data-analyst/IDENTITY.md
+        SOUL.md: agents/data-analyst/SOUL.md
+
+  - id: feature-engineer
+    name: Feature Engineer
+    role: coding
+    description: Builds features, canonical split, and the baseline model.
+    timeoutSeconds: 1800
+    workspace:
+      baseDir: agents/feature-engineer
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/feature-engineer/AGENTS.md
+        IDENTITY.md: agents/feature-engineer/IDENTITY.md
+        SOUL.md: agents/feature-engineer/SOUL.md
+
+  - id: modeler-classic
+    name: Modeler Classic
+    role: coding
+    description: Gradient boosting, linear, tree-based, SVM/KNN, L1 stacking.
+    timeoutSeconds: 3600
+    workspace:
+      baseDir: agents/modeler-classic
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/modeler-classic/AGENTS.md
+        IDENTITY.md: agents/modeler-classic/IDENTITY.md
+        SOUL.md: agents/modeler-classic/SOUL.md
+
+  - id: modeler-advanced
+    name: Modeler Advanced
+    role: coding
+    description: Neural nets, AutoML, deep stacking, entity embeddings.
+    timeoutSeconds: 3600
+    workspace:
+      baseDir: agents/modeler-advanced
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/modeler-advanced/AGENTS.md
+        IDENTITY.md: agents/modeler-advanced/IDENTITY.md
+        SOUL.md: agents/modeler-advanced/SOUL.md
+
+  - id: ml-critic
+    name: ML Critic
+    role: analysis
+    description: Adversarial read-only auditor of every leaderboard experiment.
+    timeoutSeconds: 1200
+    workspace:
+      baseDir: agents/ml-critic
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/ml-critic/AGENTS.md
+        IDENTITY.md: agents/ml-critic/IDENTITY.md
+        SOUL.md: agents/ml-critic/SOUL.md
+
+steps:
+  - id: eda
+    agent: data-analyst
+    input: |
+      Run Exploratory Data Analysis for this run.
+
+      INPUTS:
+      - dataset_path: {{dataset_path}}
+      - target_column: {{target_column}}
+      - workspace: {{workspace}}
+
+      Read your AGENTS.md, IDENTITY.md, and SOUL.md before starting.
+
+      Produce the EDA report at {{workspace}}/reports/01_eda.md and a machine-readable
+      config at {{workspace}}/artifacts/eda_config.json.
+
+      End your output with the protocol fields:
+        REPORT_PATH: <relative path>
+        FIGURES_COUNT: <integer>
+        KEY_FINDINGS: <one line>
+        STATUS: done
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: features
+    agent: feature-engineer
+    input: |
+      Build the canonical feature matrix, split, and baseline model.
+
+      INPUTS:
+      - dataset_path: {{dataset_path}}
+      - target_column: {{target_column}}
+      - report_path: {{report_path}}
+      - workspace: {{workspace}}
+      - run_id: {{run_id}}
+
+      Read your AGENTS.md, IDENTITY.md, and SOUL.md before starting.
+
+      Read the EDA report at {{report_path}} and the EDA config at
+      {{workspace}}/artifacts/eda_config.json. Produce features.parquet, split.pkl,
+      baseline.json, and baseline.pkl in {{workspace}}/artifacts/. Write your
+      report to {{workspace}}/reports/02_features.md.
+
+      BEFORE emitting STATUS: done, you MUST write the leaderboard sidecar
+      submission as JSON to {{workspace}}/artifacts/feature-engineer_submission.json
+      with these exact keys (uppercase or lowercase keys both accepted):
+        {
+          "MODEL_TYPE": "baseline-<algorithm>",
+          "CV_MEAN": <float>,
+          "TRAIN_MEAN": <float>,
+          "HYPERPARAMETERS": { ... compact object ... },
+          "ARTIFACT_PATH": "artifacts/baseline.pkl",
+          "METRIC_NAME": "<rmse|mae|r2|accuracy|f1|...>"
+        }
+      The sidecar is REQUIRED — pi's report-tool strips custom protocol lines
+      from stdout, so the leaderboard ingest reads this file as the source of
+      truth. The pipeline will skip your experiment if the file is missing.
+
+      End your output with the protocol fields:
+        REPORT_PATH: <relative path>
+        BASELINE_CV_MEAN: <float>
+        BASELINE_CV_STD: <float>
+        BASELINE_JSON_PATH: artifacts/baseline.json
+        FEATURES_SHAPE: <rows>x<cols>
+        MODEL_TYPE: baseline-<algorithm>
+        CV_MEAN: <same as BASELINE_CV_MEAN>
+        TRAIN_MEAN: <float>
+        HYPERPARAMETERS: <compact JSON>
+        ARTIFACT_PATH: artifacts/baseline.pkl
+        STATUS: done
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: model-classic
+    agent: modeler-classic
+    parallel_group: modelers
+    input: |
+      Train classic ML models and submit your best to the leaderboard.
+
+      INPUTS:
+      - baseline_json_path: {{baseline_json_path}}
+      - features_path: {{workspace}}/artifacts/features.parquet
+      - split_path: {{workspace}}/artifacts/split.pkl
+      - features_report: {{workspace}}/reports/02_features.md
+      - workspace: {{workspace}}
+      - run_id: {{run_id}}
+
+      Read your AGENTS.md, IDENTITY.md, and SOUL.md before starting.
+
+      Allowed families: GBM (XGBoost/LightGBM/CatBoost), linear (Ridge/Lasso/EN/LR),
+      tree (RF/ExtraTrees), SVM/KNN, L1 stacking.
+      NOT allowed: NN, AutoML, multi-level stacking.
+
+      Write your report to {{workspace}}/reports/03_classic.md and append any
+      useful findings to {{workspace}}/reports/cross_findings.md.
+
+      BEFORE emitting STATUS: done, you MUST write the leaderboard sidecar
+      submission as JSON to {{workspace}}/artifacts/modeler-classic_submission.json
+      with these exact keys (matching your BEST trial):
+        {
+          "MODEL_TYPE": "<e.g. lightgbm>",
+          "CV_MEAN": <float>,
+          "TRAIN_MEAN": <float>,
+          "HYPERPARAMETERS": { ... compact object ... },
+          "ARTIFACT_PATH": "artifacts/<best>.pkl",
+          "METRIC_NAME": "<rmse|mae|r2|accuracy|f1|...>"
+        }
+      The sidecar is REQUIRED — pi's report-tool strips custom protocol lines
+      from stdout, so the leaderboard ingest reads this file as the source of
+      truth. The pipeline will skip your experiment if the file is missing.
+
+      End your output with the protocol fields for your BEST model:
+        REPORT_PATH: <relative path>
+        MODELS_TRAINED: <integer>
+        BEST_MODEL_ID: <id>
+        MODEL_TYPE: <e.g. lightgbm>
+        CV_MEAN: <float>
+        TRAIN_MEAN: <float>
+        HYPERPARAMETERS: <compact JSON>
+        ARTIFACT_PATH: artifacts/<best>.pkl
+        TOTAL_TIME_SECONDS: <integer>
+        STATUS: done
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: model-advanced
+    agent: modeler-advanced
+    parallel_group: modelers
+    input: |
+      Train advanced ML systems and submit your best to the leaderboard.
+
+      INPUTS:
+      - baseline_json_path: {{baseline_json_path}}
+      - features_path: {{workspace}}/artifacts/features.parquet
+      - split_path: {{workspace}}/artifacts/split.pkl
+      - features_report: {{workspace}}/reports/02_features.md
+      - workspace: {{workspace}}
+      - run_id: {{run_id}}
+
+      Read your AGENTS.md, IDENTITY.md, and SOUL.md before starting.
+
+      Allowed approaches: MLP, TabNet, FT-Transformer, AutoML (with time cap),
+      multi-level stacking, entity embeddings, knowledge distillation.
+
+      Write your report to {{workspace}}/reports/04_advanced.md and append any
+      useful findings to {{workspace}}/reports/cross_findings.md.
+
+      BEFORE emitting STATUS: done, you MUST write the leaderboard sidecar
+      submission as JSON to {{workspace}}/artifacts/modeler-advanced_submission.json
+      with these exact keys (matching your BEST trial):
+        {
+          "MODEL_TYPE": "<e.g. mlp | tabnet | automl-flaml | stacking-l2>",
+          "CV_MEAN": <float>,
+          "TRAIN_MEAN": <float>,
+          "HYPERPARAMETERS": { ... compact object ... },
+          "ARTIFACT_PATH": "artifacts/<best>.pkl",
+          "METRIC_NAME": "<rmse|mae|r2|accuracy|f1|...>"
+        }
+      The sidecar is REQUIRED — pi's report-tool strips custom protocol lines
+      from stdout, so the leaderboard ingest reads this file as the source of
+      truth. The pipeline will skip your experiment if the file is missing.
+
+      End your output with the protocol fields for your BEST model:
+        REPORT_PATH: <relative path>
+        MODELS_TRAINED: <integer>
+        BEST_MODEL_ID: <id>
+        MODEL_TYPE: <e.g. mlp | tabnet | automl-flaml | stacking-l2>
+        CV_MEAN: <float>
+        TRAIN_MEAN: <float>
+        HYPERPARAMETERS: <compact JSON>
+        ARTIFACT_PATH: artifacts/<best>.pkl
+        GPU_USED: <true|false>
+        TOTAL_TIME_SECONDS: <integer>
+        STATUS: done
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: audit
+    agent: ml-critic
+    input: |
+      Audit every experiment submitted to the leaderboard for this run.
+
+      INPUTS:
+      - run_id: {{run_id}}
+      - workspace: {{workspace}}
+
+      Read your AGENTS.md, IDENTITY.md, and SOUL.md before starting.
+
+      Query the leaderboard via the Formiga API:
+        curl -s "http://localhost:3334/api/leaderboard?runId={{run_id}}"
+
+      Run the 8 audit checks against every experiment. Write your audit report
+      to {{workspace}}/reports/05_audit.md.
+
+      You are READ-ONLY for all artifacts other than your own audit report.
+
+      End your output with the protocol fields:
+        REPORT_PATH: reports/05_audit.md
+        TOTAL_SUBMITTED: <integer>
+        VALIDATED: <integer>
+        REJECTED: <integer>
+        FINAL_LEADERBOARD: <one-line summary>
+        STATUS: done
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human

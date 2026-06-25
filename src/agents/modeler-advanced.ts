@@ -156,6 +156,7 @@ export const modelerAdvanced: AgentRunner = {
   tools: ["Read", "Write", "Bash", "Glob", "Grep"],
   model: "sonnet",
 
+  /** @deprecated See AgentRunner.buildPrompt — the canonical prompt now lives in workflows/ml-pipeline/agents/modeler-advanced/AGENTS.md. */
   buildPrompt(context: AgentContext): string {
     const ws = context.workspacePath;
     const isFirstRound = !context.previousResults?.some(

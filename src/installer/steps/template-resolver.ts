@@ -47,6 +47,7 @@ export function parseOutputKeyValues(output: string): Record<string, string> {
 export const RESERVED_CONTEXT_KEYS = new Set([
   "repo",
   "working_directory_for_harness",
+  "workspace",
   "task",
   "run_id",
   "workspace_mode",

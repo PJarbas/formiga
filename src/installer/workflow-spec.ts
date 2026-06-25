@@ -74,8 +74,9 @@ export async function loadWorkflowSpec(
   }
 
   // Validate each step has required fields
-  for (let i = 0; i < spec.steps.length; i++) {
-    const step = (spec.steps as Array<Record<string, unknown>>)[i];
+  const stepsArr = spec.steps as Array<Record<string, unknown>>;
+  for (let i = 0; i < stepsArr.length; i++) {
+    const step = stepsArr[i];
     if (typeof step.id !== "string" || !step.id) {
       throw new Error(
         `workflow.yml step[${i}] in ${workflowDir} is missing required field: id`,
@@ -85,6 +86,38 @@ export async function loadWorkflowSpec(
       throw new Error(
         `workflow.yml step[${i}] ("${step.id}") in ${workflowDir} is missing required field: agent`,
       );
+    }
+    if (step.parallel_group !== undefined && typeof step.parallel_group !== "string") {
+      throw new Error(
+        `workflow.yml step[${i}] ("${step.id}") in ${workflowDir} has invalid parallel_group: must be a string`,
+      );
+    }
+  }
+
+  // Validate parallel_group steps are contiguous and use a non-empty id.
+  // Two groups with the same id separated by a non-group step is rejected
+  // because the prev-step filter in claim.ts assumes one contiguous block
+  // per group.
+  const seenGroups = new Set<string>();
+  let currentGroup: string | null = null;
+  for (let i = 0; i < stepsArr.length; i++) {
+    const step = stepsArr[i];
+    const grp = typeof step.parallel_group === "string" ? step.parallel_group : null;
+    if (grp !== null && grp.length === 0) {
+      throw new Error(
+        `workflow.yml step[${i}] ("${step.id}") in ${workflowDir} has empty parallel_group string`,
+      );
+    }
+    if (grp !== currentGroup) {
+      if (grp !== null) {
+        if (seenGroups.has(grp)) {
+          throw new Error(
+            `workflow.yml in ${workflowDir} has non-contiguous parallel_group "${grp}" — steps sharing a parallel_group must be adjacent in the steps list`,
+          );
+        }
+        seenGroups.add(grp);
+      }
+      currentGroup = grp;
     }
   }
 

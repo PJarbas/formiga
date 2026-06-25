@@ -6,7 +6,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node.js >= 22">
   <img src="https://img.shields.io/badge/install-from%20source-orange.svg" alt="Install from source">
-  <img src="https://img.shields.io/badge/workflows-3%20bundled-8a2be2.svg" alt="3 bundled workflows">
+  <img src="https://img.shields.io/badge/workflows-4%20bundled-8a2be2.svg" alt="4 bundled workflows">
 </p>
 
 **Autonomous ML pipeline orchestration with competitive agent teams.** Formiga lets you define a team of specialized AI agents — Data Analyst, Feature Engineer, parallel Modelers, and an adversarial ML Critic — that work together through deterministic, repeatable workflows to find the best model for your data.
@@ -57,8 +57,8 @@ $ formiga get-ready
 $ formiga dashboard start
 
 # Run the ML pipeline on your dataset
-$ formiga workflow run just-do-it \
-    "Run the full ML pipeline on data/train.csv with target column 'price'"
+$ formiga workflow run ml-pipeline \
+    "dataset_path=data/train.csv target_column=price"
 ```
 
 Open `http://localhost:3334/ml/` to watch your agent team work in real time.
@@ -233,13 +233,14 @@ Project files (live in your project directory):
 
 ## Workflows
 
-Formiga ships with **3 bundled workflows** — composable primitives for agent orchestration:
+Formiga ships with **4 bundled workflows** — composable primitives for agent orchestration:
 
 | Workflow | Agents | Description |
 |----------|--------|-------------|
 | `do-now` | 1 | Submit any task. Get back a success/failure report. No planning. |
-| `just-do-it` | 1 | Describe your goal. Auto-dispatches to the best approach. For ML tasks, runs the full pipeline with all 5 agents. |
+| `just-do-it` | 1 | Describe your goal. Auto-dispatches to the best approach. |
 | `do-review-do-verify` | 3 | Two-pass execution: do the work, review it, revise, then verify. |
+| `ml-pipeline` | 5 | Full ML pipeline: EDA → features → parallel modelers → adversarial audit. Drives the leaderboard. |
 
 Install them in one command:
 

@@ -17,6 +17,7 @@ import {
   finalizeDrainingPause,
   advancePipeline,
 } from "./pipeline-control.js";
+import { ingestStepOutput } from "../../leaderboard/ingest.js";
 
 // ══════════════════════════════════════════════════════════════════════
 // Expects Validation
@@ -72,9 +73,9 @@ export function completeStep(stepId: string, output: string): { status: string; 
   const db = getDb();
 
   const step = db.prepare(
-    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id, expects, input_template FROM steps WHERE id = ?"
+    "SELECT id, run_id, step_id, agent_id, step_index, type, loop_config, current_story_id, expects, input_template FROM steps WHERE id = ?"
   ).get(stepId) as {
-    id: string; run_id: string; step_id: string; step_index: number; type: string;
+    id: string; run_id: string; step_id: string; agent_id: string; step_index: number; type: string;
     loop_config: string | null; current_story_id: string | null; expects: string;
     input_template: string | null;
   } | undefined;
@@ -135,6 +136,26 @@ export function completeStep(stepId: string, output: string): { status: string; 
   db.prepare(
     "UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?"
   ).run(JSON.stringify(context), runId);
+
+  // Leaderboard ingest hook — for ML modeler/baseline agents only.
+  // Gated by agent suffix inside ingestStepOutput so non-ML steps no-op.
+  // The `workspace` context key (seeded at run creation) is required for the
+  // sidecar JSON fallback path that survives pi's report-tool stdout
+  // normalization.
+  try {
+    ingestStepOutput({
+      agentId: step.agent_id,
+      runId,
+      parsedKv: parsed,
+      workspace: context["workspace"],
+    });
+  } catch (err) {
+    logger.warn("Leaderboard ingest threw", {
+      runId,
+      stepId: step.step_id,
+      error: (err as Error).message,
+    });
+  }
 
   // Parse STORIES_JSON from output (any step, typically the planner)
   parseAndInsertStories(output, runId);

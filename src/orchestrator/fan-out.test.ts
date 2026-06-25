@@ -4,10 +4,15 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { AgentRunner, AgentContext, ValidationResult } from "../agents/interfaces.js";
-import { fanOut } from "./fan-out.js";
+import type {
+  AgentRunner,
+  AgentContext,
+  AgentResult,
+  ValidationResult,
+} from "../agents/interfaces.js";
+import { fanOut, type FanOutExecutor } from "./fan-out.js";
 
-function makeFakeAgent(name: string, delayMs: number = 0): AgentRunner {
+function makeFakeAgent(name: string): AgentRunner {
   return {
     name,
     tools: ["Read", "Bash"],
@@ -18,10 +23,17 @@ function makeFakeAgent(name: string, delayMs: number = 0): AgentRunner {
     validateOutput(_output: string): ValidationResult {
       return { valid: true, errors: [] };
     },
-    // Simulate execution delay in a real harness — for testing, we just
-    // measure that fanOut doesn't block sequentially.
   };
 }
+
+/** Executor that returns a canned SUCCESS result for any agent. */
+const stubExecutor: FanOutExecutor = async (agent) => {
+  const result: AgentResult = {
+    agentName: agent.name,
+    status: "SUCCESS",
+  } as AgentResult;
+  return result;
+};
 
 const testContext: AgentContext = {
   runId: "test-run",
@@ -37,6 +49,7 @@ describe("fanOut", () => {
       agents,
       context: testContext,
       timeoutMs: 5000,
+      executor: stubExecutor,
     });
 
     assert.equal(results.length, 3);
@@ -54,6 +67,7 @@ describe("fanOut", () => {
       agents,
       context: testContext,
       timeoutMs: 5000,
+      executor: stubExecutor,
     });
 
     const names = results.map((r) => r.agentName).sort();
@@ -65,6 +79,7 @@ describe("fanOut", () => {
       agents: [],
       context: testContext,
       timeoutMs: 5000,
+      executor: stubExecutor,
     });
 
     assert.deepEqual(results, []);
@@ -83,6 +98,7 @@ describe("fanOut", () => {
       context: testContext,
       timeoutMs: 5000,
       maxConcurrency: 2,
+      executor: stubExecutor,
     });
 
     assert.equal(results.length, 4);
@@ -90,54 +106,49 @@ describe("fanOut", () => {
     assert.equal(allOk, true);
   });
 
-  it("returns error for agent that throws", async () => {
-    const failingAgent: AgentRunner = {
-      name: "failer",
-      tools: ["Read"],
-      model: "sonnet",
-      buildPrompt(_context: AgentContext): string {
-        throw new Error("simulated build failure");
-      },
-      validateOutput(_output: string): ValidationResult {
-        return { valid: true, errors: [] };
-      },
+  it("returns error when executor throws", async () => {
+    const throwingExecutor: FanOutExecutor = async () => {
+      throw new Error("simulated executor failure");
     };
 
     const results = await fanOut({
-      agents: [failingAgent],
+      agents: [makeFakeAgent("failer")],
       context: testContext,
       timeoutMs: 5000,
+      executor: throwingExecutor,
     });
 
     assert.equal(results.length, 1);
     assert.ok(results[0].error);
-    assert.ok(results[0].error.includes("simulated build failure"));
+    assert.ok(results[0].error.includes("simulated executor failure"));
     assert.equal(results[0].timedOut, false);
   });
 
-  it("detects timeout when agent takes too long", async () => {
-    const slowAgent: AgentRunner = {
-      name: "slow",
-      tools: ["Read"],
-      model: "sonnet",
-      buildPrompt(_context: AgentContext): string {
-        // Simulate work that takes time — fanOut resolves immediately
-        // since buildPrompt is synchronous. A real timeout would happen
-        // at the pi/hermes execution layer.
-        return "prompt";
-      },
-      validateOutput(_output: string): ValidationResult {
-        return { valid: true, errors: [] };
-      },
-    };
+  it("detects timeout when executor takes too long", async () => {
+    const slowExecutor: FanOutExecutor = (agent) =>
+      new Promise((resolve) => {
+        // Resolve well after the test's timeoutMs so fanOut's race fires the
+        // timeout branch first.
+        setTimeout(
+          () =>
+            resolve({
+              agentName: agent.name,
+              status: "SUCCESS",
+            } as AgentResult),
+          500,
+        );
+      });
 
     const results = await fanOut({
-      agents: [slowAgent],
+      agents: [makeFakeAgent("slow")],
       context: testContext,
-      timeoutMs: 100,
+      timeoutMs: 50,
+      executor: slowExecutor,
     });
 
     assert.equal(results.length, 1);
-    assert.equal(results[0].timedOut, false); // sync, no timeout
+    assert.equal(results[0].timedOut, true);
+    assert.equal(results[0].result, null);
+    assert.ok(results[0].error?.includes("Timeout after"));
   });
 });

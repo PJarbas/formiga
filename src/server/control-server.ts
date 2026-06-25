@@ -159,9 +159,14 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
   } = await import("../installer/agent-scheduler.js");
 
   let isSaveTokensMode = false;
+  let workingDirectoryForHarness: string | undefined;
   try {
     const contextParsed = JSON.parse(run.context) as Record<string, unknown>;
     isSaveTokensMode = contextParsed.no_hurry_save_tokens_mode === 'true';
+    const wd = contextParsed.working_directory_for_harness;
+    if (typeof wd === "string" && wd.length > 0) {
+      workingDirectoryForHarness = wd;
+    }
   } catch {
     // context might be malformed; default to false
   }
@@ -224,6 +229,7 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
   try {
     await setupAgentCrons(workflow, run.id, {
       noHurrySaveTokensMode: isSaveTokensMode,
+      workingDirectoryForHarness,
     });
     const scheduledForRun = _scheduledJobCountForRun(run.id);
     if (scheduledForRun < requiredTimers) {

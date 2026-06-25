@@ -10,7 +10,7 @@ import { modelerAdvanced } from "../agents/modeler-advanced.js";
 import { mlCritic } from "../agents/ml-critic.js";
 import type { LeaderboardRepository } from "../leaderboard/repository.js";
 import { AgentMessengerImpl } from "./communication.js";
-import { fanOut, type FanOutResult } from "./fan-out.js";
+import { fanOut, type FanOutResult, type FanOutExecutor } from "./fan-out.js";
 import { collectAndRegister } from "./fan-in.js";
 
 export interface RoundConfig {
@@ -19,6 +19,15 @@ export interface RoundConfig {
   workspacePath: string;
   timeoutMs: number;
   maxConcurrency?: number;
+  /**
+   * Executor that actually runs an agent (e.g. via pi/hermes harness) and
+   * returns a structured AgentResult. Required — the orchestrator no longer
+   * fabricates stub results. Callers using the programmatic
+   * `FormigaEngine`/`RoundManager` path are responsible for wiring this to a
+   * real harness; the workflow YAML path uses the scheduler instead and does
+   * not exercise this code.
+   */
+  executor: FanOutExecutor;
 }
 
 export interface RoundResult {
@@ -46,7 +55,7 @@ export class RoundManager {
     const context = this.buildContext(config);
 
     // Phase 1: Data Analyst (sequential — no dependencies)
-    const analystResult = await this.runSingle(dataAnalyst, context, config.timeoutMs);
+    const analystResult = await this.runSingle(dataAnalyst, context, config.timeoutMs, config.executor);
     phaseResults.push(analystResult);
 
     if (analystResult.status !== "completed") {
@@ -54,7 +63,7 @@ export class RoundManager {
     }
 
     // Phase 2: Feature Engineer (depends on analyst's report)
-    const engineerResult = await this.runSingle(featureEngineer, context, config.timeoutMs);
+    const engineerResult = await this.runSingle(featureEngineer, context, config.timeoutMs, config.executor);
     phaseResults.push(engineerResult);
 
     if (engineerResult.status !== "completed") {
@@ -67,6 +76,7 @@ export class RoundManager {
       context,
       timeoutMs: config.timeoutMs,
       maxConcurrency: config.maxConcurrency,
+      executor: config.executor,
     });
 
     for (const mr of modelerResults) {
@@ -78,7 +88,7 @@ export class RoundManager {
     }
 
     // Phase 4: ML Critic (reviews all modelers)
-    const criticResult = await this.runSingle(mlCritic, context, config.timeoutMs);
+    const criticResult = await this.runSingle(mlCritic, context, config.timeoutMs, config.executor);
     phaseResults.push(criticResult);
 
     // Collect and register all valid results in leaderboard
@@ -102,8 +112,9 @@ export class RoundManager {
     agent: AgentRunner,
     context: AgentContext,
     timeoutMs: number,
+    executor: FanOutExecutor,
   ): Promise<PhaseResult> {
-    const results = await fanOut({ agents: [agent], context, timeoutMs });
+    const results = await fanOut({ agents: [agent], context, timeoutMs, executor });
     const r = results[0];
     return {
       agentName: agent.name,
