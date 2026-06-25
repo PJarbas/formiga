@@ -1,8 +1,5 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { execSync, execFileSync } from "node:child_process";
 import { getDb } from "../db.js";
 import { resolveWorkflowDir, resolveFormigaCli } from "./paths.js";
 import { teardownWorkflowCronsIfIdle } from "./agent-scheduler.js";
@@ -12,112 +9,52 @@ import { getMaxRoleTimeoutSeconds } from "./install.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
 import type { LoopConfig, Story, WorkflowStepFailure } from "./types.js";
 
-// frontend-detect was removed as orphan code. Inline stub preserves the
-// computeHasFrontendChanges call site until step-ops is refactored in Branch 3.
-function isFrontendChange(files: string[]): boolean {
-  const FRONTEND_PATTERNS = [/\.tsx?$/, /\.jsx?$/, /\.css$/, /\.scss$/, /\.html$/, /\.vue$/, /\.svelte$/];
-  return files.some((f) => FRONTEND_PATTERNS.some((pat) => pat.test(f)));
-}
+// Re-exports from extracted modules (Branch 3 god-object decomposition).
+// Existing callers continue to import these from "./step-ops.js" unchanged.
+export {
+  parseOutputKeyValues,
+  resolveTemplate,
+  findMissingTemplateKeys,
+  computeHasFrontendChanges,
+  RESERVED_CONTEXT_KEYS,
+} from "./steps/template-resolver.js";
+export {
+  getAgentWorkspacePath,
+  readProgressFile,
+  buildStoryPlanSection,
+  mergeStoryPlanIntoProgress,
+  writeStoryPlanToProgress,
+  getStories,
+  getCurrentStory,
+  formatStoryForTemplate,
+  formatCompletedStories,
+  parseAndInsertStories,
+} from "./steps/story-manager.js";
+
+import {
+  parseOutputKeyValues,
+  resolveTemplate,
+  findMissingTemplateKeys,
+  computeHasFrontendChanges,
+  RESERVED_CONTEXT_KEYS,
+} from "./steps/template-resolver.js";
+import {
+  getAgentWorkspacePath,
+  readProgressFile,
+  writeStoryPlanToProgress,
+  getStories,
+  formatStoryForTemplate,
+  formatCompletedStories,
+  parseAndInsertStories,
+} from "./steps/story-manager.js";
+
 // rugpull detection/relaunch was removed as orphan code (was Pi/Hermes-
-// specific base-branch race recovery). Stubs preserve the call sites until
-// step-ops is refactored in Branch 3.
+// specific base-branch race recovery). Stubs preserve the call sites.
 function detectRugpull(_runId: string): { isRugpull: boolean; reason?: string } {
   return { isRugpull: false };
 }
 async function relaunchRunAfterRugpull(_runId: string): Promise<{ relaunched: boolean }> {
   return { relaunched: false };
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Key-Value Parsing
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Parse KEY: value lines from step output with support for multi-line values.
- * Accumulates continuation lines until the next KEY: boundary or end of output.
- * Returns a map of lowercase keys to their (trimmed) values.
- * Skips STORIES_JSON keys (handled separately).
- */
-export function parseOutputKeyValues(output: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  const lines = output.split("\n");
-  let pendingKey: string | null = null;
-  let pendingValue = "";
-
-  function commitPending() {
-    if (pendingKey && !pendingKey.startsWith("STORIES_JSON")) {
-      result[pendingKey.toLowerCase()] = pendingValue.trim();
-    }
-    pendingKey = null;
-    pendingValue = "";
-  }
-
-  for (const line of lines) {
-    const match = line.match(/^([A-Z_]+):\s*(.*)$/);
-    if (match) {
-      commitPending();
-      pendingKey = match[1];
-      pendingValue = match[2];
-    } else if (pendingKey) {
-      pendingValue += "\n" + line;
-    }
-  }
-  commitPending();
-
-  return result;
-}
-
-/**
- * Reserved context keys that must not be overwritten by step output parsing.
- * These are structural keys that define the harness/repo/environment and should
- * only be set during run creation, not by agent-generated KEY:value output.
- */
-const RESERVED_CONTEXT_KEYS = new Set([
-  "repo",
-  "working_directory_for_harness",
-  "task",
-  "run_id",
-  "workspace_mode",
-  "worktree_path",
-  "worktree_origin_repository",
-  "worktree_origin_ref",
-  "worktree_origin_sha",
-  "original_branch",
-]);
-
-// ══════════════════════════════════════════════════════════════════════
-// Template Resolution
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Resolve {{key}} placeholders in a template against a context object.
- */
-export function resolveTemplate(template: string, context: Record<string, string>): string {
-  return template.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (_match, key: string) => {
-    if (key in context) return context[key];
-    const lower = key.toLowerCase();
-    if (lower in context) return context[lower];
-    return `[missing: ${key}]`;
-  });
-}
-
-/**
- * Find missing template placeholders for a given context object.
- */
-export function findMissingTemplateKeys(template: string, context: Record<string, string>): string[] {
-  const missing: string[] = [];
-  const seen = new Set<string>();
-  template.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (_match, key: string) => {
-    const lower = key.toLowerCase();
-    const hasExact = Object.prototype.hasOwnProperty.call(context, key);
-    const hasLower = Object.prototype.hasOwnProperty.call(context, lower);
-    if (!hasExact && !hasLower && !seen.has(lower)) {
-      seen.add(lower);
-      missing.push(lower);
-    }
-    return "";
-  });
-  return missing;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -199,293 +136,6 @@ function emitRunTerminalEvent(params: {
     detail: params.detail,
     tokensSpent: getRunTokenSpend(params.runId),
   });
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Agent Workspace
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Get the workspace path for a Formiga agent by its id.
- * Reads from ~/.formiga/agents.json (a JSON array of agent configs with workspace paths).
- */
-export function getAgentWorkspacePath(agentId: string): string | null {
-  try {
-    const configPath = path.join(os.homedir(), ".formiga", "agents.json");
-    const raw = fs.readFileSync(configPath, "utf-8");
-    const config = JSON.parse(raw);
-    const agents: Array<{ id: string; workspace?: string }> = Array.isArray(config) ? config : [];
-    const agent = agents.find((a) => a.id === agentId);
-    return agent?.workspace ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Progress File
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Read progress.txt from the loop step's agent workspace.
- */
-export function readProgressFile(runId: string): string {
-  const db = getDb();
-  const loopStep = db.prepare(
-    "SELECT agent_id FROM steps WHERE run_id = ? AND type = 'loop' LIMIT 1"
-  ).get(runId) as { agent_id: string } | undefined;
-  if (!loopStep) return "(no progress file)";
-  const workspace = getAgentWorkspacePath(loopStep.agent_id);
-  if (!workspace) return "(no progress file)";
-  try {
-    const scopedPath = path.join(workspace, `progress-${runId}.txt`);
-    const legacyPath = path.join(workspace, "progress.txt");
-    const filePath = fs.existsSync(scopedPath) ? scopedPath : legacyPath;
-    return fs.readFileSync(filePath, "utf-8");
-  } catch {
-    return "(no progress yet)";
-  }
-}
-
-/**
- * Build a '## Story Plan' markdown section from an array of stories.
- * Exported for testability.
- */
-export function buildStoryPlanSection(stories: Pick<Story, "storyId" | "title" | "description" | "acceptanceCriteria">[]): string {
-  let section = "## Story Plan\n\n";
-  for (const story of stories) {
-    section += `### ${story.storyId}: ${story.title}\n\n`;
-    section += `**Description:** ${story.description}\n\n`;
-    section += "**Acceptance Criteria:**\n";
-    for (const ac of story.acceptanceCriteria) {
-      section += `- ${ac}\n`;
-    }
-    section += "\n";
-  }
-  return section;
-}
-
-/**
- * Merge a '## Story Plan' section into existing progress file content.
- * If a Story Plan section already exists, it is replaced. Otherwise it is
- * inserted after the first heading line (or at the top).
- * Exported for testability.
- */
-export function mergeStoryPlanIntoProgress(existingContent: string, storyPlanSection: string): string {
-  const storyPlanStart = "\n## Story Plan\n";
-  const idx = existingContent.indexOf(storyPlanStart);
-  if (idx !== -1) {
-    // Find the next ## heading after the Story Plan start (or end of string)
-    const afterStart = idx + storyPlanStart.length;
-    const nextHeadingIdx = existingContent.indexOf("\n## ", afterStart);
-    const endIdx = nextHeadingIdx !== -1 ? nextHeadingIdx : existingContent.length;
-    return (
-      existingContent.slice(0, idx) +
-      "\n" +
-      storyPlanSection.trimEnd() +
-      (nextHeadingIdx !== -1 ? "" : "\n") +
-      existingContent.slice(endIdx)
-    );
-  }
-
-  if (existingContent.trim()) {
-    // Insert after the first heading line, preserving existing content
-    const headerMatch = existingContent.match(/^(# .+?\n)/);
-    if (headerMatch) {
-      return headerMatch[1] + "\n" + storyPlanSection + existingContent.slice(headerMatch[1].length);
-    }
-    return storyPlanSection + "\n" + existingContent;
-  }
-
-  return `# Progress Log\n\n${storyPlanSection}`;
-}
-
-/**
- * Write the full story plan to the progress log after STORIES_JSON is parsed.
- * Finds the loop step's agent workspace and writes/updates the '## Story Plan'
- * section in progress-{runId}.txt, preserving any existing Codebase Patterns or
- * other sections. Emits a 'stories.planned' event on success.
- */
-export function writeStoryPlanToProgress(runId: string): void {
-  if (!runHasStories(runId)) return;
-
-  try {
-    const db = getDb();
-    const loopStep = db.prepare(
-      "SELECT agent_id FROM steps WHERE run_id = ? AND type = 'loop' LIMIT 1"
-    ).get(runId) as { agent_id: string } | undefined;
-
-    if (!loopStep) {
-      logger.warn("writeStoryPlanToProgress: no loop step found for run", { runId });
-      return;
-    }
-
-    const workspace = getAgentWorkspacePath(loopStep.agent_id);
-    if (!workspace) {
-      logger.warn("writeStoryPlanToProgress: no workspace configured for loop agent", { runId, agentId: loopStep.agent_id });
-      return;
-    }
-
-    const stories = getStories(runId);
-    if (stories.length === 0) return;
-
-    const storyPlanSection = buildStoryPlanSection(stories);
-    const scopedPath = path.join(workspace, `progress-${runId}.txt`);
-
-    // Read existing content if any
-    let existingContent = "";
-    try {
-      existingContent = fs.readFileSync(scopedPath, "utf-8");
-    } catch {
-      // File doesn't exist yet — that's fine
-    }
-
-    const newContent = mergeStoryPlanIntoProgress(existingContent, storyPlanSection);
-
-    fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
-    fs.writeFileSync(scopedPath, newContent, "utf-8");
-
-    const wfId = getWorkflowId(runId);
-    emitEvent({
-      ts: new Date().toISOString(),
-      event: "stories.planned",
-      runId,
-      workflowId: wfId,
-      detail: `Wrote ${stories.length} stories to progress file`,
-    });
-
-    logger.info("Story plan written to progress file", { runId, storyCount: stories.length });
-  } catch (err) {
-    logger.warn("writeStoryPlanToProgress: failed to write progress file", {
-      runId,
-      error: (err as Error).message,
-    });
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Stories
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Get all stories for a run, ordered by story_index.
- */
-export function getStories(runId: string): Story[] {
-  const db = getDb();
-  const rows = db.prepare(
-    "SELECT * FROM stories WHERE run_id = ? ORDER BY story_index ASC"
-  ).all(runId) as any[];
-  return rows.map((r) => ({
-    id: r.id,
-    runId: r.run_id,
-    storyIndex: r.story_index,
-    storyId: r.story_id,
-    title: r.title,
-    description: r.description,
-    acceptanceCriteria: JSON.parse(r.acceptance_criteria),
-    status: r.status,
-    output: r.output ?? undefined,
-    retryCount: r.retry_count,
-    maxRetries: r.max_retries,
-  }));
-}
-
-/**
- * Get the story currently being worked on by a loop step.
- */
-export function getCurrentStory(stepId: string): Story | null {
-  const db = getDb();
-  const step = db.prepare(
-    "SELECT current_story_id FROM steps WHERE id = ?"
-  ).get(stepId) as { current_story_id: string | null } | undefined;
-  if (!step?.current_story_id) return null;
-  const row = db.prepare("SELECT * FROM stories WHERE id = ?").get(step.current_story_id) as any;
-  if (!row) return null;
-  return {
-    id: row.id,
-    runId: row.run_id,
-    storyIndex: row.story_index,
-    storyId: row.story_id,
-    title: row.title,
-    description: row.description,
-    acceptanceCriteria: JSON.parse(row.acceptance_criteria),
-    status: row.status,
-    output: row.output ?? undefined,
-    retryCount: row.retry_count,
-    maxRetries: row.max_retries,
-  };
-}
-
-/**
- * Format a single story for template interpolation.
- */
-export function formatStoryForTemplate(story: Story): string {
-  const ac = story.acceptanceCriteria.map((c, i) => `  ${i + 1}. ${c}`).join("\n");
-  return `Story ${story.storyId}: ${story.title}\n\n${story.description}\n\nAcceptance Criteria:\n${ac}`;
-}
-
-/**
- * Format completed stories as a summary bullet list.
- */
-export function formatCompletedStories(stories: Story[]): string {
-  const done = stories.filter((s) => s.status === "done");
-  if (done.length === 0) return "(none yet)";
-  return done.map((s) => `- ${s.storyId}: ${s.title}`).join("\n");
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// STORIES_JSON Parsing
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Parse STORIES_JSON from step output and insert stories into the DB.
- */
-export function parseAndInsertStories(output: string, runId: string): void {
-  const lines = output.split("\n");
-  const startIdx = lines.findIndex((l) => l.startsWith("STORIES_JSON:"));
-  if (startIdx === -1) return;
-
-  const firstLine = lines[startIdx].slice("STORIES_JSON:".length).trim();
-  const jsonLines = [firstLine];
-  for (let i = startIdx + 1; i < lines.length; i++) {
-    if (/^[A-Z_]+:\s/.test(lines[i])) break;
-    jsonLines.push(lines[i]);
-  }
-
-  const jsonText = jsonLines.join("\n").trim();
-  let stories: any[];
-  try {
-    stories = JSON.parse(jsonText);
-  } catch (e) {
-    throw new Error(`Failed to parse STORIES_JSON: ${(e as Error).message}`);
-  }
-
-  if (!Array.isArray(stories)) {
-    throw new Error("STORIES_JSON must be an array");
-  }
-  if (stories.length > 20) {
-    throw new Error(`STORIES_JSON has ${stories.length} stories, max is 20`);
-  }
-
-  const db = getDb();
-  const now = new Date().toISOString();
-  const insert = db.prepare(
-    "INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status, retry_count, max_retries, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, 4, ?, ?)"
-  );
-
-  const seenIds = new Set<string>();
-  for (let i = 0; i < stories.length; i++) {
-    const s = stories[i];
-    const ac = s.acceptanceCriteria ?? s.acceptance_criteria;
-    if (!s.id || !s.title || !s.description || !Array.isArray(ac) || ac.length === 0) {
-      throw new Error(`STORIES_JSON story at index ${i} missing required fields (id, title, description, acceptanceCriteria)`);
-    }
-    if (seenIds.has(s.id)) {
-      throw new Error(`STORIES_JSON has duplicate story id "${s.id}"`);
-    }
-    seenIds.add(s.id);
-    insert.run(crypto.randomUUID(), runId, i, s.id, s.title, s.description, JSON.stringify(ac), now, now);
-  }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -777,28 +427,6 @@ export function recoverOrphanedStepsForAgent(
   }
 
   return { recovered, failed, skipped };
-}
-
-// ══════════════════════════════════════════════════════════════════════
-// Frontend Change Detection
-// ══════════════════════════════════════════════════════════════════════
-
-/**
- * Compute whether a branch has frontend changes relative to main.
- * Returns 'true' or 'false' as a string for template context.
- */
-export function computeHasFrontendChanges(repo: string, branch: string): string {
-  try {
-    const output = execFileSync("git", ["diff", "--name-only", `main..${branch}`], {
-      cwd: repo,
-      encoding: "utf-8",
-      timeout: 10_000,
-    });
-    const files = output.trim().split("\n").filter((f) => f.length > 0);
-    return isFrontendChange(files) ? "true" : "false";
-  } catch {
-    return "false";
-  }
 }
 
 // ══════════════════════════════════════════════════════════════════════
