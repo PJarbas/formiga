@@ -10,18 +10,35 @@
     "formiga": "dist/cli/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/server/index.html dist/server/index.html && cp src/server/kanban.html dist/server/kanban.html && chmod +x dist/cli/cli.js && node scripts/inject-version.js && rm -rf dist/www && cp -r www dist/www",
+    "build": "tsc -p tsconfig.json && cp src/server/index.html dist/server/index.html && cp src/server/kanban.html dist/server/kanban.html && chmod +x dist/cli/cli.js && node scripts/inject-version.js && rm -rf dist/www && cp -r www dist/www && npm run build:dashboard",
+    "build:dashboard": "vite build --config src/dashboard/vite.config.ts",
     "start": "node dist/cli/cli.js",
     "test": "node --test tests/*.test.ts src/**/*.test.ts",
     "//": "Tests are intentionally parallel-safe: they use isolated HOME/FORMIGA_STATE_DIR temp dirs per test, reserveRandomPort() for port allocation, and avoid shared fixed ports (3334/3338/3339) except where explicitly testing production defaults. Real CLI defaults remain 3334 (dashboard), 3338 (MCP), 3339 (control plane)."
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "yaml": "^2.4.5"
+    "yaml": "^2.4.5",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.6.0",
+    "@tanstack/react-query": "^5.71.0",
+    "echarts": "^5.6.0",
+    "echarts-for-react": "^3.0.2"
   },
   "devDependencies": {
     "@types/node": "^25.2.1",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vite": "^6.3.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "@tailwindcss/vite": "^4.1.0",
+    "tailwindcss": "^4.1.0",
+    "vitest": "^3.2.0",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/jest-dom": "^6.6.0",
+    "jsdom": "^26.1.0"
   }
 }

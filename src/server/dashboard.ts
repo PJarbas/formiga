@@ -14,6 +14,19 @@
  *   GET /api/events              -> recent events (global)
  *   DELETE /api/runs/:id         -> permanently delete a run and all associated data
  *   GET /api/logs-tail           -> logs-tail formatted event lines (cursor based)
+ *   GET /ml/*                     -> React ML dashboard SPA
+ *   GET /api/pipeline/status      -> active ML pipeline status
+ *   GET /api/agents               -> list 5 ML agents
+ *   GET /api/agents/:name         -> agent detail
+ *   GET /api/agents/:name/logs    -> paginated agent logs
+ *   GET /api/leaderboard          -> top models sorted by cvMean
+ *   GET /api/leaderboard/:id      -> single experiment detail
+ *   GET /api/leaderboard/compare  -> compare experiments
+ *   GET /api/rounds               -> completed rounds for a run
+ *   GET /api/cross-findings       -> cross-pollination findings
+ *   POST /api/pipeline/pause      -> pause active pipeline
+ *   POST /api/pipeline/resume     -> resume paused pipeline
+ *   POST /api/pipeline/cancel     -> cancel active pipeline
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -36,10 +49,14 @@ import {
   type AutoresearchRunEntry,
   type AutoresearchRunResultEntry,
 } from "../autoresearch/autoresearch.js";
+import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
+import { getExperimentStats } from "../leaderboard/queries.js";
+import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_HTML = path.join(__dirname, "index.html");
 const KANBAN_HTML = path.join(__dirname, "kanban.html");
+const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -872,6 +889,640 @@ function handleVersion(_req: http.IncomingMessage, res: http.ServerResponse): vo
   }
 }
 
+// ── ML Pipeline API Handlers ──────────────────────────────────────────
+
+function findActivePipelineRunId(): string | null {
+  try {
+    const db = getDb();
+    // Look for a run that has experiments and is still running/paused
+    const row = db.prepare(`
+      SELECT DISTINCT e.run_id
+      FROM experiments e
+      JOIN runs r ON r.id = e.run_id
+      WHERE r.status IN ('running', 'paused')
+      ORDER BY e.created_at DESC LIMIT 1
+    `).get() as { run_id: string } | undefined;
+    return row?.run_id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const db = getDb();
+    const runId = findActivePipelineRunId();
+
+    if (!runId) {
+      jsonResponse(res, {
+        runId: null,
+        status: "idle",
+        currentPhase: "idle",
+        currentRound: 0,
+        maxRounds: 5,
+        startedAt: null,
+        updatedAt: null,
+        phaseStats: {
+          dataAnalyst: "idle",
+          featureEngineer: "idle",
+          modelerClassic: "idle",
+          modelerAdvanced: "idle",
+          mlCritic: "idle",
+        },
+        quickStats: { totalExperiments: 0, bestCvMean: null, roundsCompleted: 0, tokensSpent: 0 },
+      });
+      return;
+    }
+
+    const run = db.prepare(
+      "SELECT id, status, created_at, updated_at, tokens_spent FROM runs WHERE id = ?",
+    ).get(runId) as { id: string; status: string; created_at: string; updated_at: string; tokens_spent: number } | undefined;
+
+    const stats = getExperimentStats(db, runId);
+
+    // Best cvMean from leaderboard
+    const bestRow = db.prepare(
+      "SELECT val_metric FROM experiments WHERE run_id = ? AND status IN ('SUCCESS','AUDITED') ORDER BY val_metric DESC LIMIT 1",
+    ).get(runId) as { val_metric: number } | undefined;
+
+    // Determine the max round number observed
+    const maxRoundRow = db.prepare(
+      "SELECT MAX(round_number) AS max_round FROM experiments WHERE run_id = ?",
+    ).get(runId) as { max_round: number } | undefined;
+
+    const currentRound = maxRoundRow?.max_round ?? 0;
+
+    // Determine current phase based on the experiments we have
+    const agentPhases = db.prepare(`
+      SELECT DISTINCT agent_name FROM experiments WHERE run_id = ? AND round_number = ?
+    `).all(runId, currentRound) as Array<{ agent_name: string }>;
+
+    const agentNames = new Set(agentPhases.map((a) => a.agent_name));
+    let currentPhase = "idle";
+    if (agentNames.has("ml-critic")) currentPhase = "audit";
+    else if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) currentPhase = "modeling";
+    else if (agentNames.has("feature-engineer")) currentPhase = "feature_engineering";
+    else if (agentNames.has("data-analyst")) currentPhase = "data_analysis";
+    else if (agentNames.size > 0) currentPhase = "complete";
+
+    // Agent statuses for this round
+    function agentInRound(name: string): string {
+      const row = db.prepare(
+        "SELECT status FROM experiments WHERE run_id = ? AND round_number = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
+      ).get(runId, currentRound, name) as { status: string } | undefined;
+      if (!row) return "idle";
+      const s = row.status;
+      if (s === "SUCCESS" || s === "AUDITED") return "completed";
+      if (s === "FAILED" || s === "OVERFITTED") return "failed";
+      if (s === "PENDING") return "running";
+      return "idle";
+    }
+
+    jsonResponse(res, {
+      runId,
+      status: run?.status ?? "idle",
+      currentPhase,
+      currentRound,
+      maxRounds: 5,
+      startedAt: run?.created_at ?? null,
+      updatedAt: run?.updated_at ?? null,
+      phaseStats: {
+        dataAnalyst: agentInRound("data-analyst"),
+        featureEngineer: agentInRound("feature-engineer"),
+        modelerClassic: agentInRound("modeler-classic"),
+        modelerAdvanced: agentInRound("modeler-advanced"),
+        mlCritic: agentInRound("ml-critic"),
+      },
+      quickStats: {
+        totalExperiments: stats.total,
+        bestCvMean: bestRow?.val_metric ?? null,
+        roundsCompleted: currentRound,
+        tokensSpent: run?.tokens_spent ?? 0,
+      },
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to get pipeline status: ${(err as Error).message}`);
+  }
+}
+
+function handleAgents(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const db = getDb();
+    const runId = findActivePipelineRunId();
+
+    const agents = Object.entries(AGENT_INFO_REGISTRY).map(([name, info]) => {
+      let currentStatus = "idle";
+      if (runId) {
+        const row = db.prepare(
+          "SELECT status FROM experiments WHERE run_id = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
+        ).get(runId, name) as { status: string } | undefined;
+        if (row) {
+          const s = row.status;
+          if (s === "SUCCESS" || s === "AUDITED") currentStatus = "completed";
+          else if (s === "FAILED" || s === "OVERFITTED") currentStatus = "failed";
+          else if (s === "PENDING") currentStatus = "running";
+        }
+      }
+      return { ...info, currentStatus };
+    });
+
+    jsonResponse(res, agents);
+  } catch (err) {
+    errorResponse(res, `Failed to list agents: ${(err as Error).message}`);
+  }
+}
+
+function handleAgentDetail(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  agentName: string,
+): void {
+  try {
+    const info = AGENT_INFO_REGISTRY[agentName];
+    if (!info) {
+      errorResponse(res, `Agent not found: ${agentName}`, 404);
+      return;
+    }
+
+    const db = getDb();
+    const runId = findActivePipelineRunId();
+
+    const rounds: Array<{ roundNumber: number; status: string; cvMean: number | null; modelType: string | null }> = [];
+    let totalTrials = 0;
+    let lastError: string | null = null;
+
+    if (runId) {
+      const rows = db.prepare(`
+        SELECT round_number, status, val_metric, model_type, error_message
+        FROM experiments WHERE run_id = ? AND agent_name = ?
+        ORDER BY round_number ASC
+      `).all(runId, agentName) as Array<{
+        round_number: number; status: string; val_metric: number;
+        model_type: string; error_message: string | null;
+      }>;
+
+      totalTrials = rows.length;
+
+      for (const row of rows) {
+        rounds.push({
+          roundNumber: row.round_number,
+          status: row.status,
+          cvMean: row.val_metric,
+          modelType: row.model_type,
+        });
+      }
+
+      const errRow = db.prepare(
+        "SELECT error_message FROM experiments WHERE run_id = ? AND agent_name = ? AND error_message IS NOT NULL ORDER BY experiment_id DESC LIMIT 1",
+      ).get(runId, agentName) as { error_message: string } | undefined;
+      lastError = errRow?.error_message ?? null;
+    }
+
+    // Determine current status
+    let currentStatus = "idle";
+    if (rounds.length > 0) {
+      const last = rounds[rounds.length - 1];
+      if (last.status === "SUCCESS" || last.status === "AUDITED") currentStatus = "completed";
+      else if (last.status === "FAILED" || last.status === "OVERFITTED") currentStatus = "failed";
+      else if (last.status === "PENDING") currentStatus = "running";
+    }
+
+    const result = {
+      agent: info,
+      currentStatus,
+      totalTrials,
+      lastOutput: null, // populated when agent produces output
+      lastError,
+      rounds,
+    };
+
+    jsonResponse(res, result);
+  } catch (err) {
+    errorResponse(res, `Failed to get agent detail: ${(err as Error).message}`);
+  }
+}
+
+function handleAgentLogs(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  agentName: string,
+): void {
+  try {
+    const info = AGENT_INFO_REGISTRY[agentName];
+    if (!info) {
+      errorResponse(res, `Agent not found: ${agentName}`, 404);
+      return;
+    }
+
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const offset = parseInt(url.searchParams.get("offset") ?? "0", 10);
+    const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10), 200);
+
+    const db = getDb();
+    const runId = findActivePipelineRunId();
+
+    if (!runId) {
+      jsonResponse(res, { agentName, entries: [], total: 0, offset, limit });
+      return;
+    }
+
+    // Read experiments for this agent as log entries
+    const countRow = db.prepare(
+      "SELECT COUNT(*) AS cnt FROM experiments WHERE run_id = ? AND agent_name = ?",
+    ).get(runId, agentName) as { cnt: number };
+
+    const rows = db.prepare(`
+      SELECT experiment_id, round_number, status, val_metric, error_message, created_at
+      FROM experiments WHERE run_id = ? AND agent_name = ?
+      ORDER BY experiment_id DESC LIMIT ? OFFSET ?
+    `).all(runId, agentName, limit, offset) as Array<{
+      experiment_id: number; round_number: number; status: string;
+      val_metric: number; error_message: string | null; created_at: string;
+    }>;
+
+    const entries = rows.flatMap((row) => {
+      const logs: Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }> = [];
+      const ts = row.created_at;
+      if (row.status === "SUCCESS" || row.status === "AUDITED") {
+        logs.push({ timestamp: ts, level: "info", message: `[Round ${row.round_number}] Trial completed — val_metric: ${row.val_metric.toFixed(4)}, status: ${row.status}` });
+      } else if (row.status === "FAILED" || row.status === "OVERFITTED") {
+        logs.push({ timestamp: ts, level: "error", message: `[Round ${row.round_number}] Trial failed — ${row.error_message ?? "Unknown error"}` });
+      } else {
+        logs.push({ timestamp: ts, level: "info", message: `[Round ${row.round_number}] Trial running — status: ${row.status}` });
+      }
+      return logs;
+    });
+
+    jsonResponse(res, {
+      agentName,
+      entries,
+      total: countRow.cnt,
+      offset,
+      limit,
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to get agent logs: ${(err as Error).message}`);
+  }
+}
+
+function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const agentName = url.searchParams.get("agentName")?.trim();
+    const roundStr = url.searchParams.get("roundNumber");
+    const statusFilter = url.searchParams.get("status")?.trim();
+    const sortBy = url.searchParams.get("sortBy") ?? "cvMean";
+    const sortDir = url.searchParams.get("sortDir") ?? "desc";
+
+    const db = getDb();
+    const runId = findActivePipelineRunId();
+
+    if (!runId) {
+      jsonResponse(res, { entries: [], total: 0, bestCvMean: null, filters: {} });
+      return;
+    }
+
+    let where = "WHERE run_id = ?";
+    const params: (string | number)[] = [runId];
+
+    if (agentName) {
+      where += " AND agent_name = ?";
+      params.push(agentName);
+    }
+    if (roundStr) {
+      where += " AND round_number = ?";
+      params.push(Number(roundStr));
+    }
+    if (statusFilter) {
+      where += " AND status = ?";
+      params.push(statusFilter);
+    }
+
+    // Map sortBy field
+    const sortCol = sortBy === "trainMean" ? "train_metric" :
+                    sortBy === "trainValGap" ? "(train_metric - val_metric)" :
+                    sortBy === "roundNumber" ? "round_number" :
+                    "val_metric";
+    const dir = sortDir === "asc" ? "ASC" : "DESC";
+
+    const countRow = db.prepare(`SELECT COUNT(*) AS cnt FROM experiments ${where}`).get(...params) as { cnt: number };
+
+    const rows = db.prepare(`
+      SELECT * FROM experiments ${where} ORDER BY ${sortCol} ${dir} LIMIT 100
+    `).all(...params) as Array<Record<string, unknown>>;
+
+    const bestRow = db.prepare(
+      "SELECT val_metric FROM experiments WHERE run_id = ? AND status IN ('SUCCESS','AUDITED') ORDER BY val_metric DESC LIMIT 1",
+    ).get(runId) as { val_metric: number } | undefined;
+
+    const entries = rows.map((r) => ({
+      id: String(r.experiment_id),
+      runId: r.run_id as string,
+      roundNumber: Number(r.round_number),
+      agentName: r.agent_name as string,
+      modelId: `model_${r.experiment_id}`,
+      modelType: r.model_type as string,
+      status: r.status as string,
+      cvMean: Number(r.val_metric),
+      cvStd: 0,
+      trainMean: Number(r.train_metric),
+      trainValGap: Number(r.train_metric) - Number(r.val_metric),
+      hyperparameters: safeParseJson(r.hyperparameters as string),
+      featureImportancesTop10: null,
+      trainTimeSeconds: null,
+      inferenceTimeMsPer1k: null,
+      createdAt: r.created_at as string,
+    }));
+
+    jsonResponse(res, {
+      entries,
+      total: countRow.cnt,
+      bestCvMean: bestRow?.val_metric ?? null,
+      filters: { agentName: agentName || undefined, roundNumber: roundStr ? Number(roundStr) : undefined, status: statusFilter || undefined },
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to get leaderboard: ${(err as Error).message}`);
+  }
+}
+
+function safeParseJson(raw: string): Record<string, unknown> {
+  try { return JSON.parse(raw) as Record<string, unknown>; } catch { return {}; }
+}
+
+function handleLeaderboardEntry(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string,
+): void {
+  try {
+    const db = getDb();
+    const experimentId = Number(id);
+    if (!Number.isFinite(experimentId)) {
+      errorResponse(res, `Invalid experiment id: ${id}`, 400);
+      return;
+    }
+
+    const row = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown> | undefined;
+    if (!row) {
+      errorResponse(res, `Experiment not found: ${id}`, 404);
+      return;
+    }
+
+    jsonResponse(res, {
+      id: String(row.experiment_id),
+      runId: row.run_id,
+      roundNumber: Number(row.round_number),
+      agentName: row.agent_name,
+      modelId: `model_${row.experiment_id}`,
+      modelType: row.model_type,
+      status: row.status,
+      cvMean: Number(row.val_metric),
+      cvStd: 0,
+      trainMean: Number(row.train_metric),
+      trainValGap: Number(row.train_metric) - Number(row.val_metric),
+      hyperparameters: safeParseJson(row.hyperparameters as string),
+      featureImportancesTop10: null,
+      trainTimeSeconds: null,
+      inferenceTimeMsPer1k: null,
+      createdAt: row.created_at,
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to get leaderboard entry: ${(err as Error).message}`);
+  }
+}
+
+function handleLeaderboardCompare(req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const ids = url.searchParams.getAll("id");
+
+    if (ids.length < 2) {
+      errorResponse(res, "At least 2 experiment IDs required", 400);
+      return;
+    }
+
+    const db = getDb();
+    const placeholders = ids.map(() => "?").join(",");
+    const rows = db.prepare(
+      `SELECT * FROM experiments WHERE experiment_id IN (${placeholders})`,
+    ).all(...ids.map(Number)) as Array<Record<string, unknown>>;
+
+    const entries = rows.map((r) => ({
+      id: String(r.experiment_id),
+      modelType: r.model_type as string,
+      agentName: r.agent_name as string,
+      cvMean: Number(r.val_metric),
+      trainMean: Number(r.train_metric),
+      trainValGap: Number(r.train_metric) - Number(r.val_metric),
+      roundNumber: Number(r.round_number),
+      status: r.status as string,
+    }));
+
+    jsonResponse(res, { entries });
+  } catch (err) {
+    errorResponse(res, `Failed to compare leaderboard entries: ${(err as Error).message}`);
+  }
+}
+
+function handleRounds(req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+
+    if (!runId) {
+      jsonResponse(res, []);
+      return;
+    }
+
+    const db = getDb();
+    const roundRows = db.prepare(`
+      SELECT DISTINCT round_number, MIN(created_at) AS started_at, MAX(created_at) AS completed_at
+      FROM experiments WHERE run_id = ?
+      GROUP BY round_number ORDER BY round_number ASC
+    `).all(runId) as Array<{ round_number: number; started_at: string; completed_at: string }>;
+
+    const rounds = roundRows.map((r) => {
+      const stats = db.prepare(`
+        SELECT
+          COUNT(*) AS total,
+          SUM(CASE WHEN status IN ('SUCCESS','AUDITED') THEN 1 ELSE 0 END) AS registered,
+          SUM(CASE WHEN status IN ('FAILED','OVERFITTED') THEN 1 ELSE 0 END) AS rejected
+        FROM experiments WHERE run_id = ? AND round_number = ?
+      `).get(runId, r.round_number) as { total: number; registered: number; rejected: number };
+
+      return {
+        runId,
+        roundNumber: r.round_number,
+        status: stats.total > 0 ? "completed" : "pending",
+        experimentsRegistered: stats.registered,
+        experimentsRejected: stats.rejected,
+        startedAt: r.started_at,
+        completedAt: r.completed_at,
+      };
+    });
+
+    jsonResponse(res, rounds);
+  } catch (err) {
+    errorResponse(res, `Failed to list rounds: ${(err as Error).message}`);
+  }
+}
+
+function handleCrossFindings(req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+
+    if (!runId) {
+      jsonResponse(res, []);
+      return;
+    }
+
+    const db = getDb();
+    // Cross-findings are experiments where both modelers ran and produced results
+    const rows = db.prepare(`
+      SELECT e.experiment_id, e.round_number, e.agent_name, e.model_type, e.val_metric, e.created_at
+      FROM experiments e
+      WHERE e.run_id = ? AND e.agent_name IN ('modeler-classic', 'modeler-advanced')
+        AND e.status IN ('SUCCESS','AUDITED')
+      ORDER BY e.round_number ASC, e.agent_name ASC
+    `).all(runId) as Array<{
+      experiment_id: number; round_number: number; agent_name: string;
+      model_type: string; val_metric: number; created_at: string;
+    }>;
+
+    // Group by round to find cross-findings
+    const byRound = new Map<number, Array<typeof rows[number]>>();
+    for (const row of rows) {
+      const list = byRound.get(row.round_number) ?? [];
+      list.push(row);
+      byRound.set(row.round_number, list);
+    }
+
+    const findings: Array<{ id: string; runId: string; roundNumber: number; fromAgent: string; toAgent: string; content: string; createdAt: string }> = [];
+    for (const [round, entries] of byRound) {
+      if (entries.length >= 2) {
+        const classic = entries.find((e) => e.agent_name === "modeler-classic");
+        const advanced = entries.find((e) => e.agent_name === "modeler-advanced");
+        if (classic && advanced) {
+          const diff = Math.abs(Number(classic.val_metric) - Number(advanced.val_metric));
+          findings.push({
+            id: `cross_${round}`,
+            runId,
+            roundNumber: round,
+            fromAgent: "modeler-classic",
+            toAgent: "modeler-advanced",
+            content: `Round ${round}: Classic (${classic.model_type}) cvMean=${Number(classic.val_metric).toFixed(4)} vs Advanced (${advanced.model_type}) cvMean=${Number(advanced.val_metric).toFixed(4)} (diff=${diff.toFixed(4)})`,
+            createdAt: advanced.created_at,
+          });
+        }
+      }
+    }
+
+    jsonResponse(res, findings);
+  } catch (err) {
+    errorResponse(res, `Failed to get cross-findings: ${(err as Error).message}`);
+  }
+}
+
+async function handlePipelinePause(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  try {
+    const runId = findActivePipelineRunId();
+    if (!runId) {
+      errorResponse(res, "No active pipeline run", 404);
+      return;
+    }
+    const result = await pauseRunWithDaemon(runId, false);
+    if (result === null) {
+      errorResponse(res, "Daemon unreachable", 502);
+      return;
+    }
+    jsonResponse(res, { paused: true, runId });
+  } catch (err) {
+    errorResponse(res, `Failed to pause pipeline: ${(err as Error).message}`);
+  }
+}
+
+async function handlePipelineResume(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  try {
+    const runId = findActivePipelineRunId();
+    if (!runId) {
+      errorResponse(res, "No active pipeline run", 404);
+      return;
+    }
+    const result = await resumeRunWithDaemon(runId);
+    if (result === null) {
+      errorResponse(res, "Daemon unreachable", 502);
+      return;
+    }
+    jsonResponse(res, { resumed: true, runId });
+  } catch (err) {
+    errorResponse(res, `Failed to resume pipeline: ${(err as Error).message}`);
+  }
+}
+
+async function handlePipelineCancel(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  try {
+    const runId = findActivePipelineRunId();
+    if (!runId) {
+      errorResponse(res, "No active pipeline run", 404);
+      return;
+    }
+    const result = await stopWorkflow(runId);
+    if (result.ok) {
+      jsonResponse(res, { canceled: true, runId });
+      return;
+    }
+    errorResponse(res, "Failed to cancel pipeline", 500);
+  } catch (err) {
+    errorResponse(res, `Failed to cancel pipeline: ${(err as Error).message}`);
+  }
+}
+
+// ── React SPA serving ──────────────────────────────────────────────────
+
+const MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript",
+  ".css": "text/css",
+  ".json": "application/json",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
+
+function serveStaticFile(res: http.ServerResponse, filePath: string): void {
+  try {
+    const content = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    res.writeHead(200, {
+      "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream",
+      "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=3600",
+    });
+    res.end(content);
+  } catch {
+    // SPA fallback: serve index.html for any unmatched paths
+    try {
+      const indexHtml = fs.readFileSync(path.join(DASHBOARD_DIST, "index.html"));
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(indexHtml);
+    } catch {
+      errorResponse(res, "Dashboard not built. Run npm run build:dashboard first.", 503);
+    }
+  }
+}
+
 // ── Router ───────────────────────────────────────────────────────────
 
 function route(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -1038,6 +1689,98 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   const relaunchMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/relaunch$/);
   if (method === "POST" && relaunchMatch) {
     handleRelaunchRun(req, res, relaunchMatch[1]);
+    return;
+  }
+
+  // ── ML Pipeline API routes ──────────────────────────────────────
+
+  // GET /api/pipeline/status
+  if (method === "GET" && pathname === "/api/pipeline/status") {
+    handlePipelineStatus(req, res);
+    return;
+  }
+
+  // GET /api/agents
+  if (method === "GET" && pathname === "/api/agents") {
+    handleAgents(req, res);
+    return;
+  }
+
+  // GET /api/agents/:name/logs (before /api/agents/:name)
+  const agentLogsMatch = pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)\/logs$/);
+  if (method === "GET" && agentLogsMatch) {
+    handleAgentLogs(req, res, agentLogsMatch[1]);
+    return;
+  }
+
+  // GET /api/agents/:name
+  const agentDetailMatch = pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)$/);
+  if (method === "GET" && agentDetailMatch) {
+    handleAgentDetail(req, res, agentDetailMatch[1]);
+    return;
+  }
+
+  // GET /api/leaderboard/compare (before /api/leaderboard/:id)
+  if (method === "GET" && pathname === "/api/leaderboard/compare") {
+    handleLeaderboardCompare(req, res);
+    return;
+  }
+
+  // GET /api/leaderboard/:id
+  const leaderboardEntryMatch = pathname.match(/^\/api\/leaderboard\/([0-9]+)$/);
+  if (method === "GET" && leaderboardEntryMatch) {
+    handleLeaderboardEntry(req, res, leaderboardEntryMatch[1]);
+    return;
+  }
+
+  // GET /api/leaderboard
+  if (method === "GET" && pathname === "/api/leaderboard") {
+    handleLeaderboard(req, res);
+    return;
+  }
+
+  // GET /api/rounds
+  if (method === "GET" && pathname === "/api/rounds") {
+    handleRounds(req, res);
+    return;
+  }
+
+  // GET /api/cross-findings
+  if (method === "GET" && pathname === "/api/cross-findings") {
+    handleCrossFindings(req, res);
+    return;
+  }
+
+  // POST /api/pipeline/pause
+  if (method === "POST" && pathname === "/api/pipeline/pause") {
+    handlePipelinePause(req, res);
+    return;
+  }
+
+  // POST /api/pipeline/resume
+  if (method === "POST" && pathname === "/api/pipeline/resume") {
+    handlePipelineResume(req, res);
+    return;
+  }
+
+  // POST /api/pipeline/cancel
+  if (method === "POST" && pathname === "/api/pipeline/cancel") {
+    handlePipelineCancel(req, res);
+    return;
+  }
+
+  // ── React SPA: /ml and /ml/* ────────────────────────────────────
+  if (pathname === "/ml" || pathname.startsWith("/ml/")) {
+    const spaPath = pathname === "/ml"
+      ? path.join(DASHBOARD_DIST, "index.html")
+      : path.join(DASHBOARD_DIST, pathname.slice(4)); // remove "/ml/" prefix
+    serveStaticFile(res, spaPath);
+    return;
+  }
+
+  // Also serve /assets/ from dashboard dist (Vite output)
+  if (pathname.startsWith("/assets/")) {
+    serveStaticFile(res, path.join(DASHBOARD_DIST, pathname));
     return;
   }
 

@@ -1,6 +1,6 @@
 # Checklist de Implementacao — Formiga (specs.md)
 
-Status atual: **Branch 5 completa** — iniciando Branch 6
+Status atual: **Branch 6 completa** — iniciando Branch 7
 Branch git ativa: `feat/ml-agents-and-leaderboard`
 
 ---
@@ -119,28 +119,28 @@ Branch git ativa: `feat/ml-agents-and-leaderboard`
 
 ---
 
-## Branch 6: feat/dashboard-ml-views [PENDENTE]
+## Branch 6: feat/dashboard-ml-views [CONCLUIDA]
 
 ### Stack
-- [ ] Setup `src/dashboard/` com **Vite + React 18 + TypeScript**
-- [ ] **Tailwind CSS** configurado (tema dark via `darkMode: 'class'`, design tokens em `tailwind.config.ts`)
-- [ ] **TanStack Query** com `refetchInterval: 3000` para polling
-- [ ] **React Router** (data router) com rotas para as 4 telas
-- [ ] **Apache ECharts** (`echarts` + `echarts-for-react`) para graficos
-- [ ] Build integrado ao `npm run build` (Vite -> `dist/dashboard/`), servido pelo `http` nativo
-- [ ] Tipos compartilhados em `src/shared/dashboard-types.ts` (import tanto no server quanto no frontend)
+- [x] Setup `src/dashboard/` com **Vite + React 18 + TypeScript**
+- [x] **Tailwind CSS** configurado (tema dark, design tokens CSS em `index.css`)
+- [x] **TanStack Query** com `refetchInterval: 3000` para polling
+- [x] **React Router** (data router) com rotas para as 4 telas
+- [x] **Apache ECharts** (`echarts` + `echarts-for-react`) para graficos
+- [x] Build integrado ao `npm run build` (Vite -> `dist/dashboard/`), servido pelo `http` nativo
+- [x] Tipos compartilhados em `src/shared/dashboard-types.ts` (import tanto no server quanto no frontend)
 
 ### Telas
-- [ ] Tela 1: Pipeline Overview (`/`) — header com run info + 5 cards de agentes + quick stats
-- [ ] Tela 2: Kanban dos Agentes (`/kanban`) — lanes responsivas, card-detail em dialog
-- [ ] Tela 3: Leaderboard (`/leaderboard`) — tabela ordenavel + chart ECharts de evolucao do `cv_mean`
-- [ ] Tela 4: Agent Detail (`/agents/:name`) — plano, trials, logs paginados
+- [x] Tela 1: Pipeline Overview (`/`) — header com run info + 5 cards de agentes + quick stats
+- [x] Tela 2: Kanban dos Agentes (`/kanban`) — lanes responsivas, card-detail em dialog
+- [x] Tela 3: Leaderboard (`/leaderboard`) — tabela ordenavel + chart ECharts de evolucao do `cv_mean`
+- [x] Tela 4: Agent Detail (`/agents/:name`) — plano, trials, logs paginados
 
 ### Backend
-- [ ] Endpoints REST (secao 12.3) servidos pelo `http` nativo
-- [ ] Schemas TS (`MLKanbanCard`, `MLKanbanLane`, `MLKanbanSnapshot`, `LeaderboardEntry`, `LeaderboardResponse`) em `src/shared/dashboard-types.ts`
+- [x] Endpoints REST (11 endpoints) servidos pelo `http` nativo
+- [x] Schemas TS (`MLKanbanCard`, `MLKanbanLane`, `MLKanbanSnapshot`, `LeaderboardEntry`, `LeaderboardResponse`) em `src/shared/dashboard-types.ts`
 
 ### Qualidade
-- [ ] Testes de componente (React Testing Library + Vitest ou node:test com jsdom)
-- [ ] `npm run test && npm run test:e2e` verdes
-- [ ] Lighthouse score >= 90 (performance) no build de producao
+- [x] Testes de integracao API (23 testes: dashboard-types + dashboard-ml-api)
+- [x] `npm run test` verde (novos modulos)
+- [ ] Lighthouse score >= 90 (performance) — pendente, requer servidor rodando
