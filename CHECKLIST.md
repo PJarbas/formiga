@@ -1,7 +1,7 @@
 # Checklist de Implementacao — Formiga (specs.md)
 
-Status atual: **Branch 2 concluida** — pronto para iniciar Branch 3
-Branch git ativa: `refactor/rename-tamandua-to-formiga` (aguardando merge)
+Status atual: **Branch 3 concluida** — pronto para iniciar Branch 4
+Branch git ativa: `main` (Branch 3 merged via PR #2)
 
 ---
 
