@@ -1,7 +1,7 @@
 # Checklist de Implementacao — Formiga (specs.md)
 
-Status atual: **Branch 4 concluida** — pronto para iniciar Branch 5
-Branch git ativa: `refactor/fix-perf-hot-paths` (Branch 4)
+Status atual: **Branch 4 merged** — iniciando Branch 5
+Branch git ativa: `main` (Branch 4 merged via fast-forward)
 
 ---
 
