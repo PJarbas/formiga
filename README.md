@@ -5,260 +5,251 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node.js >= 22">
-  <img src="https://img.shields.io/badge/install-from%20source-orange.svg" alt="Install from source (not on npm)">
-  <img src="https://img.shields.io/badge/workflows-23%20bundled-8a2be2.svg" alt="23 bundled workflows">
-  <a href="https://igorhvr.github.io/formiga/"><img src="https://img.shields.io/badge/website-formiga-1f6feb.svg" alt="Website"></a>
+  <img src="https://img.shields.io/badge/install-from%20source-orange.svg" alt="Install from source">
+  <img src="https://img.shields.io/badge/workflows-3%20bundled-8a2be2.svg" alt="3 bundled workflows">
 </p>
 
-Build your agent team in [pi](https://github.com/mariozechner/pi-coding-agent) with one command.
-
-You don't need to hire a dev team. You need to define one. Formiga gives you a team of specialized AI agents — planner, developer, verifier, tester, reviewer — that work together in reliable, repeatable workflows. One install. Zero infrastructure.
+**Autonomous ML pipeline orchestration with competitive agent teams.** Formiga lets you define a team of specialized AI agents — Data Analyst, Feature Engineer, parallel Modelers, and an adversarial ML Critic — that work together through deterministic, repeatable workflows to find the best model for your data.
 
 ## Contents
 
-- [Install from GitHub](#install-from-github)
-- [Install from local checkout](#install-from-local-checkout)
+- [Install](#install)
 - [Quickstart](#quickstart)
-- [What You Get: Bundled Workflows](#what-you-get-bundled-workflows)
-- [Why It Works](#why-it-works)
-- [How It Works](#how-it-works)
-- [Build Your Own](#build-your-own)
-- [Native AutoResearch](#native-autoresearch)
-- [Security](#security)
+- [Architecture](#architecture)
+- [ML Pipeline](#ml-pipeline)
+- [Agent Team](#agent-team)
+- [Dashboard](#dashboard)
+- [Leaderboard](#leaderboard)
+- [AutoResearch](#autoresearch)
+- [Workflows](#workflows)
 - [Commands](#commands)
 - [Requirements](#requirements)
 - [License](#license) · [Origins](#origins)
 
-### Install from GitHub
+## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/igorhvr/formiga/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/PJarbas/formiga/main/scripts/install.sh | bash
 ```
 
-Or just tell your agent: **"Clone github.com/igorhvr/formiga to my home dir, install it and learn the skill included inside it."**
-
-### Install from local checkout
+Or from a local checkout:
 
 ```bash
-git clone https://github.com/igorhvr/formiga.git
+git clone https://github.com/PJarbas/formiga.git
 cd formiga
 ./build-and-install
 ```
 
-Or step by step:
+The `build` script requires Node.js >= 22, runs `npm install`, compiles TypeScript, and builds the React dashboard. The `install` script creates a symlink at `~/.local/bin/formiga` — keep the source wherever you like.
 
 ```bash
-./build        # npm install + tsc
-./install      # symlink into ~/.local/bin
+./build        # npm install + tsc + vite build
+./install      # symlink ~/.local/bin/formiga → this checkout
 ```
-
-The `build` script handles everything: checks Node.js >= 22, runs `npm install`, compiles TypeScript. The `install` script creates a symlink at `~/.local/bin/formiga` pointed at your checkout — so you can keep the source wherever you like and `formiga` stays in sync. Both call into `scripts/install.sh` internally.
-
-That's it. Run `formiga workflow list` to see available workflows.
-
-> **Not on npm.** Formiga is installed from source (or GitHub), not the npm registry.
-
-> **Requires Node.js >= 22.** If `formiga` fails with a `node:sqlite` error, make sure you're running real Node.js 22+, not Bun's node wrapper.
-
----
 
 ## Quickstart
 
-Sixty seconds from install to a running agent team:
-
 ```bash
-$ formiga workflow install feature-dev
+# Install bundled workflows and start services
+$ formiga get-ready
 
-# Or install all bundled workflows at once
-$ formiga workflow install --all
-✓ Installed workflow: feature-dev
+# Start the ML dashboard
+$ formiga dashboard start
 
-$ formiga workflow run feature-dev "Add user authentication with OAuth"
-Run: a1fdf573
-Workflow: feature-dev
-Status: running
-
-$ formiga workflow status "OAuth"
-Run: a1fdf573
-Workflow: feature-dev
-Steps:
-  [done   ] plan (planner)
-  [done   ] setup (setup)
-  [running] implement (developer)  Stories: 3/7 done
-  [pending] verify (verifier)
-  [pending] test (tester)
+# Run the ML pipeline on your dataset
+$ formiga workflow run just-do-it \
+    "Run the full ML pipeline on data/train.csv with target column 'price'"
 ```
 
-Then watch your team work in real time:
+Open `http://localhost:3334/ml/` to watch your agent team work in real time.
 
-```bash
-$ formiga dashboard    # web UI at http://localhost:3334
-```
+## Architecture
 
-<p align="center"><img src="www/assets/dashboard-screenshot.png" alt="Formiga dashboard showing workflow runs, step progress, and token usage statistics" width="800"></p>
-
----
-
-## What You Get: Bundled Workflows
-
-Formiga ships with 23 bundled workflows organized into six families. Use `formiga workflow list` to see available workflows, and `formiga workflow install <id>` to install one.
-
-### Worktree Variants
-
-Worktree variants (`*-worktree`, `*-merge-worktree`) run in a detached git worktree
-created from your origin repository. Your main working copy stays untouched until the
-workflow completes. This gives you full isolation — continue working while agents
-iterate — and a clean abort path: delete the worktree and nothing in your origin repo
-has changed. The origin repository only sees changes when a `-merge` variant squashes
-the result back into the original branch.
-
-### Rugpull Handling
-
-When a merge workflow (`-merge`, `-merge-worktree`) fails at the `finalize_merge`
-step and the base branch tip has moved since the run started, Formiga automatically
-launches a fresh replacement run with the same parameters. This "rugpull" detection
-runs after the final merge failure — if the base branch stayed put, no replacement is
-triggered. Pass `--no-relaunch-upon-rugpull` to `workflow run` to suppress the
-automatic replacement.
-
-### Feature Development
-
-Story-based feature development. The planner decomposes your task into ordered user
-stories. Each story goes through implement → verify → test before the next one starts.
-
-<details>
-<summary>Show the 5 Feature Development variants</summary>
-
-| Variant | Workflow ID | Agents | Pipeline |
-|---------|------------|--------|----------|
-| Local-only | `feature-dev` | 5 | plan → setup → implement → verify → test |
-| + Merge | `feature-dev-merge` | 6 | plan → setup → implement → verify → test → finalize_merge |
-| Worktree | `feature-dev-worktree` | 5 | plan → setup → implement → verify → test |
-| Worktree + Merge | `feature-dev-merge-worktree` | 6 | plan → setup → implement → verify → test → finalize_merge |
-| GitHub PR | `feature-dev-github-pr` | 6 | plan → setup → implement → verify → test → pr → review |
-
-</details>
-
-**Local-only** stops after testing — commits stay on the feature branch, no merge or
-PR. **+ Merge** variants add a `finalize_merge` step that squash-merges all commits
-back into the original branch. **Worktree** variants run isolated in a detached worktree.
-**GitHub PR** variants create a pull request and run a code review step.
-
-### Bug Fix
-
-Bug triage and fix. The triager reproduces the bug, the investigator finds the root
-cause, the fixer patches it, and the verifier confirms the fix against acceptance
-criteria.
-
-<details>
-<summary>Show the 5 Bug Fix variants</summary>
-
-| Variant | Workflow ID | Agents | Pipeline |
-|---------|------------|--------|----------|
-| Local-only | `bug-fix` | 5 | triage → investigate → setup → fix → verify |
-| + Merge | `bug-fix-merge` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
-| Worktree | `bug-fix-worktree` | 5 | triage → investigate → setup → fix → verify |
-| Worktree + Merge | `bug-fix-merge-worktree` | 6 | triage → investigate → setup → fix → verify → finalize_merge |
-| GitHub PR | `bug-fix-github-pr` | 6 | triage → investigate → setup → fix → verify → pr |
-
-</details>
-
-### Security Audit
-
-Vulnerability scanning and patching. Scans for vulnerabilities, ranks by severity,
-patches each one, re-audits after all fixes are applied, and runs regression tests.
-
-<details>
-<summary>Show the 5 Security Audit variants</summary>
-
-| Variant | Workflow ID | Agents | Pipeline |
-|---------|------------|--------|----------|
-| Local-only | `security-audit` | 6 | scan → prioritize → setup → fix → verify → test |
-| + Merge | `security-audit-merge` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
-| Worktree | `security-audit-worktree` | 6 | scan → prioritize → setup → fix → verify → test |
-| Worktree + Merge | `security-audit-merge-worktree` | 7 | scan → prioritize → setup → fix → verify → test → finalize_merge |
-| GitHub PR | `security-audit-github-pr` | 7 | scan → prioritize → setup → fix → verify → test → pr |
-
-</details>
-
-### Quarantine Broken Tests
-
-Detect failing tests, disable them minimally, and iterate until the full test suite
-passes. Useful for establishing a clean baseline on a branch with known test failures.
-
-<details>
-<summary>Show the 3 Quarantine Broken Tests variants</summary>
-
-| Variant | Workflow ID | Agents | Pipeline |
-|---------|------------|--------|----------|
-| Local-only | `quarantine-broken-tests` | 3 | setup → quarantine → verify |
-| + Merge | `quarantine-broken-tests-merge` | 4 | setup → quarantine → verify → finalize_merge |
-| Worktree + Merge | `quarantine-broken-tests-merge-worktree` | 4 | setup → quarantine → verify → finalize_merge |
-
-</details>
-
-### Quick Tasks
-
-Single-agent workflows for quick one-off tasks and workflow auto-selection.
-
-| Workflow ID | Agents | Pipeline | Description |
-|------------|--------|----------|-------------|
-| `do-now` | 1 | execute | Submit any task. Get back a success/failure report. No planning, no stories. |
-| `just-do-it` | 1 | dispatch | Describe what you want. Dispatches to the most appropriate workflow automatically. For coding tasks (feature-dev*, bug-fix*, security-audit*) it defaults to merge-worktree variants unless the prompt gives a specific reason otherwise. |
-| `do-review-do-verify` | 3 | do → review → do-again → verify | Two-pass execution: do the work, review it, revise, then verify the result. |
-
-### Maintenance & Audits
-
-Workflows for auditing and validating the project itself.
-
-| Workflow ID | Agents | Pipeline | Description |
-|------------|--------|----------|-------------|
-| `frontend-test` | 1 | test | Builds the project and validates the dashboard frontend: HTML structure, route definitions, and test coverage. Does not start a second dashboard daemon. |
-| `skills-normalize-audit` | 3 | scan → audit → report | Scans a skills directory, analyzes the skills for overlaps and redundancies, and produces consolidation recommendations in a structured report. |
-
-Install all bundled workflows at once with:
-
-```bash
-$ formiga workflow install --all
-```
-
----
-
-## Why It Works
-
-- **Deterministic workflows** — Same workflow, same steps, same order. Not "hopefully the agent remembers to test."
-- **Agents verify each other** — The developer doesn't mark their own homework. A separate verifier checks every story against acceptance criteria.
-- **Fresh context, every step** — Each agent gets a clean session. No context window bloat. No hallucinated state from 50 messages ago.
-- **Retry and escalate** — Failed steps retry automatically. If retries exhaust, it escalates to you. Nothing fails silently.
-
----
-
-## How It Works
-
-1. **Define** — Agents and steps in YAML. Each agent gets a persona, workspace, and strict acceptance criteria. No ambiguity about who does what.
-2. **Install** — One command provisions everything: agent workspaces, polling, subagent permissions. No Docker, no queues, no external services.
-3. **Run** — Agents poll for work independently. Claim a step, do the work, pass context to the next agent. SQLite tracks state. The scheduler keeps it moving.
+Formiga is a **TypeScript CLI + SQLite + polling** system. No Redis, no Kafka, no containers. Agents poll for work independently, claim steps, and pass context through the database.
 
 ```mermaid
-flowchart LR
-    CLI["formiga CLI<br/>workflow run"] -->|create run| DB[("SQLite<br/>~/.formiga/formiga.db")]
-    CLI -->|register run| Daemon["Background daemon<br/>control plane"]
-    Daemon -->|schedules polling| Agents["Agent team<br/>planner · developer · verifier · tester"]
-    Agents -->|"pi --print"| Harness["pi harness<br/>(or Hermes, alpha)"]
-    Agents -->|claim step / write results| DB
-    DB --> Dashboard["Dashboard :3334<br/>Kanban + AutoResearch panels"]
-    DB --> MCP["Remote MCP :3338<br/>14 tools"]
+flowchart TB
+    CLI["formiga CLI"] -->|workflow run| DB[("SQLite<br/>~/.formiga/formiga.db")]
+    DB --> Daemon["Background daemon<br/>control plane"]
+    Daemon -->|schedules| Agents["Agent team"]
+    Agents -->|"pi --print"| Harness["pi harness"]
+    Agents -->|claim / write| DB
+    DB --> Server["HTTP server :3334"]
+    Server --> Dash["Dashboard UI"]
+    Server --> React["ML Dashboard /ml/"]
+    Server --> MCP["Remote MCP :3338"]
 ```
 
-### Minimal by design
+### State
 
-YAML + SQLite + polling. That's it. No Redis, no Kafka, no container orchestrator. Formiga is a TypeScript CLI with zero external dependencies. It runs wherever pi runs.
+Everything lives in SQLite at `~/.formiga/formiga.db`:
 
----
+| Table | Purpose |
+|-------|---------|
+| `runs` | Workflow execution runs with status, tokens, timing |
+| `steps` | Individual agent steps with claim/complete/fail lifecycle |
+| `stories` | User stories for story-based development workflows |
+| `experiments` | ML experiment results — the leaderboard |
+| `autoresearch_sessions` | Durable optimization loop state |
+| `run_worktrees` | Git worktree isolation metadata |
 
-## Build Your Own
+## ML Pipeline
 
-The bundled workflows are starting points. Define your own agents, steps, retry logic, and verification gates in plain YAML and Markdown. If you can write a prompt, you can build a workflow.
+Formiga's core is a **competitive ML pipeline** where agents with different modeling philosophies compete to find the best solution, then an adversarial critic audits the results.
+
+```mermaid
+flowchart TD
+    Input["Dataset + Objective"] --> Analyst["Data Analyst<br/>EDA & data quality"]
+    Analyst -->|"reports/01_eda.md"| Engineer["Feature Engineer<br/>Features + Split + Baseline"]
+    Engineer -->|"artifacts/features.parquet"| FanOut{"Fan-Out<br/>(parallel)"}
+    FanOut --> Classic["Modeler Classic<br/>GBM, Linear, RF, SVM, Stacking"]
+    FanOut --> Advanced["Modeler Advanced<br/>NN, AutoML, Deep Stacking"]
+    Classic -->|"cross-pollination"| Advanced
+    Advanced -->|"cross-pollination"| Classic
+    Classic --> Leaderboard["SQLite Leaderboard"]
+    Advanced --> Leaderboard
+    Leaderboard --> Critic["ML Critic<br/>Adversarial audit"]
+    Critic -->|"reports/05_audit.md"| Output["Validated models"]
+```
+
+### How it works
+
+1. **Data Analyst** explores distributions, missing values, outliers, correlations — produces a rigorous EDA report
+2. **Feature Engineer** builds features, creates train/val/test splits, and trains a baseline model
+3. **Fan-Out**: Two modelers run in **parallel** with different approaches:
+   - **Modeler Classic**: GBM, linear models, random forest, SVM, L1 stacking
+   - **Modeler Advanced**: neural networks, AutoML, multi-level stacking
+   - They **cross-pollinate** findings in real time via inter-agent messages
+4. **Fan-In**: Results are collected and registered in the **leaderboard**
+5. **ML Critic** (read-only auditor) checks for overfitting, data leakage, and inflated metrics
+6. The best validated model wins
+
+Each round improves on the previous. The orchestrator tracks round state, timeouts, and automatic leaderboard registration.
+
+## Agent Team
+
+| Agent | Role | Tools | Model |
+|-------|------|-------|-------|
+| `data-analyst` | Exploratory data analysis | Read, Bash, Glob, Grep | Claude Sonnet |
+| `feature-engineer` | Feature extraction, splits, baseline | Read, Write, Bash, Glob, Grep | Claude Sonnet |
+| `modeler-classic` | Traditional ML (GBM, RF, SVM, Stacking) | Read, Write, Bash, Glob, Grep | Claude Opus |
+| `modeler-advanced` | Neural nets, AutoML, deep stacking | Read, Write, Bash, Glob, Grep | Claude Opus |
+| `ml-critic` | Adversarial audit (read-only) | Read, Bash, Glob, Grep | Claude Opus |
+
+Each agent has a strict persona, workspace, and acceptance criteria. The ML Critic is deliberately read-only — it audits but cannot modify models.
+
+## Dashboard
+
+The dashboard serves two UIs from the same `http` server (default port 3334):
+
+| Path | Screen | Description |
+|------|--------|-------------|
+| `/` | Workflow Kanban | Swim-lane view of workflow runs with step/story cards |
+| `/ml/` | Pipeline Overview | Active run status, 5 agent cards, quick stats |
+| `/ml/kanban` | ML Kanban | Per-agent experiment cards grouped by status |
+| `/ml/leaderboard` | Leaderboard | Sortable model table + CV mean evolution chart |
+| `/ml/agents/:name` | Agent Detail | Agent plan, trials, paginated logs |
+
+The ML dashboard is a **React 18 SPA** with real-time polling (TanStack Query, 3-second interval) and **ECharts** visualization.
+
+<p align="center"><img src="www/assets/dashboard-screenshot.png" alt="Formiga dashboard" width="800"></p>
+
+### API Endpoints
+
+All ML endpoints live under `/api/` on the same server:
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/pipeline/status` | Active pipeline run, phase, round, stats |
+| `GET /api/agents` | List all 5 ML agents with current status |
+| `GET /api/agents/:name` | Agent detail: plan, trials, last error |
+| `GET /api/agents/:name/logs` | Paginated agent logs (offset/limit) |
+| `GET /api/leaderboard` | Ranked experiments with filters and sorting |
+| `GET /api/leaderboard/:id` | Single experiment detail |
+| `GET /api/leaderboard/compare` | Compare 2+ experiments by metric |
+| `GET /api/rounds` | Round summaries for a pipeline run |
+| `GET /api/cross-findings` | Cross-pollination findings between modelers |
+| `POST /api/pipeline/pause` | Pause active pipeline |
+| `POST /api/pipeline/resume` | Resume paused pipeline |
+| `POST /api/pipeline/cancel` | Cancel active pipeline |
+
+## Leaderboard
+
+The leaderboard is a **competitive ranking** of all model experiments across rounds and agents. Every experiment is stored in SQLite with:
+
+- Model type, agent name, round number
+- Hyperparameters (JSON)
+- Train, validation, and test metrics
+- Status (SUCCESS, FAILED, AUDITED, OVERFITTED)
+- Artifact path for model binaries
+
+```bash
+# Query from the API
+curl http://localhost:3334/api/leaderboard?sortBy=cvMean&sortDir=desc
+
+# Filter by agent and round
+curl http://localhost:3334/api/leaderboard?agentName=modeler-classic&roundNumber=2
+
+# Compare two experiments
+curl "http://localhost:3334/api/leaderboard/compare?id=1&id=2"
+```
+
+The leaderboard table at `/ml/leaderboard` shows an interactive sortable grid with an ECharts line chart tracking CV mean and train mean evolution across rounds.
+
+## AutoResearch
+
+Durable, measurable optimization loops. AutoResearch stores project-local state so an agent can resume after restarts, learn from each measured run, and choose the next experiment from evidence.
+
+```bash
+# Initialize a session
+formiga autoresearch init \
+  --goal "reduce validation loss" \
+  --metric val_bpb \
+  --direction lower \
+  --command "uv run train.py"
+
+# Run one experiment
+formiga autoresearch run-experiment
+
+# Log what was learned
+formiga autoresearch log-experiment --status auto \
+  --description "lower learning rate" \
+  --hypothesis "smaller LR improves stability" \
+  --learned "validation improved, training slowed" \
+  --next-focus "test warmup schedule"
+
+# Get the next focus prompt
+formiga autoresearch next
+```
+
+Project files (live in your project directory):
+
+| File | Purpose |
+|------|---------|
+| `autoresearch.config.json` | Session config: goal, metric, direction, command |
+| `autoresearch.md` | Agent-facing objective and operating loop |
+| `autoresearch.jsonl` | Append-only run history with decisions and learning |
+| `autoresearch.sh` | Benchmark command |
+
+## Workflows
+
+Formiga ships with **3 bundled workflows** — composable primitives for agent orchestration:
+
+| Workflow | Agents | Description |
+|----------|--------|-------------|
+| `do-now` | 1 | Submit any task. Get back a success/failure report. No planning. |
+| `just-do-it` | 1 | Describe your goal. Auto-dispatches to the best approach. For ML tasks, runs the full pipeline with all 5 agents. |
+| `do-review-do-verify` | 3 | Two-pass execution: do the work, review it, revise, then verify. |
+
+Install them in one command:
+
+```bash
+formiga workflow install --all
+```
+
+### Build your own
+
+Define agents, steps, retry logic, and verification gates in YAML:
 
 ```yaml
 id: my-workflow
@@ -281,349 +272,106 @@ steps:
 
 Full guide: [docs/creating-workflows.md](docs/creating-workflows.md)
 
----
-
-## Native AutoResearch
-
-Formiga includes native AutoResearch primitives for measurable optimization loops.
-Unlike a normal workflow, AutoResearch stores durable project-local state so an
-agent can resume after restarts, learn from each measured run, and choose the next
-experiment from evidence.
-
-Use AutoResearch when the task has a reliable numeric metric and the agent should
-run a sequence of experiments instead of one batch of edits. Typical examples are
-raising test coverage, reducing validation loss, improving latency, or lowering
-cost while preserving correctness.
-
-```bash
-formiga autoresearch init \
-  --goal "reduce validation loss" \
-  --metric val_bpb \
-  --direction lower \
-  --command "uv run train.py"
-
-formiga autoresearch run-experiment
-formiga autoresearch log-experiment --status auto \
-  --description "try lower learning rate" \
-  --hypothesis "smaller LR improves stability" \
-  --learned "validation improved but training slowed" \
-  --next-focus "test warmup schedule"
-formiga autoresearch next
-
-# Inspect the loop for a Formiga workflow run
-formiga workflow autoresearch <run-id>
-```
-
-### Triggering AutoResearch
-
-AutoResearch can be driven manually from any project directory, or delegated to a
-Formiga workflow agent. In both cases the project needs a metric command that
-prints one parseable number. The command should be deterministic enough to compare
-experiments and should exclude generated or third-party code when measuring a
-project-owned objective.
-
-Manual loop:
-
-```bash
-cd /path/to/project
-
-formiga autoresearch init \
-  --goal "Increase unit test coverage to 1.000 without changing application code" \
-  --metric coverage \
-  --unit ratio \
-  --direction higher \
-  --command "./measure-test-coverage.sh" \
-  --metric-regex "^([0-9]\\.[0-9]{3})$" \
-  --checks-command "./measure-test-coverage.sh"
-
-formiga autoresearch run-experiment
-formiga autoresearch log-experiment --status auto \
-  --description "baseline coverage" \
-  --hypothesis "establish current coverage" \
-  --learned "baseline recorded" \
-  --next-focus "cover the lowest-risk uncovered module"
-formiga autoresearch next
-```
-
-Workflow-driven loop:
-
-```bash
-formiga workflow install do-now
-formiga dashboard start
-
-formiga workflow run do-now \
-  "In the target repo, create or verify ./measure-test-coverage.sh, initialize formiga autoresearch, then run 10 bounded experiments. Before each edit run formiga autoresearch next. Only add or change tests/fixtures/test config. After each experiment run formiga autoresearch run-experiment and formiga autoresearch log-experiment --status auto with description, hypothesis, learned, and next-focus. Stop and report best metric, commits, and remaining gaps." \
-  --working-directory-for-harness /path/that/contains/or/is/the/project \
-  --pi-as-harness
-```
-
-Monitor it while the workflow runs:
-
-```bash
-formiga workflow status <run-id>
-formiga workflow autoresearch <run-id>
-open http://localhost:3334
-```
-
-The dashboard's AutoResearch panel reads the run's harness working directory,
-discovers the nearest `autoresearch.config.json` / `autoresearch.jsonl`, and
-renders the experiment trace. Gray points are attempted experiments; green points
-and the green line are the kept best-so-far frontier.
-
-### Session Registry
-
-Formiga maintains a SQLite registry of AutoResearch sessions so the dashboard
-can discover them directly without scanning workflow runs. The registry lives in
-a table called `autoresearch_sessions` inside the main Formiga database
-(`~/.formiga/formiga.db`).
-
-- **Project-local files are the source of truth.** `autoresearch.config.json`,
-  `autoresearch.jsonl`, `autoresearch.md`, and `autoresearch.sh` remain on disk
-  in your project. The DB registry is an index/cache for discovery and dashboard
-  UX — it never modifies your project files.
-- **Sessions are registered automatically.** Every `formiga autoresearch` command
-  (init, run-experiment, log-experiment, status, next, loop) updates or creates
-  the registry entry for that project directory.
-- **Backfill on dashboard start.** When the dashboard starts, it scans recent
-  workflow runs for harness directories that contain AutoResearch files and
-  backfills any missing registry entries.
-
-### Pruning Stale Registry Entries
-
-Use `formiga autoresearch prune` to clean up stale registry rows without
-removing any project-local files.
-
-```bash
-# Prune sessions not updated in 30 days
-formiga autoresearch prune --older-than 30d
-
-# Prune only sessions whose project files no longer exist
-formiga autoresearch prune --older-than 7d --missing
-
-# Preview what would be pruned without deleting
-formiga autoresearch prune --older-than 30d --dry-run
-```
-
-The prune command only touches the SQLite registry — your `autoresearch.jsonl`,
-config files, and experiment history remain untouched on disk.
-
-### Example Experiment
-
-For a test-coverage loop, a single experiment should be narrow enough to explain
-before editing and measurable enough to keep or discard after the run.
-
-```bash
-# 1. Ask the ratchet what evidence should drive the next edit.
-formiga autoresearch next
-
-# Example returned focus:
-# Best run 1: 0.336 ratio
-# Next focus: cover pure helpers in batch_processor without touching application code
-
-# 2. Make one focused test-only change.
-# Example hypothesis:
-# "Adding unit tests for batch_processor pure helper functions will increase
-# coverage without requiring Spark or changing runtime code."
-
-# 3. Measure and log the result.
-formiga autoresearch run-experiment
-formiga autoresearch log-experiment --status auto \
-  --description "cover batch_processor pure helpers" \
-  --hypothesis "pure-helper tests increase coverage without Spark" \
-  --learned "coverage increased from 0.336 to 0.477; helper paths are now covered" \
-  --next-focus "cover utils.py pure helpers and runtime stubs"
-```
-
-If the metric improves in the configured direction and checks pass, the logged run
-is kept. If it regresses, crashes, or fails checks, it is logged as discarded,
-crash, or checks_failed; with `--revert-discard`, Formiga can revert non-state
-experiment files while preserving `autoresearch.jsonl`.
-
-Project files:
-
-| File | Purpose |
-|------|---------|
-| `autoresearch.config.json` | Session config: goal, metric, direction, command, parser, checks. |
-| `autoresearch.md` | Agent-facing objective and operating loop. |
-| `autoresearch.jsonl` | Append-only run history: measured results, decisions, learning, next focus. |
-| `autoresearch.sh` | Benchmark command. |
-| `autoresearch.checks.sh` | Optional correctness checks run after successful measurements. |
-
-When a workflow run was started with `--working-directory-for-harness`, the
-dashboard includes an AutoResearch panel that reads that directory's
-`autoresearch.jsonl` and shows best/baseline metrics, kept/discarded counts,
-failures, and the recent learning timeline.
-
-The core loop is `init -> run-experiment -> log-experiment -> next`. `log --status auto` classifies a
-run as `baseline`, `keep`, `discard`, `crash`, or `checks_failed` by comparing the
-latest metric with prior accepted results. The `next` prompt carries the ratchet:
-it restates the goal, best result, last learning, and next focus before the agent
-starts another experiment.
-
----
-
-## Security
-
-You're installing agent teams that run code on your machine. We take that seriously.
-
-- **Curated repo only** — Formiga only installs workflows from the official repository. No arbitrary remote sources.
-- **Reviewed for prompt injection** — Every workflow is reviewed for prompt injection attacks and malicious agent files before merging.
-- **Community contributions welcome** — Want to add a workflow? Submit a PR. All submissions go through careful security review before they ship.
-- **Transparent by default** — Every workflow is plain YAML and Markdown. You can read exactly what each agent will do before you install it.
-
----
-
 ## Commands
 
 ### Lifecycle
 
 | Command | Description |
 |---------|-------------|
-| `formiga get-ready` | Install bundled workflows and start dashboard/control plane |
+| `formiga get-ready` | Install bundled workflows, start dashboard and control plane |
 | `formiga source-path` | Print the Formiga source checkout path |
-| `formiga skill-path` | Print the path to the bundled formiga-agents agent skill |
-| `formiga update [--force]` | Pull the source checkout, rebuild, reinstall workflows, and restart previously running services |
+| `formiga skill-path` | Print path to bundled formiga-agents skill |
+| `formiga update [--force]` | Pull source, rebuild, reinstall workflows, restart services |
 | `formiga uninstall [--force]` | Full teardown (agents, crons, DB) |
+| `formiga status` | Show system status: services, paths, runs, processes |
 
 ### Workflows
 
 | Command | Description |
 |---------|-------------|
-| `formiga workflow run <id> <task> [--working-directory-for-harness <dir>] [--pi-as-harness \| --hermes-as-harness]` | Start a run (defaults harness CWD to your current directory) |
+| `formiga workflow run <id> <task>` | Start a run |
 | `formiga workflow status <query>` | Check run status |
 | `formiga workflow runs` | List all runs |
-| `formiga workflow resume <run-id>` | Resume a failed run |
-| `formiga workflow delete <run-id> [--force]` | Permanently delete a workflow run and associated data |
 | `formiga workflow list` | List available workflows |
-| `formiga workflow install <id> [--all]` | Install one or all workflows |
-| `formiga workflow uninstall <id>` | Remove a single workflow |
+| `formiga workflow install <id>` | Install a workflow |
+| `formiga workflow uninstall <id>` | Remove a workflow |
+| `formiga workflow pause <run-id>` | Pause a running workflow |
+| `formiga workflow resume <run-id>` | Resume a paused workflow |
+| `formiga workflow delete <run-id>` | Permanently delete a run |
 
-### Management
+### Dashboard & MCP
 
 | Command | Description |
 |---------|-------------|
-| `formiga dashboard` | Start the web dashboard (also starts remote MCP on `http://localhost:3338/mcp`) |
-| `formiga logs [<lines>|<run-id>|#<run-number>]` | View recent log entries |
-| `formiga logs-tail [<lines>|<run-id>|#<run-number>]` | Follow recent activity as new events arrive |
-| `formiga nudge` | Wake all scheduled agents for running runs to poll immediately |
+| `formiga dashboard start` | Start web UI at `http://localhost:3334` + remote MCP at `http://localhost:3338/mcp` |
+| `formiga dashboard stop` | Stop dashboard daemon |
+| `formiga dashboard status` | Verify both endpoints are up |
 
-When you start the management dashboard (`formiga dashboard`), Formiga automatically starts the remote MCP server too.
+### Remote MCP Tools
 
-- Dashboard: `http://localhost:3334` (or your custom `--port`)
-- MCP endpoint: `http://localhost:3338/mcp` (fixed port)
-
-Use `formiga dashboard status` to verify both endpoints are up.
-
-#### Kanban view
-
-Each run also has a swim-lane view at `http://localhost:3334/runs/<run-id>/kanban`
-(linked from the run-ID in the dashboard's runs table). Lanes are derived
-dynamically from the workflow's steps: single steps render one card per lane,
-loop steps (e.g. the developer agent iterating over user stories) render one
-card per story. Cards are colour-coded by status (todo / running / done /
-failed) and the page polls `/api/runs/<run-id>/kanban` every 3 seconds. The
-JSON endpoint is also useful for external integrations — see
-`src/server/kanban-data.ts` for the response shape.
-
-<p align="center"><img src="www/assets/dashboard-kanban.png" alt="Formiga kanban board showing swim-lane workflow step cards colour-coded by status" width="800"></p>
-
-### Harness Selection
-
-By default, Formiga uses **pi** (`pi --print`) as its agent harness. You can
-override this with the harness selection flags on `formiga workflow run`:
-
-| Flag | Description |
-|------|-------------|
-| `--pi-as-harness` | Use pi as the agent harness. **This is the default.** |
-| `--hermes-as-harness` | Use [Hermes](https://github.com/nicholasgasior/hermes) as the agent harness instead of pi. |
-
-These flags are **mutually exclusive** — specifying both is an error.
-
-#### Hermes Support (Alpha)
-
-> **⚠️ Alpha quality.** Hermes harness support is in **alpha** and has known
-> limitations: it is **very slow** compared to pi, and **token accounting is
-> broken** (token usage numbers in runs and the dashboard will be inaccurate).
-> Use pi (`--pi-as-harness`) for production workflows.
-
-To use a custom Hermes binary path, set the `FORMIGA_HERMES_BINARY`
-environment variable:
-
-```bash
-export FORMIGA_HERMES_BINARY=/path/to/hermes
-```
-
-If `FORMIGA_HERMES_BINARY` is not set, Formiga searches for `hermes` on your
-`PATH`. The harness validation runs at scheduling time — if the Hermes binary
-isn't found or isn't executable, the run fails immediately with a clear error.
-
-### Remote MCP tools
-
-The remote MCP endpoint exposes 14 tools:
-
-#### Run Management
+The MCP endpoint exposes 14 tools for external agent integration:
 
 | Tool | Description |
 |------|-------------|
-| `formiga.runs.list` | List recent Formiga workflow runs. Accepts optional `limit` (integer, 1–200, default 50). |
-| `formiga.run.status` | Fetch detailed status for a run. Requires `query` (run id, prefix, or task substring). |
-| `formiga.run.start` | Start a workflow run. Requires `workflowId` and `taskTitle`. |
-| `formiga.run.pause` | Pause a running workflow run. Requires `runId`. Optional `drain` (boolean) to wait for in-flight work before pausing. |
-| `formiga.run.resume` | Resume a paused workflow run. Requires `runId`. |
-| `formiga.run.delete` | Permanently delete a workflow run and associated steps, stories, and worktree metadata. Requires `runId`. Optional `force` (boolean) cancels and deletes running or paused runs. |
+| `formiga.runs.list` | List recent workflow runs |
+| `formiga.run.status` | Detailed run status |
+| `formiga.run.start` | Start a workflow run |
+| `formiga.run.pause` / `.resume` | Pause/resume runs |
+| `formiga.run.delete` | Delete a run and all associated data |
+| `formiga.events.recent` | Recent global events |
+| `formiga.source.path` | Formiga source checkout path |
+| `formiga.skill.path` | Bundled skill path |
+| `formiga.update.command` | Update guidance |
+| `formiga.autoresearch.init` | Create AutoResearch session |
+| `formiga.autoresearch.run_experiment` | Run experiment command |
+| `formiga.autoresearch.log_experiment` | Log decision and learning |
+| `formiga.autoresearch.status` | Summarize experiment loop |
 
-#### Events & Metadata
+### AutoResearch
 
-| Tool | Description |
-|------|-------------|
-| `formiga.events.recent` | List recent global Formiga events. Accepts optional `limit` (integer, 1–500, default 50). |
-| `formiga.source.path` | Return the local Formiga source checkout path. No parameters. |
-| `formiga.skill.path` | Return the path to the bundled formiga-agents agent skill. No parameters. |
-| `formiga.update.command` | Return local CLI guidance for updating Formiga safely. No parameters. |
+| Command | Description |
+|---------|-------------|
+| `formiga autoresearch init` | Create project-local session |
+| `formiga autoresearch run-experiment` | Execute experiment command |
+| `formiga autoresearch log-experiment` | Record learning and decision |
+| `formiga autoresearch status` | Summarize experiment loop |
+| `formiga autoresearch next` | Print next experiment prompt |
+| `formiga autoresearch loop` | Run bounded experiment loop |
+| `formiga autoresearch prune` | Clean stale registry entries |
 
-#### AutoResearch
+### Logs & Debugging
 
-| Tool | Description |
-|------|-------------|
-| `formiga.autoresearch.init` | Create project-local AutoResearch state. Requires `cwd`, `goal`, `metricName`, `direction`, and `command`. Optional `metricUnit`, `metricRegex`, `checksCommand`, and `overwrite`. |
-| `formiga.autoresearch.run_experiment` | Run the configured experiment command in `cwd`, parse the metric, run optional checks, and append a `run_result`. Optional `command`, `metricRegex`, `checksCommand`, and `timeoutMs`. |
-| `formiga.autoresearch.log_experiment` | Append the decision and learning for the latest run. Requires `cwd` and `description`; optional `status`, `metric`, `hypothesis`, `learned`, `nextFocus`, `commit`, and `revertDiscard`. |
-| `formiga.autoresearch.status` | Summarize baseline, best result, failures, and the next ratchet prompt for `cwd`. |
-
-#### `formiga.run.start` Parameters
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `workflowId` | Yes | Workflow id to run. |
-| `taskTitle` | Yes | Task description for the workflow run. |
-| `workingDirectoryForHarness` | For direct workflows | Harness working directory for remote MCP runs. Required for direct workflows, invalid for worktree workflows. |
-| `worktreeOriginRepository` | For worktree workflows | Repository path to create the worktree from. Required for worktree workflows, invalid for direct workflows. |
-| `worktreeOriginRef` | No | Git ref (branch, tag, SHA) for the worktree. Optional. Only valid for worktree workflows. |
-| `noHurrySaveTokensMode` | No | When `true`, reduces polling frequency to save tokens (15-min floor, 15-min default instead of 1-min floor, 5-min default). Optional, defaults to `false`. |
-
-`workingDirectoryForHarness` and `worktreeOriginRepository` are **mutually exclusive**: direct workflows require the former, worktree workflows require the latter. Supplying the wrong one or both results in an invalid-params error.
-
----
+| Command | Description |
+|---------|-------------|
+| `formiga logs [<lines>\|<run-id>\|#<run-number>]` | View recent events |
+| `formiga logs-tail [<lines>\|<run-id>\|#<run-number>]` | Follow events in real time |
+| `formiga nudge` | Wake all scheduled agents immediately |
 
 ## Requirements
 
-- Node.js >= 22
-- [pi](https://github.com/mariozechner/pi-coding-agent) installed on the host
-  - Formiga uses pi for AI agent execution. Agents run via `pi --print` in non-interactive mode.
-- `gh` CLI for PR creation steps
+- **Node.js >= 22** (native `node:sqlite`)
+- **[pi](https://github.com/mariozechner/pi-coding-agent)** — AI coding agent CLI used as the agent harness
+- **`gh` CLI** — for GitHub PR integration
 
----
+## Development
+
+```bash
+# Build from source
+./build
+
+# Run tests (unit + integration, parallel-safe)
+npm test
+
+# Run e2e smoke tests (fast, no real agents)
+./run-all-e2e-tests
+```
+
+Tests use Node's built-in `node:test` runner with isolated temporary HOME directories — safe for parallel execution. See [AGENTS.md](AGENTS.md) for architecture details, project structure, and development conventions.
 
 ## License
 
 [MIT](LICENSE)
 
----
-
 ## Origins
 
-Formiga began as a fork of [antfarm](https://github.com/snarktank/antfarm) and pursues the same goal — orchestrating teams of AI agents through deterministic, repeatable workflows — but is built on top of [pi](https://github.com/mariozechner/pi-coding-agent) instead of OpenClaw. Credit to the original authors for the design and inspiration.
-
----
-
-Built with Tamanduás in mind.
+Formiga began as a fork of [antfarm](https://github.com/snarktank/antfarm) and pursues the same goal — orchestrating teams of AI agents through deterministic, repeatable workflows — built on top of [pi](https://github.com/mariozechner/pi-coding-agent). Credit to the original authors for the design and inspiration.
