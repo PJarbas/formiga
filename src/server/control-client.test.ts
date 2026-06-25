@@ -39,7 +39,7 @@ async function jsonRequest(
   const headers: Record<string, string> = {
     "content-type": "application/json",
   };
-  if (secret) headers["x-tamandua-secret"] = secret;
+  if (secret) headers["x-formiga-secret"] = secret;
   if (payload) headers["content-length"] = String(Buffer.byteLength(payload));
 
   return await new Promise<JsonResponse>((resolve, reject) => {
@@ -137,16 +137,16 @@ describe("control client", { concurrency: 1 }, () => {
       return;
     }
 
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cc-home-"));
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-cc-home-"));
     daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
-      env: cleanChildEnv({ HOME: tempHome, TAMANDUA_CONTROL_PORT: String(controlPort) }),
+      env: cleanChildEnv({ HOME: tempHome, FORMIGA_CONTROL_PORT: String(controlPort) }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     daemon.stdout?.resume();
     daemon.stderr?.resume();
 
     await waitForControlUp();
-    secret = fs.readFileSync(path.join(tempHome, ".tamandua", "daemon-secret"), "utf-8").trim();
+    secret = fs.readFileSync(path.join(tempHome, ".formiga", "daemon-secret"), "utf-8").trim();
     assert.ok(secret && secret.length > 0, "daemon secret should be created on startup");
   });
 
@@ -181,7 +181,7 @@ describe("control client", { concurrency: 1 }, () => {
     await sleep(1500);
 
     // Insert a running run so there's something to nudge (even if no agents are scheduled).
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -191,13 +191,13 @@ describe("control client", { concurrency: 1 }, () => {
     ).run(runId, now, now, now);
     db.close();
 
-    // control-client reads the daemon secret from ~/.tamandua/daemon-secret
-    // and the control port from TAMANDUA_CONTROL_PORT. Set both to match the
+    // control-client reads the daemon secret from ~/.formiga/daemon-secret
+    // and the control port from FORMIGA_CONTROL_PORT. Set both to match the
     // test daemon's tempHome so nudgeWithDaemon reaches the correct daemon.
     const savedHome = process.env.HOME;
-    const savedControlPort = process.env.TAMANDUA_CONTROL_PORT;
+    const savedControlPort = process.env.FORMIGA_CONTROL_PORT;
     process.env.HOME = tempHome;
-    process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
+    process.env.FORMIGA_CONTROL_PORT = String(controlPort);
 
     // Dynamic import to get a fresh module after setting env vars.
     const { nudgeWithDaemon } = await import("../../dist/server/control-client.js");
@@ -206,9 +206,9 @@ describe("control client", { concurrency: 1 }, () => {
     // Restore env
     process.env.HOME = savedHome;
     if (savedControlPort !== undefined) {
-      process.env.TAMANDUA_CONTROL_PORT = savedControlPort;
+      process.env.FORMIGA_CONTROL_PORT = savedControlPort;
     } else {
-      delete process.env.TAMANDUA_CONTROL_PORT;
+      delete process.env.FORMIGA_CONTROL_PORT;
     }
 
     assert.ok(response !== null, "nudgeWithDaemon should return a response when daemon is up");
@@ -227,18 +227,18 @@ describe("control client", { concurrency: 1 }, () => {
     // secret as no-auth). nudgeWithDaemon uses controlRequest which resolves
     // with null on connection error.
     const savedHome = process.env.HOME;
-    const savedControlPort = process.env.TAMANDUA_CONTROL_PORT;
-    process.env.HOME = "/nonexistent-tamandua-test-home";
-    process.env.TAMANDUA_CONTROL_PORT = "65530";
+    const savedControlPort = process.env.FORMIGA_CONTROL_PORT;
+    process.env.HOME = "/nonexistent-formiga-test-home";
+    process.env.FORMIGA_CONTROL_PORT = "65530";
 
     const { nudgeWithDaemon } = await import("../../dist/server/control-client.js");
     const response = await nudgeWithDaemon(500);
 
     process.env.HOME = savedHome;
     if (savedControlPort !== undefined) {
-      process.env.TAMANDUA_CONTROL_PORT = savedControlPort;
+      process.env.FORMIGA_CONTROL_PORT = savedControlPort;
     } else {
-      delete process.env.TAMANDUA_CONTROL_PORT;
+      delete process.env.FORMIGA_CONTROL_PORT;
     }
 
     assert.equal(response, null, "nudgeWithDaemon should return null when daemon is unreachable");

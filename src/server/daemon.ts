@@ -1,15 +1,15 @@
 /**
- * Tamandua Dashboard Daemon
+ * Formiga Dashboard Daemon
  *
  * Runs the dashboard server.
  *
- * - Reads dashboard port from ~/.tamandua/port
+ * - Reads dashboard port from ~/.formiga/port
  * - Dashboard listens on configured port (default fallback 3333)
- * - Writes PID file on start (~/.tamandua/tamandua.pid)
+ * - Writes PID file on start (~/.formiga/formiga.pid)
  * - Cleans up PID file on exit
  *
  * CLI flags:
- *   [port]          Dashboard port (positional, overridden by ~/.tamandua/port)
+ *   [port]          Dashboard port (positional, overridden by ~/.formiga/port)
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -24,8 +24,8 @@ import {
 } from "./control-server.js";
 import { shutdownAllCrons } from "../installer/agent-scheduler.js";
 
-const PID_FILE = path.join(os.homedir(), ".tamandua", "tamandua.pid");
-const PORT_FILE = path.join(os.homedir(), ".tamandua", "port");
+const PID_FILE = path.join(os.homedir(), ".formiga", "formiga.pid");
+const PORT_FILE = path.join(os.homedir(), ".formiga", "port");
 
 interface DaemonArgs {
   dashboardPort: number;
@@ -132,7 +132,7 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  console.log(`Tamandua daemon received ${signal}, shutting down...`);
+  console.log(`Formiga daemon received ${signal}, shutting down...`);
 
   await stopListeners();
   cleanupPidFile();
@@ -182,7 +182,7 @@ async function bootstrap(): Promise<void> {
     controlServer = await startControlServer({ port: controlPort, secret });
     reconciler = startReconciler();
     console.log(
-      `Tamandua control plane listening on http://127.0.0.1:${controlPort} (pid ${process.pid})`,
+      `Formiga control plane listening on http://127.0.0.1:${controlPort} (pid ${process.pid})`,
     );
   } catch (err) {
     console.error(
@@ -195,7 +195,7 @@ async function bootstrap(): Promise<void> {
   }
 
   console.log(
-    `Tamandua dashboard daemon started on port ${dashboardPort} (pid ${process.pid})`,
+    `Formiga dashboard daemon started on port ${dashboardPort} (pid ${process.pid})`,
   );
 }
 

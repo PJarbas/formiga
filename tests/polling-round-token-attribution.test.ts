@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 const repoRoot = process.cwd();
 
 function createTempHome() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-token-attribution-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-polling-token-attribution-"));
   const homeDir = path.join(root, "home");
   fs.mkdirSync(homeDir, { recursive: true });
   return { root, homeDir };
@@ -128,7 +128,7 @@ describe("polling-round token attribution", () => {
           await executePollingRound(job, agent);
 
           const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const eventsPath = path.join(process.env.HOME, ".tamandua", "events", runId + ".jsonl");
+          const eventsPath = path.join(process.env.HOME, ".formiga", "events", runId + ".jsonl");
           const events = fs.existsSync(eventsPath)
             ? fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
             : [];
@@ -143,7 +143,7 @@ describe("polling-round token attribution", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -207,9 +207,9 @@ describe("polling-round token attribution", () => {
           await executePollingRound(job, agent);
 
           const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const systemRow = db.prepare("SELECT system_tokens_spent FROM tamandua_stats WHERE id = 1").get()
+          const systemRow = db.prepare("SELECT system_tokens_spent FROM formiga_stats WHERE id = 1").get()
             ?? { system_tokens_spent: 0 };
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logPath = path.join(process.env.HOME, ".formiga", "formiga.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
 
           console.log(JSON.stringify({
@@ -221,7 +221,7 @@ describe("polling-round token attribution", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -286,9 +286,9 @@ describe("polling-round token attribution", () => {
 
           const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
           const systemTokens = getSystemTokenSpend();
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logPath = path.join(process.env.HOME, ".formiga", "formiga.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
-          const eventsPath = path.join(process.env.HOME, ".tamandua", "events", "system.jsonl");
+          const eventsPath = path.join(process.env.HOME, ".formiga", "events", "system.jsonl");
           const events = fs.existsSync(eventsPath)
             ? fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
             : [];
@@ -305,7 +305,7 @@ describe("polling-round token attribution", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -364,7 +364,7 @@ describe("polling-round token attribution", () => {
           await executePollingRound(job, agent);
 
           const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logPath = path.join(process.env.HOME, ".formiga", "formiga.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
           const logLines = logContent.split(/\\r?\\n/).filter(Boolean);
 
@@ -381,7 +381,7 @@ describe("polling-round token attribution", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -441,7 +441,7 @@ describe("polling-round token attribution", () => {
 
           const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
           const systemTokens = getSystemTokenSpend();
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logPath = path.join(process.env.HOME, ".formiga", "formiga.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
 
           console.log(JSON.stringify({
@@ -452,7 +452,7 @@ describe("polling-round token attribution", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -521,7 +521,7 @@ describe("polling-round token attribution", () => {
           await executePollingRound(job, agent);
 
           const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logPath = path.join(process.env.HOME, ".formiga", "formiga.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
           const logLines = logContent.split(/\\r?\\n/).filter(Boolean);
 
@@ -540,7 +540,7 @@ describe("polling-round token attribution", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 

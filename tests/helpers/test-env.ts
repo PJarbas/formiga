@@ -42,13 +42,13 @@ export function cleanChildEnv(
   }
 
   const homeDir = env.HOME?.trim();
-  const configuredStateDir = env.TAMANDUA_STATE_DIR?.trim();
-  const stateDir = configuredStateDir || (homeDir ? path.join(homeDir, ".tamandua") : undefined);
+  const configuredStateDir = env.FORMIGA_STATE_DIR?.trim();
+  const stateDir = configuredStateDir || (homeDir ? path.join(homeDir, ".formiga") : undefined);
   if (stateDir) {
-    env.TAMANDUA_STATE_DIR = stateDir;
-    env.TAMANDUA_DB_PATH = env.TAMANDUA_DB_PATH?.trim() || path.join(stateDir, "tamandua.db");
-    env.TAMANDUA_WORKTREE_ROOT =
-      env.TAMANDUA_WORKTREE_ROOT?.trim() || path.join(stateDir, "worktrees");
+    env.FORMIGA_STATE_DIR = stateDir;
+    env.FORMIGA_DB_PATH = env.FORMIGA_DB_PATH?.trim() || path.join(stateDir, "formiga.db");
+    env.FORMIGA_WORKTREE_ROOT =
+      env.FORMIGA_WORKTREE_ROOT?.trim() || path.join(stateDir, "worktrees");
   }
 
   return env;

@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { execSync, execFileSync } from "node:child_process";
 import { getDb } from "../db.js";
-import { resolveWorkflowDir, resolveTamanduaCli } from "./paths.js";
+import { resolveWorkflowDir, resolveFormigaCli } from "./paths.js";
 import { teardownWorkflowCronsIfIdle } from "./agent-scheduler.js";
 import { emitEvent } from "./events.js";
 import { logger } from "../lib/logger.js";
@@ -206,12 +206,12 @@ function emitRunTerminalEvent(params: {
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Get the workspace path for a Tamandua agent by its id.
- * Reads from ~/.tamandua/agents.json (a JSON array of agent configs with workspace paths).
+ * Get the workspace path for a Formiga agent by its id.
+ * Reads from ~/.formiga/agents.json (a JSON array of agent configs with workspace paths).
  */
 export function getAgentWorkspacePath(agentId: string): string | null {
   try {
-    const configPath = path.join(os.homedir(), ".tamandua", "agents.json");
+    const configPath = path.join(os.homedir(), ".formiga", "agents.json");
     const raw = fs.readFileSync(configPath, "utf-8");
     const config = JSON.parse(raw);
     const agents: Array<{ id: string; workspace?: string }> = Array.isArray(config) ? config : [];

@@ -1,11 +1,11 @@
 # Checklist de Implementacao — Formiga (specs.md)
 
-Status atual: **Branch 1 em andamento**
-Branch git ativa: `refactor/remove-orphan-code`
+Status atual: **Branch 2 concluida** — pronto para iniciar Branch 3
+Branch git ativa: `refactor/rename-tamandua-to-formiga` (aguardando merge)
 
 ---
 
-## Branch 1: refactor/remove-orphan-code [EM ANDAMENTO]
+## Branch 1: refactor/remove-orphan-code [CONCLUIDA]
 
 ### Deletados (fonte)
 - [x] `src/server/mcp-server.ts` + test
@@ -43,34 +43,28 @@ Branch git ativa: `refactor/remove-orphan-code`
 - [x] Limpos exports de `src/index.ts` (update, mcp-server, symlink)
 - [x] Stub inline de `parsePiOutputStream` em `autoresearch.ts`
 
-### Pendente
-- [ ] Ajustar/stub imports remanescentes em:
-  - `src/autoresearch/autoresearch.test.ts`
-  - `src/server/daemon.ts`
-  - `src/server/dashboard.ts`
-  - `src/server/daemonctl.ts`
-  - `src/server/control-server.ts`
-  - `src/cli/cli.ts`
-  - `src/cli/status-format.ts`
-  - `src/installer/agent-scheduler.ts`
-  - `src/installer/status.ts`
-  - `src/installer/step-ops.ts`
-  - `src/installer/install.ts`
-  - `src/installer/run.ts`
-- [ ] Ajustar/deletar testes restantes que dependem dos orfaos
-- [ ] `npm run test` verde (ou pelo menos sem regressao)
-- [ ] `git commit` da Branch 1
+### Fixes adicionais (commit d9edb7c)
+- [x] Ajustados imports remanescentes em todos arquivos sob `src/`
+- [x] Deletados/alinhados testes que dependiam dos orfaos
+- [x] `processHomeMatches` em `daemonctl.ts` ganhou branch darwin (`ps eww`)
+- [x] Race de cleanup ENOTEMPTY em 4 testes de integracao do daemon
+- [x] 1463/1463 testes verdes
+- [x] Branch 1 merged em `main` (fast-forward)
 
 ---
 
-## Branch 2: refactor/rename-tamandua-to-formiga [PENDENTE]
+## Branch 2: refactor/rename-tamandua-to-formiga [CONCLUIDA]
 
-- [ ] `package.json`: name, bin
-- [ ] `bin/tamandua` -> `bin/formiga`
-- [ ] Find&replace identificadores (TamanduaXxx -> FormigaXxx, defaultTamanduaDir -> defaultFormigaDir, etc)
-- [ ] README, AGENTS.md, scripts, dashboard CSS/HTML
-- [ ] Vars de ambiente + paths default
-- [ ] `npm run test && npm run build` verdes
+- [x] `package.json`: name (formiga), bin (formiga)
+- [x] `bin/tamandua` -> `bin/formiga` (git mv)
+- [x] `skills/tamandua-agents` -> `skills/formiga-agents` (git mv)
+- [x] Find&replace global (143 arquivos via sed, 3 padroes case-preserving)
+- [x] Identificadores TS (FormigaMcpServer, defaultFormigaDir, etc) renomeados
+- [x] README, AGENTS.md, scripts, dashboard CSS/HTML atualizados
+- [x] Vars de ambiente + paths default atualizados (FORMIGA_*)
+- [x] `specs.md` preservado com ambos os nomes (documenta migracao)
+- [x] `npm run build` verde (artefato: formiga@0.1.0)
+- [x] `npm run test` verde (1463/1463)
 
 ---
 

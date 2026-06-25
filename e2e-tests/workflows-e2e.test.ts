@@ -1,7 +1,7 @@
 /******************************************************************************
  * ⚠️  WARNING: SLOW, EXPENSIVE REAL E2E TEST — DO NOT RUN BY DEFAULT  ⚠️
  *
- * This test runs REAL Tamandua workflow executions with a LIVE daemon and
+ * This test runs REAL Formiga workflow executions with a LIVE daemon and
  * scheduler processing steps through actual agent invocations (pi/llm calls).
  *
  * COST/TIME WARNING:
@@ -12,7 +12,7 @@
  *
  * WHEN TO RUN:
  *   - After major changes to the daemon, scheduler, or agent polling infra
- *   - To validate the full Tamandua pipeline end-to-end
+ *   - To validate the full Formiga pipeline end-to-end
  *   - Only via: ./run-all-real-e2e-tests
  *
  * WHEN NOT TO RUN:
@@ -29,10 +29,10 @@
  * TEST ISOLATION:
  *   - Uses temp HOME isolation via createTempHome()
  *   - Uses reserveDistinctRandomPorts() — no default ports (3334/3338/3339)
- *   - Daemon runs in isolated HOME/TAMANDUA_STATE_DIR
+ *   - Daemon runs in isolated HOME/FORMIGA_STATE_DIR
  *   - Worktree directories are created under the isolated HOME (os.homedir()
  *     respects HOME env var), so cleanupTempHome() removes them
- *   - All .tamandua state (DB, events, logs, PID/port files) is in the
+ *   - All .formiga state (DB, events, logs, PID/port files) is in the
  *     isolated temp HOME and removed by cleanupTempHome()
  *   - after() hook + per-test finally blocks guarantee cleanup on failure
  *
@@ -173,7 +173,7 @@ describe(
             ],
             baseEnv(env.homeDir, env.controlPort),
           );
-          const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
+          const runId = resolveFullRunId(runIdPrefix, env.formigaDir);
 
           // ── Wait for completion ──────────────────────────────────
           await waitForRunTerminal(
@@ -301,7 +301,7 @@ describe(
             ],
             baseEnv(env.homeDir, env.controlPort),
           );
-          const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
+          const runId = resolveFullRunId(runIdPrefix, env.formigaDir);
 
           // ── Wait for completion ──────────────────────────────────
           await waitForRunTerminal(

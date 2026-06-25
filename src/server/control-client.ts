@@ -1,8 +1,8 @@
 /**
- * Tamandua Daemon Control Plane Client
+ * Formiga Daemon Control Plane Client
  *
  * Thin HTTP client used by the CLI / MCP / installer paths to talk to
- * the daemon's control plane on 127.0.0.1:3339 (or TAMANDUA_CONTROL_PORT).
+ * the daemon's control plane on 127.0.0.1:3339 (or FORMIGA_CONTROL_PORT).
  *
  * All operations are best-effort: if the daemon isn't running, the calling
  * path falls back to in-process scheduling so local development and test
@@ -36,7 +36,7 @@ async function controlRequest(
     path,
     headers: {
       "content-type": "application/json",
-      ...(secret ? { "x-tamandua-secret": secret } : {}),
+      ...(secret ? { "x-formiga-secret": secret } : {}),
       ...(payload ? { "content-length": Buffer.byteLength(payload).toString() } : {}),
     },
   };
@@ -92,7 +92,7 @@ export async function ensureDaemonControlAvailable(timeoutMs: number = 10_000): 
 
   if (!(await waitForDaemonControl(timeoutMs))) {
     throw new Error(
-      `Tamandua daemon started but control plane did not become reachable on port ${getControlPort()}.`,
+      `Formiga daemon started but control plane did not become reachable on port ${getControlPort()}.`,
     );
   }
 }

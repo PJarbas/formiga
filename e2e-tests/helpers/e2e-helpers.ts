@@ -2,8 +2,8 @@
  * Helpers for real end-to-end workflow tests.
  *
  * These helpers manage daemon lifecycle and workflow run polling for the
- * slow real e2e tests. They use isolated HOME/TAMANDUA_STATE_DIR to avoid
- * touching live Tamandua state.
+ * slow real e2e tests. They use isolated HOME/FORMIGA_STATE_DIR to avoid
+ * touching live Formiga state.
  *
  * IMPORTANT: The real e2e tests using these helpers are SLOW and spend
  * real model tokens.  Do not run them as part of regular test suites.
@@ -40,7 +40,7 @@ export function isSuccessfulRunTerminalStatus(status: string): boolean {
 /**
  * Poll for a workflow run to reach a terminal status.
  *
- * Calls `tamandua workflow status <runId>` at regular intervals and
+ * Calls `formiga workflow status <runId>` at regular intervals and
  * parses the output to extract the current status. Returns the terminal
  * status string ("completed", "failed", or "canceled") when reached.
  * "done" is also accepted as a legacy success alias.
@@ -89,9 +89,9 @@ export async function pollForRunCompletion(
  * Start an isolated daemon process.
  *
  * Spawns the daemon.js script with an isolated HOME directory (so all
- * PID, port, DB, and log files go to the temp ~/.tamandua directory).
+ * PID, port, DB, and log files go to the temp ~/.formiga directory).
  *
- * The ~/.tamandua/port file in the isolated HOME must already exist
+ * The ~/.formiga/port file in the isolated HOME must already exist
  * before calling this (createTempHome from smoke-helpers handles this).
  *
  * Waits for the daemon to print its "control plane listening" message
@@ -132,7 +132,7 @@ export function startIsolatedDaemon(
 
     const onData = (chunk: Buffer) => {
       output += chunk.toString("utf-8");
-      if (!resolved && output.includes("Tamandua control plane listening")) {
+      if (!resolved && output.includes("Formiga control plane listening")) {
         resolved = true;
         clearTimeout(timeout);
         resolve(child);

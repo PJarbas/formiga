@@ -16,12 +16,12 @@ describe("run_worktrees table migration", () => {
   let origDbPath: string | undefined;
 
   before(() => {
-    tempHome = mkdtempSync(path.join(os.tmpdir(), "tamandua-db-test-"));
+    tempHome = mkdtempSync(path.join(os.tmpdir(), "formiga-db-test-"));
     origHome = process.env.HOME;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origDbPath = process.env.FORMIGA_DB_PATH;
     // Isolate DB to temp directory by changing HOME
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_DB_PATH;
+    delete process.env.FORMIGA_DB_PATH;
   });
 
   after(() => {
@@ -31,9 +31,9 @@ describe("run_worktrees table migration", () => {
       delete process.env.HOME;
     }
     if (origDbPath) {
-      process.env.TAMANDUA_DB_PATH = origDbPath;
+      process.env.FORMIGA_DB_PATH = origDbPath;
     } else {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
     rmSync(tempHome, { recursive: true, force: true });
   });
@@ -133,7 +133,7 @@ describe("run_worktrees table migration", () => {
     assert.ok(tableExists(db, "runs"), "runs table should exist");
     assert.ok(tableExists(db, "steps"), "steps table should exist");
     assert.ok(tableExists(db, "stories"), "stories table should exist");
-    assert.ok(tableExists(db, "tamandua_stats"), "tamandua_stats table should exist");
+    assert.ok(tableExists(db, "formiga_stats"), "formiga_stats table should exist");
 
     // Core runs columns should still be present
     const runCols = columnNames(db, "runs");
@@ -158,9 +158,9 @@ describe("run_worktrees table migration", () => {
     assert.ok(storyCols.has("story_id"), "stories.story_id should exist");
     assert.ok(storyCols.has("status"), "stories.status should exist");
 
-    // tamandua_stats should still be present
-    const statsCols = columnNames(db, "tamandua_stats");
-    assert.ok(statsCols.has("system_tokens_spent"), "tamandua_stats.system_tokens_spent should exist");
+    // formiga_stats should still be present
+    const statsCols = columnNames(db, "formiga_stats");
+    assert.ok(statsCols.has("system_tokens_spent"), "formiga_stats.system_tokens_spent should exist");
   });
 
   it("migration is idempotent (second call does nothing harmful)", () => {
@@ -306,19 +306,19 @@ describe("run_worktrees table migration", () => {
 });
 
 describe("getDbPath", () => {
-  it("returns path ending with .tamandua/tamandua.db under HOME", () => {
+  it("returns path ending with .formiga/formiga.db under HOME", () => {
     const result = getDbPath();
-    assert.ok(result.endsWith(path.join(".tamandua", "tamandua.db")), `expected path ending with .tamandua/tamandua.db, got ${result}`);
+    assert.ok(result.endsWith(path.join(".formiga", "formiga.db")), `expected path ending with .formiga/formiga.db, got ${result}`);
   });
 
-  it("respects TAMANDUA_DB_PATH env var", () => {
-    const customPath = "/tmp/custom-tamandua.db";
-    process.env.TAMANDUA_DB_PATH = customPath;
+  it("respects FORMIGA_DB_PATH env var", () => {
+    const customPath = "/tmp/custom-formiga.db";
+    process.env.FORMIGA_DB_PATH = customPath;
     try {
       const result = getDbPath();
       assert.equal(result, customPath);
     } finally {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
   });
 });
@@ -327,11 +327,11 @@ describe("getSystemTokenSpend", () => {
   let startingSpend: number;
 
   before(() => {
-    // Reset tamandua_stats to a known baseline
+    // Reset formiga_stats to a known baseline
     const db = getDb();
-    db.prepare("UPDATE tamandua_stats SET system_tokens_spent = 0 WHERE id = 1").run();
+    db.prepare("UPDATE formiga_stats SET system_tokens_spent = 0 WHERE id = 1").run();
     // Also ensure the row exists (migrate() creates it)
-    db.prepare("INSERT OR IGNORE INTO tamandua_stats (id, system_tokens_spent) VALUES (1, 0)").run();
+    db.prepare("INSERT OR IGNORE INTO formiga_stats (id, system_tokens_spent) VALUES (1, 0)").run();
     startingSpend = getSystemTokenSpend();
   });
 
@@ -369,11 +369,11 @@ describe("autoresearch_sessions table migration", () => {
   let origDbPath: string | undefined;
 
   before(() => {
-    tempHome = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-sessions-test-"));
+    tempHome = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-sessions-test-"));
     origHome = process.env.HOME;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_DB_PATH;
+    delete process.env.FORMIGA_DB_PATH;
   });
 
   after(() => {
@@ -383,9 +383,9 @@ describe("autoresearch_sessions table migration", () => {
       delete process.env.HOME;
     }
     if (origDbPath) {
-      process.env.TAMANDUA_DB_PATH = origDbPath;
+      process.env.FORMIGA_DB_PATH = origDbPath;
     } else {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
     rmSync(tempHome, { recursive: true, force: true });
   });
@@ -517,7 +517,7 @@ describe("autoresearch_sessions table migration", () => {
     assert.ok(tableExists(db, "runs"), "runs table should exist");
     assert.ok(tableExists(db, "steps"), "steps table should exist");
     assert.ok(tableExists(db, "stories"), "stories table should exist");
-    assert.ok(tableExists(db, "tamandua_stats"), "tamandua_stats table should exist");
+    assert.ok(tableExists(db, "formiga_stats"), "formiga_stats table should exist");
     assert.ok(tableExists(db, "run_worktrees"), "run_worktrees table should exist");
   });
 });
@@ -529,12 +529,12 @@ describe("upsertAutoresearchSession", () => {
   let origDbPath: string | undefined;
 
   before(() => {
-    tempHome = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-upsert-test-"));
-    tempSessionDir = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-session-"));
+    tempHome = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-upsert-test-"));
+    tempSessionDir = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-session-"));
     origHome = process.env.HOME;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_DB_PATH;
+    delete process.env.FORMIGA_DB_PATH;
   });
 
   after(() => {
@@ -544,9 +544,9 @@ describe("upsertAutoresearchSession", () => {
       delete process.env.HOME;
     }
     if (origDbPath) {
-      process.env.TAMANDUA_DB_PATH = origDbPath;
+      process.env.FORMIGA_DB_PATH = origDbPath;
     } else {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
     rmSync(tempHome, { recursive: true, force: true });
     rmSync(tempSessionDir, { recursive: true, force: true });
@@ -726,12 +726,12 @@ describe("getAutoresearchSessions", () => {
   let origDbPath: string | undefined;
 
   before(() => {
-    tempHome = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-list-test-"));
-    tempSessionDir = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-session2-"));
+    tempHome = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-list-test-"));
+    tempSessionDir = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-session2-"));
     origHome = process.env.HOME;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_DB_PATH;
+    delete process.env.FORMIGA_DB_PATH;
   });
 
   after(() => {
@@ -741,9 +741,9 @@ describe("getAutoresearchSessions", () => {
       delete process.env.HOME;
     }
     if (origDbPath) {
-      process.env.TAMANDUA_DB_PATH = origDbPath;
+      process.env.FORMIGA_DB_PATH = origDbPath;
     } else {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
     rmSync(tempHome, { recursive: true, force: true });
     rmSync(tempSessionDir, { recursive: true, force: true });
@@ -756,8 +756,8 @@ describe("getAutoresearchSessions", () => {
 
   it("returns all non-missing sessions ordered by updated_at DESC", () => {
     // Create two sessions
-    const dir1 = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-a-"));
-    const dir2 = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-b-"));
+    const dir1 = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-a-"));
+    const dir2 = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-b-"));
 
     try {
       writeSessionConfig(dir1, {
@@ -821,12 +821,12 @@ describe("getAutoresearchSessionById", () => {
   let origDbPath: string | undefined;
 
   before(() => {
-    tempHome = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-getbyid-test-"));
-    tempSessionDir = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-session3-"));
+    tempHome = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-getbyid-test-"));
+    tempSessionDir = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-session3-"));
     origHome = process.env.HOME;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_DB_PATH;
+    delete process.env.FORMIGA_DB_PATH;
   });
 
   after(() => {
@@ -836,9 +836,9 @@ describe("getAutoresearchSessionById", () => {
       delete process.env.HOME;
     }
     if (origDbPath) {
-      process.env.TAMANDUA_DB_PATH = origDbPath;
+      process.env.FORMIGA_DB_PATH = origDbPath;
     } else {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
     rmSync(tempHome, { recursive: true, force: true });
     rmSync(tempSessionDir, { recursive: true, force: true });
@@ -876,12 +876,12 @@ describe("deleteAutoresearchSession", () => {
   let origDbPath: string | undefined;
 
   before(() => {
-    tempHome = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-delete-test-"));
-    tempSessionDir = mkdtempSync(path.join(os.tmpdir(), "tamandua-ar-session4-"));
+    tempHome = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-delete-test-"));
+    tempSessionDir = mkdtempSync(path.join(os.tmpdir(), "formiga-ar-session4-"));
     origHome = process.env.HOME;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
+    origDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_DB_PATH;
+    delete process.env.FORMIGA_DB_PATH;
   });
 
   after(() => {
@@ -891,9 +891,9 @@ describe("deleteAutoresearchSession", () => {
       delete process.env.HOME;
     }
     if (origDbPath) {
-      process.env.TAMANDUA_DB_PATH = origDbPath;
+      process.env.FORMIGA_DB_PATH = origDbPath;
     } else {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
     rmSync(tempHome, { recursive: true, force: true });
     rmSync(tempSessionDir, { recursive: true, force: true });

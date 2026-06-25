@@ -60,10 +60,10 @@ describe("README Hermes harness documentation", () => {
     );
   });
 
-  it("documents TAMANDUA_HERMES_BINARY env var", () => {
+  it("documents FORMIGA_HERMES_BINARY env var", () => {
     assert.ok(
-      readmeContent.includes("TAMANDUA_HERMES_BINARY"),
-      "README must document TAMANDUA_HERMES_BINARY environment variable"
+      readmeContent.includes("FORMIGA_HERMES_BINARY"),
+      "README must document FORMIGA_HERMES_BINARY environment variable"
     );
   });
 
@@ -71,7 +71,7 @@ describe("README Hermes harness documentation", () => {
     assert.ok(
       readmeContent.includes("PATH") &&
       (readmeContent.includes("hermes") || readmeContent.includes("Hermes")),
-      "README must document that hermes is searched on PATH when TAMANDUA_HERMES_BINARY is not set"
+      "README must document that hermes is searched on PATH when FORMIGA_HERMES_BINARY is not set"
     );
   });
 

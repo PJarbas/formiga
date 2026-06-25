@@ -122,10 +122,10 @@ describe("installWorkflow", () => {
 
   beforeEach(() => {
     originalHome = process.env.HOME;
-    originalStateDir = process.env.TAMANDUA_STATE_DIR;
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-install-"));
+    originalStateDir = process.env.FORMIGA_STATE_DIR;
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-install-"));
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_STATE_DIR;
+    delete process.env.FORMIGA_STATE_DIR;
 
     // Create minimal pi config so readPiConfig doesn't fail on ENOENT
     const piAgentDir = path.join(tempHome, ".pi", "agent");
@@ -140,8 +140,8 @@ describe("installWorkflow", () => {
   afterEach(() => {
     if (originalHome) process.env.HOME = originalHome;
     else delete process.env.HOME;
-    if (originalStateDir) process.env.TAMANDUA_STATE_DIR = originalStateDir;
-    else delete process.env.TAMANDUA_STATE_DIR;
+    if (originalStateDir) process.env.FORMIGA_STATE_DIR = originalStateDir;
+    else delete process.env.FORMIGA_STATE_DIR;
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
@@ -166,7 +166,7 @@ describe("installWorkflow", () => {
     assert.ok(metadata.installedAt, "should have installedAt timestamp");
 
     // Verify agents.json was created with the workflow agents
-    const agentsPath = path.join(tempHome, ".tamandua", "agents.json");
+    const agentsPath = path.join(tempHome, ".formiga", "agents.json");
     assert.ok(fs.existsSync(agentsPath), "agents.json should exist");
     const agentsList = JSON.parse(fs.readFileSync(agentsPath, "utf-8"));
     assert.ok(Array.isArray(agentsList), "agents list should be an array");
@@ -195,7 +195,7 @@ describe("installWorkflow", () => {
     const result = await installWorkflow({ workflowId: "do-review-do-verify" });
     assert.equal(result.workflowId, "do-review-do-verify");
 
-    const agentsPath = path.join(tempHome, ".tamandua", "agents.json");
+    const agentsPath = path.join(tempHome, ".formiga", "agents.json");
     const agentsList = JSON.parse(fs.readFileSync(agentsPath, "utf-8"));
 
     const wfAgents = agentsList.filter((a: Record<string, unknown>) =>

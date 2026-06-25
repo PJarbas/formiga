@@ -9,7 +9,7 @@ description: |
   appropriate workflow for the task. The dispatcher agent studies the
   available workflows, selects the one best suited for what the user asked,
   decides whether to launch it as a no-hurry run, and then itself
-  launches a tamandua run with the chosen workflow.
+  launches a formiga run with the chosen workflow.
 
   If just-do-it is itself launched as no-hurry, the dispatched workflow
   will always be no-hurry regardless of the user prompt content.
@@ -25,7 +25,7 @@ agents:
     workspace:
       baseDir: agents/dispatcher
       skills:
-        - tamandua-agents
+        - formiga-agents
       files:
         AGENTS.md: agents/dispatcher/AGENTS.md
         SOUL.md: agents/dispatcher/SOUL.md
@@ -43,7 +43,7 @@ steps:
       NO_HURRY_SAVE_TOKENS_MODE: {{no_hurry_save_tokens_mode}}
 
       Instructions:
-      1. Discover available workflows: `tamandua workflow list --json`
+      1. Discover available workflows: `formiga workflow list --json`
          Parse the JSON output. Each entry has id, name, description.
       2. Analyze the TASK above — what is the user asking for?
       3. Identify the task category using prefix-based matching:
@@ -86,23 +86,23 @@ steps:
       7. Launch the run:
          - Task text is positional after the workflow ID, never use --task flag.
          - For direct child workflows (no -worktree suffix):
-           `tamandua workflow run <selected-workflow-id> "<the user's original task>" --working-directory-for-harness "{{target_working_directory_for_harness}}"`
+           `formiga workflow run <selected-workflow-id> "<the user's original task>" --working-directory-for-harness "{{target_working_directory_for_harness}}"`
          - For worktree child workflows (-worktree suffix):
-           `tamandua workflow run <selected-workflow-id> "<the user's original task>" --worktree-origin-repository "{{target_working_directory_for_harness}}"`
+           `formiga workflow run <selected-workflow-id> "<the user's original task>" --worktree-origin-repository "{{target_working_directory_for_harness}}"`
          - If target_working_directory_for_harness is empty, omit the workspace flag
            and let the child default to the current directory.
          - If no-hurry was decided, add `--no-hurry-please-save-tokens-mode` to the command.
          - Capture the RUN_ID from the output.
       8. Failure behavior:
          - Variant fallback (trying the next variant) is ONLY for static workflow ID
-           availability in `tamandua workflow list --json` output — when the composed
+           availability in `formiga workflow list --json` output — when the composed
            ID does not appear in the list at all.
-         - If a workflow ID exists in the list but `tamandua workflow run` fails for
+         - If a workflow ID exists in the list but `formiga workflow run` fails for
            any runtime reason (daemon registration failure, scheduling conflict,
            invalid parameters, etc.), that is FATAL. Do NOT try fallback workflows.
-           Report failure immediately with `tamandua step fail`.
-         - You MUST always call either `tamandua step complete` (on success) or
-           `tamandua step fail` (on failure) before exiting. Never exit without reporting.
+           Report failure immediately with `formiga step fail`.
+         - You MUST always call either `formiga step complete` (on success) or
+           `formiga step fail` (on failure) before exiting. Never exit without reporting.
       9. Report what you did
 
       Reply with:
@@ -110,7 +110,7 @@ steps:
       SELECTED_WORKFLOW: <workflow-id you chose>
       NO_HURRY: <true|false>
       REASONING: <why you chose this workflow and no-hurry decision>
-      LAUNCHED_RUN_ID: <the run ID from tamandua workflow run>
+      LAUNCHED_RUN_ID: <the run ID from formiga workflow run>
     expects: "STATUS: done"
     max_retries: 2
     on_fail:

@@ -228,7 +228,7 @@ describe("validateExpects", () => {
   });
 
   it("passes with valid HTTPS PR URL with number suffix", () => {
-    const output = "STATUS: done\nPR: https://github.com/igorhvr/tamandua/pull/999";
+    const output = "STATUS: done\nPR: https://github.com/igorhvr/formiga/pull/999";
     const expects = "STATUS: done\nregex:PR:\\s*https?://github\\.com/[^/]+/[^/]+/pull/\\d+";
     const result = validateExpects(output, expects);
     assert.equal(result, null);
@@ -272,21 +272,21 @@ describe("validateExpects", () => {
 });
 
 describe("Reserved context key protection", () => {
-  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
-  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  const _savedStateDir = process.env.FORMIGA_STATE_DIR;
+  const _savedDbPath = process.env.FORMIGA_DB_PATH;
   let _testIsolationDir: string;
 
   before(() => {
-    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-reserved-keys-test-"));
-    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
-    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-reserved-keys-test-"));
+    process.env.FORMIGA_STATE_DIR = _testIsolationDir;
+    process.env.FORMIGA_DB_PATH = path.join(_testIsolationDir, "formiga.db");
   });
 
   after(() => {
-    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
-    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    if (_savedStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+    else process.env.FORMIGA_DB_PATH = _savedDbPath;
     try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
@@ -295,7 +295,7 @@ describe("Reserved context key protection", () => {
   }
 
   it("completeStep does not overwrite reserved keys (repo, working_directory_for_harness, task, run_id)", async () => {
-    // Import getDb lazily so TAMANDUA_DB_PATH is already set
+    // Import getDb lazily so FORMIGA_DB_PATH is already set
     const { getDb } = await import("../dist/db.js");
     const db = getDb();
     const runId = crypto.randomUUID();
@@ -381,21 +381,21 @@ describe("Reserved context key protection", () => {
 });
 
 describe("completeStep STORIES_JSON guard — only blocks when loop-step is immediately next", () => {
-  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
-  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  const _savedStateDir = process.env.FORMIGA_STATE_DIR;
+  const _savedDbPath = process.env.FORMIGA_DB_PATH;
   let _testIsolationDir: string;
 
   before(() => {
-    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-stories-guard-test-"));
-    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
-    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-stories-guard-test-"));
+    process.env.FORMIGA_STATE_DIR = _testIsolationDir;
+    process.env.FORMIGA_DB_PATH = path.join(_testIsolationDir, "formiga.db");
   });
 
   after(() => {
-    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
-    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    if (_savedStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+    else process.env.FORMIGA_DB_PATH = _savedDbPath;
     try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
@@ -538,21 +538,21 @@ describe("completeStep STORIES_JSON guard — only blocks when loop-step is imme
 });
 
 describe("completeStep STORIES_JSON guard — story-producer blamed across intermediate steps", () => {
-  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
-  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  const _savedStateDir = process.env.FORMIGA_STATE_DIR;
+  const _savedDbPath = process.env.FORMIGA_DB_PATH;
   let _testIsolationDir: string;
 
   before(() => {
-    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-stories-guard-intermediate-test-"));
-    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
-    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-stories-guard-intermediate-test-"));
+    process.env.FORMIGA_STATE_DIR = _testIsolationDir;
+    process.env.FORMIGA_DB_PATH = path.join(_testIsolationDir, "formiga.db");
   });
 
   after(() => {
-    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
-    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    if (_savedStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+    else process.env.FORMIGA_DB_PATH = _savedDbPath;
     try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
@@ -671,21 +671,21 @@ STORIES_JSON: [...]', 'STATUS: done', 'running', 1, 4, 'single', ?, ?)"
 });
 
 describe("failStep retry feedback persistence", () => {
-  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
-  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  const _savedStateDir = process.env.FORMIGA_STATE_DIR;
+  const _savedDbPath = process.env.FORMIGA_DB_PATH;
   let _testIsolationDir: string;
 
   before(() => {
-    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-failstep-retry-test-"));
-    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
-    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-failstep-retry-test-"));
+    process.env.FORMIGA_STATE_DIR = _testIsolationDir;
+    process.env.FORMIGA_DB_PATH = path.join(_testIsolationDir, "formiga.db");
   });
 
   after(() => {
-    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
-    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    if (_savedStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+    else process.env.FORMIGA_DB_PATH = _savedDbPath;
     try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
@@ -822,21 +822,21 @@ describe("failStep retry feedback persistence", () => {
 });
 
 describe("setup-specific retry_feedback rendering", () => {
-  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
-  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  const _savedStateDir = process.env.FORMIGA_STATE_DIR;
+  const _savedDbPath = process.env.FORMIGA_DB_PATH;
   let _testIsolationDir: string;
 
   before(() => {
-    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-setup-retry-test-"));
-    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
-    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-setup-retry-test-"));
+    process.env.FORMIGA_STATE_DIR = _testIsolationDir;
+    process.env.FORMIGA_DB_PATH = path.join(_testIsolationDir, "formiga.db");
   });
 
   after(() => {
-    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
-    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    if (_savedStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+    else process.env.FORMIGA_DB_PATH = _savedDbPath;
     try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
@@ -911,21 +911,21 @@ Instructions:', 'STATUS: done', 'pending', 0, 4, 'single', ?, ?)"
 });
 
 describe("completeStep retry response includes detail field", () => {
-  const _savedStateDir = process.env.TAMANDUA_STATE_DIR;
-  const _savedDbPath = process.env.TAMANDUA_DB_PATH;
+  const _savedStateDir = process.env.FORMIGA_STATE_DIR;
+  const _savedDbPath = process.env.FORMIGA_DB_PATH;
   let _testIsolationDir: string;
 
   before(() => {
-    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-completestep-detail-test-"));
-    process.env.TAMANDUA_STATE_DIR = _testIsolationDir;
-    process.env.TAMANDUA_DB_PATH = path.join(_testIsolationDir, "tamandua.db");
+    _testIsolationDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-completestep-detail-test-"));
+    process.env.FORMIGA_STATE_DIR = _testIsolationDir;
+    process.env.FORMIGA_DB_PATH = path.join(_testIsolationDir, "formiga.db");
   });
 
   after(() => {
-    if (_savedStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = _savedStateDir;
-    if (_savedDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-    else process.env.TAMANDUA_DB_PATH = _savedDbPath;
+    if (_savedStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = _savedStateDir;
+    if (_savedDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+    else process.env.FORMIGA_DB_PATH = _savedDbPath;
     try { fs.rmSync(_testIsolationDir, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 

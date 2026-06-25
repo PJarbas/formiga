@@ -1,5 +1,5 @@
 /**
- * Tamandua Dashboard HTTP Server
+ * Formiga Dashboard HTTP Server
  *
  * Creates an HTTP server that serves the dashboard UI and API endpoints.
  *
@@ -900,8 +900,8 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     } catch {
       htmlResponse(res, `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Tamandua Dashboard</title></head>
-<body><h1>Tamandua Dashboard</h1><p>Dashboard HTML not found. Rebuild tamandua or check dist/server/index.html.</p></body>
+<head><meta charset="UTF-8"><title>Formiga Dashboard</title></head>
+<body><h1>Formiga Dashboard</h1><p>Dashboard HTML not found. Rebuild formiga or check dist/server/index.html.</p></body>
 </html>`, 200);
     }
     return;
@@ -916,8 +916,8 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     } catch {
       htmlResponse(res, `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Tamandua Kanban</title></head>
-<body><h1>Tamandua Kanban</h1><p>Kanban HTML not found. Rebuild tamandua or check dist/server/kanban.html.</p></body>
+<head><meta charset="UTF-8"><title>Formiga Kanban</title></head>
+<body><h1>Formiga Kanban</h1><p>Kanban HTML not found. Rebuild formiga or check dist/server/kanban.html.</p></body>
 </html>`, 200);
     }
     return;
@@ -1064,7 +1064,7 @@ export function createDashboardServer(port: number, options: DashboardServerOpti
   });
 
   server.listen(port, () => {
-    console.log(`Tamandua dashboard listening on http://localhost:${port}`);
+    console.log(`Formiga dashboard listening on http://localhost:${port}`);
     // Backfill AutoResearch sessions from recent workflow runs
     backfillAutoresearchSessions();
   });

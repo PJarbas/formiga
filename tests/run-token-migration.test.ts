@@ -11,7 +11,7 @@ import { describe, it } from "node:test";
 const repoRoot = process.cwd();
 
 function createTempHome() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-run-tokens-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-run-tokens-"));
   const homeDir = path.join(root, "home");
   fs.mkdirSync(homeDir, { recursive: true });
   return { root, homeDir };
@@ -50,8 +50,8 @@ describe("run token spend persistence", () => {
     const temp = createTempHome();
 
     try {
-      const dbDir = path.join(temp.homeDir, ".tamandua");
-      const dbPath = path.join(dbDir, "tamandua.db");
+      const dbDir = path.join(temp.homeDir, ".formiga");
+      const dbPath = path.join(dbDir, "formiga.db");
       fs.mkdirSync(dbDir, { recursive: true });
 
       const legacyDb = new DatabaseSync(dbPath);
@@ -105,7 +105,7 @@ describe("run token spend persistence", () => {
     try {
       const dashboardPort = await reserveRandomPort();
       const controlPort = await reserveRandomPort();
-      const workflowDir = path.join(temp.homeDir, ".tamandua", "workflows", "token-workflow");
+      const workflowDir = path.join(temp.homeDir, ".formiga", "workflows", "token-workflow");
       fs.mkdirSync(workflowDir, { recursive: true });
       fs.writeFileSync(
         path.join(workflowDir, "workflow.yml"),
@@ -146,7 +146,7 @@ describe("run token spend persistence", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort),
+          FORMIGA_CONTROL_PORT: String(controlPort),
           TEST_DASHBOARD_PORT: String(dashboardPort),
         },
       );

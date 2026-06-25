@@ -8,7 +8,7 @@ import http from "node:http";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createDashboardServer } from "../../dist/server/dashboard.js";
-import { type TamanduaEvent } from "../../dist/installer/events.js";
+import { type FormigaEvent } from "../../dist/installer/events.js";
 import { getDb, incrementSystemTokenSpend, getSystemTokenSpend } from "../../dist/db.js";
 
 interface LogsTailResponse {
@@ -16,7 +16,7 @@ interface LogsTailResponse {
   nextOffset: number;
 }
 
-function appendGlobalEvent(stateDir: string, evt: TamanduaEvent): void {
+function appendGlobalEvent(stateDir: string, evt: FormigaEvent): void {
   const filePath = path.join(stateDir, "events", "all.jsonl");
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, `${JSON.stringify(evt)}\n`, "utf-8");
@@ -39,10 +39,10 @@ async function stopDashboard(server: http.Server): Promise<void> {
 
 describe("dashboard logs-tail API", () => {
   it("returns initial logs-tail lines and cursor", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-logs-tail-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-logs-tail-"));
     const stateDir = path.join(root, "state");
-    const previousStateDir = process.env.TAMANDUA_STATE_DIR;
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    const previousStateDir = process.env.FORMIGA_STATE_DIR;
+    process.env.FORMIGA_STATE_DIR = stateDir;
 
     appendGlobalEvent(stateDir, {
       ts: "2026-05-01T10:15:00.000Z",
@@ -77,17 +77,17 @@ describe("dashboard logs-tail API", () => {
       assert.match(payload.lines[1], /Story done/);
     } finally {
       await stopDashboard(server);
-      if (previousStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-      else process.env.TAMANDUA_STATE_DIR = previousStateDir;
+      if (previousStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+      else process.env.FORMIGA_STATE_DIR = previousStateDir;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("supports incremental cursor polling", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-logs-tail-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-logs-tail-"));
     const stateDir = path.join(root, "state");
-    const previousStateDir = process.env.TAMANDUA_STATE_DIR;
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    const previousStateDir = process.env.FORMIGA_STATE_DIR;
+    process.env.FORMIGA_STATE_DIR = stateDir;
 
     appendGlobalEvent(stateDir, {
       ts: "2026-05-01T11:00:00.000Z",
@@ -131,8 +131,8 @@ describe("dashboard logs-tail API", () => {
       assert.match(nextPayload.lines[1], /\(third\)/);
     } finally {
       await stopDashboard(server);
-      if (previousStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-      else process.env.TAMANDUA_STATE_DIR = previousStateDir;
+      if (previousStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+      else process.env.FORMIGA_STATE_DIR = previousStateDir;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -178,15 +178,15 @@ describe("dashboard logs-tail UI", () => {
 
 describe("dashboard AutoResearch progress", () => {
   it("serves run-scoped AutoResearch progress from the harness directory", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       fs.writeFileSync(
@@ -288,8 +288,8 @@ describe("dashboard AutoResearch progress", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -317,13 +317,13 @@ describe("dashboard AutoResearch progress", () => {
   });
 
   it("GET /api/autoresearch/runs returns empty array when no runs have AutoResearch state", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-empty-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-empty-"));
     const homeDir = path.join(root, "home");
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       // Insert a run without a harness cwd at all
@@ -356,24 +356,24 @@ describe("dashboard AutoResearch progress", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("GET /api/autoresearch/runs returns only runs with autoresearch.config.json in harness cwd", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-filtered-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-filtered-"));
     const homeDir = path.join(root, "home");
     const projectDirWithAr = path.join(root, "project-with-ar");
     const projectDirNoAr = path.join(root, "project-no-ar");
     fs.mkdirSync(projectDirWithAr, { recursive: true });
     fs.mkdirSync(projectDirNoAr, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       // Create an autoresearch config in one project dir
@@ -433,22 +433,22 @@ describe("dashboard AutoResearch progress", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("GET /api/autoresearch/runs excludes runs without working_directory_for_harness", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-no-cwd-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-no-cwd-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       // Create config in project dir
@@ -506,22 +506,22 @@ describe("dashboard AutoResearch progress", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("GET /api/autoresearch/runs excludes runs with harness cwd but no config file", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-cwd-no-config-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-cwd-no-config-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       // Create a valid project directory but do NOT create autoresearch.config.json inside it
@@ -557,22 +557,22 @@ describe("dashboard AutoResearch progress", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("GET /api/autoresearch/runs response shape matches expected { runs: [...] } format", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-autoresearch-runs-shape-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-shape-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       fs.writeFileSync(
@@ -631,8 +631,8 @@ describe("dashboard AutoResearch progress", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -640,17 +640,17 @@ describe("dashboard AutoResearch progress", () => {
 
 describe("dashboard stats API", () => {
   it("GET /api/stats returns systemTokensSpent and totalTokensSpent on fresh DB", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-stats-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-stats-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
-      // Open DB to trigger migration (creates tamandua_stats with default 0)
+      // Open DB to trigger migration (creates formiga_stats with default 0)
       getDb();
 
       const { server, baseUrl } = await startDashboard();
@@ -670,21 +670,21 @@ describe("dashboard stats API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("GET /api/stats totalTokensSpent equals system + run tokens", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-stats-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-stats-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       const db = getDb();
@@ -717,24 +717,24 @@ describe("dashboard stats API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("GET /api/stats handles DB without tamandua_stats gracefully", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-stats-"));
+  it("GET /api/stats handles DB without formiga_stats gracefully", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-stats-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
-      // Create a DB with runs table but WITHOUT tamandua_stats (legacy DB)
+      // Create a DB with runs table but WITHOUT formiga_stats (legacy DB)
       fs.mkdirSync(path.dirname(dbPath), { recursive: true });
       const { DatabaseSync } = await import("node:sqlite");
       const legacyDb = new DatabaseSync(dbPath);
@@ -773,8 +773,8 @@ describe("dashboard stats API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -1032,14 +1032,14 @@ describe("dashboard relaunch UI", () => {
 
 describe("dashboard run detail failure_reason", () => {
   it("returns failure_reason=null for running run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-failure-reason-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-running";
@@ -1060,21 +1060,21 @@ describe("dashboard run detail failure_reason", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("returns failure_reason=null for completed run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-failure-reason-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-completed";
@@ -1095,21 +1095,21 @@ describe("dashboard run detail failure_reason", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("returns failure_reason=null for paused run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-failure-reason-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-paused";
@@ -1130,21 +1130,21 @@ describe("dashboard run detail failure_reason", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("returns 'Canceled' for canceled run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-failure-reason-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-canceled";
@@ -1165,21 +1165,21 @@ describe("dashboard run detail failure_reason", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("returns first failed step output for failed run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-failure-reason-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-failed";
@@ -1209,21 +1209,21 @@ describe("dashboard run detail failure_reason", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("returns 'Run failed' for failed run with no failed-step output", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-failure-reason-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-failure-reason-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-failed-no-output";
@@ -1245,8 +1245,8 @@ describe("dashboard run detail failure_reason", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -1254,14 +1254,14 @@ describe("dashboard run detail failure_reason", () => {
 
 describe("dashboard run detail prompt field", () => {
   it("returns prompt field from run.task for all statuses", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-prompt-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-prompt-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const testCases = [
@@ -1294,8 +1294,8 @@ describe("dashboard run detail prompt field", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -1320,14 +1320,14 @@ describe("dashboard run relaunch API", () => {
   });
 
   it("POST /api/runs/:id/relaunch returns 409 for running run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-relaunch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-relaunch-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-running-relaunch";
@@ -1351,21 +1351,21 @@ describe("dashboard run relaunch API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/relaunch returns 409 for completed run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-relaunch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-relaunch-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-completed-relaunch";
@@ -1389,21 +1389,21 @@ describe("dashboard run relaunch API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/relaunch returns 409 for paused run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-relaunch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-relaunch-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-paused-relaunch";
@@ -1427,21 +1427,21 @@ describe("dashboard run relaunch API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/relaunch returns 400 for invalid JSON body", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-relaunch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-relaunch-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-failed-bad-json";
@@ -1466,21 +1466,21 @@ describe("dashboard run relaunch API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/relaunch handles canceled run (routes correctly through handler)", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-relaunch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-relaunch-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-canceled-relaunch";
@@ -1509,21 +1509,21 @@ describe("dashboard run relaunch API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/relaunch with empty body uses original task", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-relaunch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-relaunch-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-failed-empty-body";
@@ -1549,21 +1549,21 @@ describe("dashboard run relaunch API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/relaunch with whitespace-only task uses original task", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-relaunch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-relaunch-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-failed-whitespace-task";
@@ -1589,21 +1589,21 @@ describe("dashboard run relaunch API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/relaunch preserves notify_url from original run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-relaunch-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-relaunch-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-failed-notify";
@@ -1630,8 +1630,8 @@ describe("dashboard run relaunch API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -1675,9 +1675,9 @@ describe("dashboard version banner UI", () => {
       // Yellow background
       assert.match(html, /#ffd700/);
 
-      // Banner text tells user to run tamandua update
-      assert.match(html, /A new version of tamandua is available!/);
-      assert.match(html, /tamandua update/);
+      // Banner text tells user to run formiga update
+      assert.match(html, /A new version of formiga is available!/);
+      assert.match(html, /formiga update/);
 
       // Dismiss button
       assert.match(html, /class="banner-dismiss"/);
@@ -1868,14 +1868,14 @@ describe("dashboard hurry status icons UI", () => {
 
 describe("dashboard /api/runs no_hurry field", () => {
   it("no_hurry is true when context.no_hurry_save_tokens_mode === 'true'", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-nohurry-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-nohurry-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     db.prepare(`
@@ -1898,21 +1898,21 @@ describe("dashboard /api/runs no_hurry field", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("no_hurry is false when context.no_hurry_save_tokens_mode === 'false'", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-nohurry-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-nohurry-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     db.prepare(`
@@ -1934,21 +1934,21 @@ describe("dashboard /api/runs no_hurry field", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("no_hurry is false when context is missing no_hurry_save_tokens_mode", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-nohurry-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-nohurry-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     db.prepare(`
@@ -1970,21 +1970,21 @@ describe("dashboard /api/runs no_hurry field", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("no_hurry is false when context JSON is malformed", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-nohurry-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-nohurry-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     db.prepare(`
@@ -2006,21 +2006,21 @@ describe("dashboard /api/runs no_hurry field", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("no_hurry is never undefined — always a boolean", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-nohurry-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-nohurry-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     // Insert runs with various context states
@@ -2051,8 +2051,8 @@ describe("dashboard /api/runs no_hurry field", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -2061,8 +2061,8 @@ describe("dashboard /api/runs no_hurry field", () => {
 function createMinimalGitRepo(dir: string): string {
   fs.mkdirSync(dir, { recursive: true });
   spawnSync("git", ["init", "-b", "main", dir], { stdio: "ignore" });
-  spawnSync("git", ["-C", dir, "config", "user.email", "test@tamandua.local"]);
-  spawnSync("git", ["-C", dir, "config", "user.name", "Tamandua Test"]);
+  spawnSync("git", ["-C", dir, "config", "user.email", "test@formiga.local"]);
+  spawnSync("git", ["-C", dir, "config", "user.name", "Formiga Test"]);
   spawnSync("git", ["-C", dir, "commit", "--allow-empty", "-m", "initial"]);
   return dir;
 }
@@ -2091,7 +2091,7 @@ async function startMockControlServer(): Promise<{ server: http.Server; port: nu
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 function installWorkflowInHome(homeDir: string, workflowId: string): void {
-  const workflowDir = path.join(homeDir, ".tamandua", "workflows", workflowId);
+  const workflowDir = path.join(homeDir, ".formiga", "workflows", workflowId);
   fs.mkdirSync(workflowDir, { recursive: true });
   const srcYml = path.join(TEST_DIR, "..", "..", "workflows", workflowId, "workflow.yml");
   fs.copyFileSync(srcYml, path.join(workflowDir, "workflow.yml"));
@@ -2099,14 +2099,14 @@ function installWorkflowInHome(homeDir: string, workflowId: string): void {
 
 describe("dashboard cancel API", () => {
   it("POST /api/runs/:id/cancel returns 200 for a paused run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-cancel-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-paused-cancel";
@@ -2141,21 +2141,21 @@ describe("dashboard cancel API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/cancel returns 200 for a running run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-cancel-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-running-cancel";
@@ -2196,8 +2196,8 @@ describe("dashboard cancel API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -2217,14 +2217,14 @@ describe("dashboard cancel API", () => {
   });
 
   it("POST /api/runs/:id/cancel returns 409 for a completed run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-cancel-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-completed-cancel";
@@ -2245,21 +2245,21 @@ describe("dashboard cancel API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/cancel returns 409 for a failed run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-cancel-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-failed-cancel";
@@ -2280,21 +2280,21 @@ describe("dashboard cancel API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/cancel returns 409 for an already canceled run", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-cancel-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-already-canceled";
@@ -2315,21 +2315,21 @@ describe("dashboard cancel API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("POST /api/runs/:id/cancel cancels only waiting/pending/running steps, leaves done/failed untouched", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-cancel-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     const runId = "run-mixed-cancel";
@@ -2388,8 +2388,8 @@ describe("dashboard cancel API", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -2515,14 +2515,14 @@ describe("dashboard cancel UI", () => {
   });
 
   it("Cancel button is placed to the right of Resume button for paused runs", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-cancel-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-cancel-"));
     const homeDir = path.join(root, "home");
     fs.mkdirSync(homeDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     const db = getDb();
     db.prepare(`
@@ -2548,8 +2548,8 @@ describe("dashboard cancel UI", () => {
       await stopDashboard(server);
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -2579,13 +2579,13 @@ describe("dashboard cancel UI", () => {
 
 describe("dashboard AutoResearch session API", () => {
   it("GET /api/autoresearch/sessions returns empty array when no sessions registered", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-sessions-empty-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-sessions-empty-"));
     const homeDir = path.join(root, "home");
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       const { server, baseUrl } = await startDashboard();
@@ -2602,22 +2602,22 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("GET /api/autoresearch/sessions returns registered sessions with required fields", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-sessions-fields-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-sessions-fields-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       // Create autoresearch config and log files
@@ -2688,22 +2688,22 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("GET /api/autoresearch/sessions/:id returns full session detail with experiments", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-session-by-id-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-session-by-id-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       fs.writeFileSync(
@@ -2799,20 +2799,20 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("GET /api/autoresearch/sessions/:id returns 404 for unknown session", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-session-404-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-session-404-"));
     const homeDir = path.join(root, "home");
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       const { server, baseUrl } = await startDashboard();
@@ -2828,22 +2828,22 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("backfillAutoresearchSessions inserts missing sessions from recent runs", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-backfill-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-backfill-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       // Create autoresearch project files
@@ -2896,22 +2896,22 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("backfillAutoresearchSessions does not duplicate existing sessions", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-backfill-no-dup-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-backfill-no-dup-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       fs.writeFileSync(
@@ -2959,20 +2959,20 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("backfillAutoresearchSessions handles runs without harness cwd gracefully", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-backfill-no-cwd-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-backfill-no-cwd-"));
     const homeDir = path.join(root, "home");
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       const db = getDb();
@@ -2989,22 +2989,22 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("existing /api/autoresearch/runs still works after session API added", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-runs-backcompat-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-runs-backcompat-"));
     const homeDir = path.join(root, "home");
     const projectDir = path.join(root, "project");
     fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       fs.writeFileSync(
@@ -3048,24 +3048,24 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("multiple sessions are ordered by updated_at DESC", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-ar-sessions-order-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-sessions-order-"));
     const homeDir = path.join(root, "home");
     const projectDir1 = path.join(root, "project1");
     const projectDir2 = path.join(root, "project2");
     fs.mkdirSync(projectDir1, { recursive: true });
     fs.mkdirSync(projectDir2, { recursive: true });
-    const dbPath = path.join(homeDir, ".tamandua", "tamandua.db");
+    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
     const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
 
     try {
       for (const dir of [projectDir1, projectDir2]) {
@@ -3114,8 +3114,8 @@ describe("dashboard AutoResearch session API", () => {
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
+      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
+      else process.env.FORMIGA_DB_PATH = previousDbPath;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

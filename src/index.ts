@@ -33,7 +33,7 @@ export {
 // Paths
 export {
   resolvePiStateDir,
-  resolveTamanduaCli,
+  resolveFormigaCli,
   resolveWorkflowDir,
   resolveWorkflowRoot,
   resolveWorkflowWorkspaceDir,
@@ -81,7 +81,7 @@ export type {
 } from "./installer/types.js";
 
 export type { ProvisionedAgent, ProvisionAgentsParams } from "./installer/agent-provision.js";
-export type { TamanduaEvent } from "./installer/events.js";
+export type { FormigaEvent } from "./installer/events.js";
 export type { UninstallResult, ActiveRunInfo } from "./installer/uninstall.js";
 export type { RunWorkflowParams, RunWorkflowResult } from "./installer/run.js";
 export type { RunInfo, RunDetail, StepInfo, StoryInfo } from "./installer/status.js";

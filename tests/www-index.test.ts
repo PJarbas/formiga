@@ -75,7 +75,7 @@ describe("www/index.html structure", () => {
   // Content requirements
   it("contains the install curl command", () => {
     assert.ok(
-      html.includes("raw.githubusercontent.com/igorhvr/tamandua/main/scripts/install.sh"),
+      html.includes("raw.githubusercontent.com/igorhvr/formiga/main/scripts/install.sh"),
       "should contain the GitHub install curl command"
     );
   });
@@ -193,20 +193,20 @@ describe("www/index.html structure", () => {
 
   it("Full guide link points to raw GitHub creating-workflows.md", () => {
     assert.ok(
-      html.includes("https://raw.githubusercontent.com/igorhvr/tamandua/refs/heads/main/docs/creating-workflows.md"),
+      html.includes("https://raw.githubusercontent.com/igorhvr/formiga/refs/heads/main/docs/creating-workflows.md"),
       "Full guide link should point to raw GitHub URL"
     );
   });
 
   it("Full guide link text reads 'Full guide.'", () => {
-    const fullGuideLink = html.match(/<a[^>]+href="https:\/\/raw\.githubusercontent\.com\/igorhvr\/tamandua\/refs\/heads\/main\/docs\/creating-workflows\.md"[^>]*>([^<]+)<\/a>/);
+    const fullGuideLink = html.match(/<a[^>]+href="https:\/\/raw\.githubusercontent\.com\/igorhvr\/formiga\/refs\/heads\/main\/docs\/creating-workflows\.md"[^>]*>([^<]+)<\/a>/);
     assert.ok(fullGuideLink, "should have Full guide link");
     assert.strictEqual(fullGuideLink[1], "Full guide.", "link text should be 'Full guide.'");
   });
 
   it("links to GitHub repository", () => {
     assert.ok(
-      html.includes("github.com/igorhvr/tamandua"),
+      html.includes("github.com/igorhvr/formiga"),
       "should link to the GitHub repo"
     );
   });
@@ -292,8 +292,8 @@ describe("www/index.html structure", () => {
       "MCP section should contain '<strong>Skill included.</strong>'"
     );
     assert.ok(
-      mcpSection.includes('tamandua-agents skill'),
-      "MCP section should mention 'tamandua-agents skill'"
+      mcpSection.includes('formiga-agents skill'),
+      "MCP section should mention 'formiga-agents skill'"
     );
     // Verify ordering: Skill included text comes before Remote MCP Tools heading
     const skillPos = mcpSection.indexOf('Skill included.');
@@ -306,8 +306,8 @@ describe("www/index.html structure", () => {
 
   it("Skill included explainer describes agent-friendly design", () => {
     assert.ok(
-      html.includes('build-and-forget with tamandua'),
-      "explainer should mention build-and-forget with tamandua"
+      html.includes('build-and-forget with formiga'),
+      "explainer should mention build-and-forget with formiga"
     );
     assert.ok(
       html.includes('CLI itself is also designed'),
@@ -317,9 +317,9 @@ describe("www/index.html structure", () => {
 
   // MCP tools table
   it("describes Remote MCP tools", () => {
-    assert.ok(html.includes("tamandua.runs.list"), "should mention tamandua.runs.list");
-    assert.ok(html.includes("tamandua.run.status"), "should mention tamandua.run.status");
-    assert.ok(html.includes("tamandua.run.start"), "should mention tamandua.run.start");
+    assert.ok(html.includes("formiga.runs.list"), "should mention formiga.runs.list");
+    assert.ok(html.includes("formiga.run.status"), "should mention formiga.run.status");
+    assert.ok(html.includes("formiga.run.start"), "should mention formiga.run.start");
   });
 
   // Code blocks
@@ -598,14 +598,14 @@ describe("www/index.html structure", () => {
 
   // ── US-010: Accessibility ────────────────────────────────────────────
 
-  it("logo is an img tag pointing to tamandua.png with alt text", () => {
+  it("logo is an img tag pointing to formiga.png with alt text", () => {
     assert.ok(
-      /<img[^>]*src="assets\/tamandua\.png"[^>]*alt="Tamandua logo"[^>]*>/.test(html),
-      "logo should be <img src='assets/tamandua.png' alt='Tamandua logo'>"
+      /<img[^>]*src="assets\/formiga\.png"[^>]*alt="Formiga logo"[^>]*>/.test(html),
+      "logo should be <img src='assets/formiga.png' alt='Formiga logo'>"
     );
     assert.ok(
       /<img[^>]*width="32"[^>]*height="32"[^>]*>/.test(html),
-      "tamandua.png img should have width='32' height='32'"
+      "formiga.png img should have width='32' height='32'"
     );
   });
 

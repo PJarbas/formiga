@@ -1,5 +1,5 @@
 /**
- * Tests for tamandua workflow install --all (US-002).
+ * Tests for formiga workflow install --all (US-002).
  *
  * Validates:
  * 1. workflow install --all installs all bundled workflows (AC 1)
@@ -73,7 +73,7 @@ function cleanStderr(stderr: string): string {
 }
 
 function createTempHome(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-wfi-all-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-wfi-all-"));
   // Seed a minimal pi settings.json so installWorkflow's readPiConfig() succeeds
   const piAgentDir = path.join(dir, ".pi", "agent");
   fs.mkdirSync(piAgentDir, { recursive: true });
@@ -86,10 +86,10 @@ function createTempHome(): string {
 }
 
 /**
- * Read agents.json from the temp HOME's .tamandua directory.
+ * Read agents.json from the temp HOME's .formiga directory.
  */
 function readAgentsList(homeDir: string): Array<Record<string, unknown>> {
-  const agentsPath = path.join(homeDir, ".tamandua", "agents.json");
+  const agentsPath = path.join(homeDir, ".formiga", "agents.json");
   if (!fs.existsSync(agentsPath)) return [];
   const raw = fs.readFileSync(agentsPath, "utf-8");
   const parsed = JSON.parse(raw);
@@ -112,7 +112,7 @@ function getBundledWorkflowCount(): number {
 // Tests
 // ═══════════════════════════════════════════════════════════════════
 
-describe("tamandua workflow install --all", () => {
+describe("formiga workflow install --all", () => {
   const expectedWorkflowCount = getBundledWorkflowCount();
 
   // AC 1: workflow install --all installs all bundled workflows
@@ -290,8 +290,8 @@ describe("tamandua workflow install --all", () => {
       const cleanErr = cleanStderr(stderr);
       assert.equal(exitCode, 0, `Expected exit 0, got ${exitCode}. stderr: ${cleanErr}`);
 
-      // Verify workflow directories exist under ~/.tamandua/workflows/
-      const workflowsRoot = path.join(tempHome, ".tamandua", "workflows");
+      // Verify workflow directories exist under ~/.formiga/workflows/
+      const workflowsRoot = path.join(tempHome, ".formiga", "workflows");
       assert.ok(
         fs.existsSync(workflowsRoot),
         `Expected workflows directory at ${workflowsRoot}`,
@@ -329,7 +329,7 @@ describe("tamandua workflow install --all", () => {
     try {
       await runCli(["workflow", "install", "--all"], tempHome);
 
-      const workflowsRoot = path.join(tempHome, ".tamandua", "workflows");
+      const workflowsRoot = path.join(tempHome, ".formiga", "workflows");
       const entries = fs.readdirSync(workflowsRoot, { withFileTypes: true });
 
       for (const entry of entries) {

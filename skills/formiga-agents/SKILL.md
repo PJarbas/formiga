@@ -1,65 +1,65 @@
 ---
-name: tamandua-agents
-description: Tamandua is a local CLI/workflow orchestrator for coordinating multi-agent coding runs on top of pi. Use this skill when the user mentions the word tamandua or when a task involves Tamandua workflows, runs, steps, agents, worktrees, dashboard/control-plane services, logs, pause/resume, or Tamandua-specific output contracts and documentation.
+name: formiga-agents
+description: Formiga is a local CLI/workflow orchestrator for coordinating multi-agent coding runs on top of pi. Use this skill when the user mentions the word formiga or when a task involves Formiga workflows, runs, steps, agents, worktrees, dashboard/control-plane services, logs, pause/resume, or Formiga-specific output contracts and documentation.
 ---
 
-# Tamandua Agents
+# Formiga Agents
 
 ## Instructions
 
-Use this skill when operating as a Tamandua workflow agent.
+Use this skill when operating as a Formiga workflow agent.
 
 ### 1) Confirm CLI access
 
-Use the `tamandua` CLI if available on PATH.
+Use the `formiga` CLI if available on PATH.
 
 ```bash
-tamandua version
-tamandua source-path
-tamandua skill-path
+formiga version
+formiga source-path
+formiga skill-path
 ```
 
 If the binary is not on PATH, use the Node entrypoint directly:
 
 ```bash
-node /path/to/tamandua/dist/cli/cli.js <command>
+node /path/to/formiga/dist/cli/cli.js <command>
 ```
 
-If neither the `tamandua` binary nor the Node entrypoint can be found,
-clone and install Tamandua from its GitHub repository:
+If neither the `formiga` binary nor the Node entrypoint can be found,
+clone and install Formiga from its GitHub repository:
 
 ```bash
-git clone https://github.com/igorhvr/tamandua ~/my-tamandua
-cd ~/my-tamandua
+git clone https://github.com/igorhvr/formiga ~/my-formiga
+cd ~/my-formiga
 ./build
 ./install
 ```
 
-This places a `tamandua` symlink at `~/.local/bin/tamandua`. Verify the
-install worked by running `tamandua version`.
+This places a `formiga` symlink at `~/.local/bin/formiga`. Verify the
+install worked by running `formiga version`.
 
 ### 2) Know the workflow-level commands
 
 Use these when managing workflow runs (outside individual step execution):
 
 ```bash
-tamandua workflow list [--json]
-tamandua workflow install <workflow-id|--all>
-tamandua workflow uninstall <workflow-id|--all> [--force]
-tamandua workflow run <workflow-id> "<task>" [--working-directory-for-harness <dir>] [--worktree-origin-repository <dir>] [--worktree-origin-ref <ref>] [--pi-as-harness | --hermes-as-harness] [--no-hurry-please-save-tokens-mode] [--no-relaunch-upon-rugpull]
-tamandua workflow status <query>
-tamandua workflow runs
-tamandua workflow pause <run-id>
-tamandua workflow pause-all [--drain]
-tamandua workflow resume <run-id>
-tamandua workflow resume-all
-tamandua workflow stop <run-id>
-tamandua workflow autoresearch <run-id>
-tamandua workflow delete <run-id> [--force]
-tamandua nudge
+formiga workflow list [--json]
+formiga workflow install <workflow-id|--all>
+formiga workflow uninstall <workflow-id|--all> [--force]
+formiga workflow run <workflow-id> "<task>" [--working-directory-for-harness <dir>] [--worktree-origin-repository <dir>] [--worktree-origin-ref <ref>] [--pi-as-harness | --hermes-as-harness] [--no-hurry-please-save-tokens-mode] [--no-relaunch-upon-rugpull]
+formiga workflow status <query>
+formiga workflow runs
+formiga workflow pause <run-id>
+formiga workflow pause-all [--drain]
+formiga workflow resume <run-id>
+formiga workflow resume-all
+formiga workflow stop <run-id>
+formiga workflow autoresearch <run-id>
+formiga workflow delete <run-id> [--force]
+formiga nudge
 ```
 
-`tamandua nudge` wakes all scheduled agents for all currently running runs,
+`formiga nudge` wakes all scheduled agents for all currently running runs,
 causing them to poll once immediately without waiting for their normal
 timers. Does not resume paused runs or interrupt in-flight agents.
 
@@ -72,17 +72,17 @@ and managed worktree data. Active runs are refused by default; use `--force`
 to cancel and delete a running or paused run in one step.
 
 `install` fetches workflow files, provisions agent workspaces, and registers
-agents in `~/.tamandua/agents.json`. Use `--all` (or `all`) to install every
+agents in `~/.formiga/agents.json`. Use `--all` (or `all`) to install every
 bundled workflow in one command. `uninstall` removes the workflow and its
 agent configuration. Use `--force` to skip the active-runs safety check.
 `uninstall --all` removes every installed workflow.
 
-Use `tamandua update [--force]` only for local Tamandua maintenance. Without
+Use `formiga update [--force]` only for local Formiga maintenance. Without
 `--force`, update blocks after rebuilding if active runs are present — it
 leaves services and installed workflows unchanged. Use `--force` to proceed
 despite active runs (services are stopped and restarted, workflows reinstalled).
 Remote MCP clients can discover the same maintenance command via
-`tamandua.update.command`; run the actual update through the local CLI because
+`formiga.update.command`; run the actual update through the local CLI because
 it may restart dashboard, MCP, and the control plane.
 
 Harness working directory guidance:
@@ -107,40 +107,40 @@ runs where responsiveness is less important than cost savings.
 
 Use `--no-relaunch-upon-rugpull` to disable automatic replacement-run
 creation after a rugpull (base branch move) is detected on a failed
-merge or merge-worktree run. By default, Tamandua creates a replacement
+merge or merge-worktree run. By default, Formiga creates a replacement
 run when a rugpull is detected, so the merge can target the updated base.
 
-`tamandua workflow autoresearch <run-id>` shows AutoResearch progress
+`formiga workflow autoresearch <run-id>` shows AutoResearch progress
 for a workflow run. It resolves the run's harness working directory,
 reads the project-local `autoresearch.config.json` and
 `autoresearch.jsonl` files, and prints the current metric summary and
 recent experiment timeline.
 
-### 2.6) System status with tamandua status
+### 2.6) System status with formiga status
 
-Use `tamandua status` for a comprehensive overview of the Tamandua system:
+Use `formiga status` for a comprehensive overview of the Formiga system:
 
 ```bash
-tamandua status
+formiga status
 ```
 
 `status` reports:
 
 - **Services** — Dashboard, MCP, and control-plane status (up/down, PID, port)
-- **Tamandua Info** — Source path, skill path, version, and source tree SHA256
+- **Formiga Info** — Source path, skill path, version, and source tree SHA256
 - **Workflow Runs** — Summary of all runs (running, paused, done, failed)
-- **Running Processes** — Active pi/hermes harness processes spawned by Tamandua
+- **Running Processes** — Active pi/hermes harness processes spawned by Formiga
 
 ### 2.7) Worktree management
 
-Worktree commands manage the git worktrees Tamandua creates for isolated
+Worktree commands manage the git worktrees Formiga creates for isolated
 workflow runs.
 
 ```bash
-tamandua worktree list
-tamandua worktree status <run-id>
-tamandua worktree remove <run-id> [--force]
-tamandua worktree prune --completed --older-than <duration>
+formiga worktree list
+formiga worktree status <run-id>
+formiga worktree remove <run-id> [--force]
+formiga worktree prune --completed --older-than <duration>
 ```
 
 `list` shows all managed worktrees with run ID, status, cleanup policy, and
@@ -162,9 +162,9 @@ The control plane provides run-scoped scheduling that the dashboard daemon
 uses to manage agent polling and work dispatch.
 
 ```bash
-tamandua control-plane start [--port N]
-tamandua control-plane stop
-tamandua control-plane status
+formiga control-plane start [--port N]
+formiga control-plane stop
+formiga control-plane status
 ```
 
 Default port: 3339.
@@ -175,21 +175,21 @@ Start will refuse if the control plane is already running, printing its
 current status instead. Stop is safe to run even when no control plane
 is active.
 
-### 2.9) Full uninstall with tamandua uninstall
+### 2.9) Full uninstall with formiga uninstall
 
-`tamandua uninstall [--force]` stops all Tamandua services and removes every
+`formiga uninstall [--force]` stops all Formiga services and removes every
 installed workflow, including agent workspaces, agent registrations, and cron
 jobs.
 
 ```bash
-tamandua uninstall [--force]
+formiga uninstall [--force]
 ```
 
 By default, uninstall checks for active runs (running or paused) and refuses
 if any exist. Use `--force` to skip this check.
 
-Compare with `tamandua workflow uninstall <name> [--force]` which removes a
-single workflow without stopping services, and `tamandua workflow uninstall
+Compare with `formiga workflow uninstall <name> [--force]` which removes a
+single workflow without stopping services, and `formiga workflow uninstall
 --all [--force]` which removes all workflows (also no service stops).
 
 ### 2.10) AutoResearch experiment commands
@@ -201,10 +201,10 @@ log-experiment.
 
 #### Init
 
-`tamandua autoresearch init` creates a new AutoResearch session.
+`formiga autoresearch init` creates a new AutoResearch session.
 
 ```bash
-tamandua autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd> [options]
+formiga autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd> [options]
 ```
 
 Required options:
@@ -223,7 +223,7 @@ Optional options:
 Example:
 
 ```bash
-tamandua autoresearch init \
+formiga autoresearch init \
   --goal "speed up test suite" \
   --metric total_ms \
   --unit ms \
@@ -233,12 +233,12 @@ tamandua autoresearch init \
 
 #### Run-Experiment
 
-`tamandua autoresearch run-experiment` executes the configured benchmark
+`formiga autoresearch run-experiment` executes the configured benchmark
 command, captures output, parses the metric, runs optional checks, and
 appends a result to `autoresearch.jsonl`.
 
 ```bash
-tamandua autoresearch run-experiment [options]
+formiga autoresearch run-experiment [options]
 ```
 
 Options:
@@ -251,18 +251,18 @@ Options:
 Example:
 
 ```bash
-tamandua autoresearch run-experiment
+formiga autoresearch run-experiment
 ```
 
 #### Log-Experiment
 
-`tamandua autoresearch log-experiment` records the keep/discard decision,
+`formiga autoresearch log-experiment` records the keep/discard decision,
 learning, and next focus for an experiment. By default, `--status auto`
 classifies the latest measured result by comparing it with prior accepted
 runs.
 
 ```bash
-tamandua autoresearch log-experiment --description <text> [options]
+formiga autoresearch log-experiment --description <text> [options]
 ```
 
 Options:
@@ -284,7 +284,7 @@ stacking more changes.
 Example:
 
 ```bash
-tamandua autoresearch log-experiment \
+formiga autoresearch log-experiment \
   --status auto \
   --description "cache parser hot path" \
   --learned "faster but flaky on invalid input" \
@@ -300,11 +300,11 @@ transactionally (commit on keep, revert on discard/crash).
 
 #### Loop
 
-`tamandua autoresearch loop` runs a bounded experiment loop with live
+`formiga autoresearch loop` runs a bounded experiment loop with live
 terminal progress.
 
 ```bash
-tamandua autoresearch loop [options]
+formiga autoresearch loop [options]
 ```
 
 An action mode is REQUIRED — the loop will fail without one.
@@ -345,19 +345,19 @@ and leaves `autoresearch.jsonl` in a consistent state.
 Examples:
 
 ```bash
-tamandua autoresearch loop --measure-only --max-iterations 10
-tamandua autoresearch loop --prompt --target-metric 0.5 --max-iterations 30
-tamandua autoresearch loop --prompt --max-consecutive-failures 5
-tamandua autoresearch loop --prompt --timeout 10m --max-iterations 10
+formiga autoresearch loop --measure-only --max-iterations 10
+formiga autoresearch loop --prompt --target-metric 0.5 --max-iterations 30
+formiga autoresearch loop --prompt --max-consecutive-failures 5
+formiga autoresearch loop --prompt --timeout 10m --max-iterations 10
 ```
 
 #### Run-Loop-Iteration
 
-`tamandua autoresearch run-loop-iteration` runs a single transactional
+`formiga autoresearch run-loop-iteration` runs a single transactional
 experiment iteration.
 
 ```bash
-tamandua autoresearch run-loop-iteration [options]
+formiga autoresearch run-loop-iteration [options]
 ```
 
 Transactional lifecycle:
@@ -385,9 +385,9 @@ committed/reverted flags, and the full log entry.
 Examples:
 
 ```bash
-tamandua autoresearch run-loop-iteration --prompt "try smaller LR" --iteration 1
-tamandua autoresearch run-loop-iteration --command "uv run train.py" --iteration 5
-tamandua autoresearch run-loop-iteration --prompt test --iteration 1
+formiga autoresearch run-loop-iteration --prompt "try smaller LR" --iteration 1
+formiga autoresearch run-loop-iteration --command "uv run train.py" --iteration 5
+formiga autoresearch run-loop-iteration --prompt test --iteration 1
 ```
 
 ### 2.12) AutoResearch monitoring and setup commands
@@ -397,10 +397,10 @@ evidence-driven prompts, pruning stale sessions, and interactive setup.
 
 #### Status
 
-`tamandua autoresearch status` summarizes the experiment loop state.
+`formiga autoresearch status` summarizes the experiment loop state.
 
 ```bash
-tamandua autoresearch status [--cwd <dir>]
+formiga autoresearch status [--cwd <dir>]
 ```
 
 Options:
@@ -424,17 +424,17 @@ session exists.
 Example:
 
 ```bash
-tamandua autoresearch status
-tamandua autoresearch status --cwd /path/to/project
+formiga autoresearch status
+formiga autoresearch status --cwd /path/to/project
 ```
 
 #### Next
 
-`tamandua autoresearch next` prints the evidence-driven ratchet prompt that
+`formiga autoresearch next` prints the evidence-driven ratchet prompt that
 agents should read before proposing the next experiment.
 
 ```bash
-tamandua autoresearch next [--cwd <dir>]
+formiga autoresearch next [--cwd <dir>]
 ```
 
 Options:
@@ -452,18 +452,18 @@ intended to be consumed programmatically by agents or scripts.
 Example:
 
 ```bash
-tamandua autoresearch next
-tamandua autoresearch next --cwd /path/to/project
+formiga autoresearch next
+formiga autoresearch next --cwd /path/to/project
 ```
 
 #### Prune
 
-`tamandua autoresearch prune` removes stale session registry rows from the
+`formiga autoresearch prune` removes stale session registry rows from the
 SQLite database. It does **not** touch project-local `autoresearch.jsonl` or
 `autoresearch.config.json` — those files remain safe on disk.
 
 ```bash
-tamandua autoresearch prune --older-than <duration> [--missing] [--dry-run]
+formiga autoresearch prune --older-than <duration> [--missing] [--dry-run]
 ```
 
 Options:
@@ -484,18 +484,18 @@ no longer accessible are pruned.
 Examples:
 
 ```bash
-tamandua autoresearch prune --older-than 30d
-tamandua autoresearch prune --older-than 7d --missing
-tamandua autoresearch prune --older-than 30d --dry-run
+formiga autoresearch prune --older-than 30d
+formiga autoresearch prune --older-than 7d --missing
+formiga autoresearch prune --older-than 30d --dry-run
 ```
 
 #### Wizard
 
-`tamandua autoresearch wizard` launches an interactive setup flow that guides
+`formiga autoresearch wizard` launches an interactive setup flow that guides
 you through creating a new AutoResearch session.
 
 ```bash
-tamandua autoresearch wizard [--cwd <dir>]
+formiga autoresearch wizard [--cwd <dir>]
 ```
 
 Options:
@@ -509,36 +509,36 @@ The wizard interactively asks:
 - **Unit** (optional) — metric unit (e.g. `seconds`, `ms`, `bpb`)
 - **Checks command** (optional) — correctness validation after benchmarks
 
-After collecting answers, the wizard generates the exact `tamandua
+After collecting answers, the wizard generates the exact `formiga
 autoresearch init` command needed. If initialization is requested, it
-optionally executes the init command, then generates the `tamandua
+optionally executes the init command, then generates the `formiga
 autoresearch loop` command to start the optimization loop. No project files
 are created directly by the wizard — it delegates to the init command.
 
 Example:
 
 ```bash
-tamandua autoresearch wizard
-tamandua autoresearch wizard --cwd /path/to/project
+formiga autoresearch wizard
+formiga autoresearch wizard --cwd /path/to/project
 ```
 
 ### 3) Follow the step lifecycle exactly
 
 Always execute step commands in this order:
 
-1. `tamandua step peek <agent-id> --run-id <run-id>`
-2. If result is `HAS_WORK`, run `tamandua step claim <agent-id> --run-id <run-id>`
+1. `formiga step peek <agent-id> --run-id <run-id>`
+2. If result is `HAS_WORK`, run `formiga step claim <agent-id> --run-id <run-id>`
 3. Parse claim JSON: `{"stepId":"...","runId":"...","input":"..."}`
 4. **SAVE `stepId` immediately** and execute the `input` task
 5. Report with the saved step id:
-   - Success: `tamandua step complete <stepId>` (send status output through stdin)
-   - Failure: `tamandua step fail <stepId> "<reason>"`
+   - Success: `formiga step complete <stepId>` (send status output through stdin)
+   - Failure: `formiga step fail <stepId> "<reason>"`
 
 Use the run ID supplied by your scheduler prompt or workflow context. `step peek` and `step claim` require `--run-id` so agents serving concurrent runs cannot claim each other's work.
 
 Never call `step complete` or `step fail` with an agent ID. They require the claimed step UUID.
 
-For diagnostics, use `tamandua step stories <run-id>` to list all stories
+For diagnostics, use `formiga step stories <run-id>` to list all stories
 for a run and their statuses. This is useful when diagnosing blocked
 pipelines or understanding story progress.
 
@@ -550,9 +550,9 @@ On success, provide structured output that includes:
 - `CHANGES: ...`
 - `TESTS: ...`
 
-Then pipe that output into `tamandua step complete <stepId>`.
+Then pipe that output into `formiga step complete <stepId>`.
 
-On failure, call `tamandua step fail <stepId> "<clear reason>"` with actionable detail.
+On failure, call `formiga step fail <stepId> "<clear reason>"` with actionable detail.
 
 **CRITICAL — STATUS markers are parsed by the scheduler.** Output is
 classified by exact markers: `STATUS: done` (success) or `STATUS: failed` /
@@ -564,7 +564,7 @@ it — wasting a retry slot even when the work was completed.
 
 ### 2.1) MCP run start (remote)
 
-When using MCP, `tamandua.run.start` requires a harness working directory.
+When using MCP, `formiga.run.start` requires a harness working directory.
 `workingDirectoryForHarness` is mandatory (not optional) for MCP runs.
 
 Required MCP args:
@@ -582,7 +582,7 @@ Optional MCP args:
 
 Additional MCP tools:
 
-- `tamandua.run.delete` — permanently delete a run. Requires `runId`. Optional
+- `formiga.run.delete` — permanently delete a run. Requires `runId`. Optional
   `force` (boolean) to cancel and delete active runs.
 
 Recovery pattern for tool-calling models:
@@ -601,24 +601,24 @@ The selector can be:
 
 ```bash
 # Show recent entries
-tamandua logs                        # default: last 20 entries
-tamandua logs 50                     # last 50 entries
-tamandua logs <run-id>               # entries for a specific run
-tamandua logs #3                     # entries for run number 3
+formiga logs                        # default: last 20 entries
+formiga logs 50                     # last 50 entries
+formiga logs <run-id>               # entries for a specific run
+formiga logs #3                     # entries for run number 3
 
 # Follow activity as new events arrive
-tamandua logs-tail                   # tail recent activity (live)
-tamandua logs-tail 50                # tail, starting with last 50 entries
-tamandua logs-tail <run-id>          # tail events for a specific run
-tamandua logs-tail #3                # tail events for run number 3
+formiga logs-tail                   # tail recent activity (live)
+formiga logs-tail 50                # tail, starting with last 50 entries
+formiga logs-tail <run-id>          # tail events for a specific run
+formiga logs-tail #3                # tail events for run number 3
 ```
 
 Example: after starting a workflow, follow its progress:
 
 ```bash
-tamandua workflow run feature-dev "Add login page"
+formiga workflow run feature-dev "Add login page"
 # -> Run started: 8a3b2c1d-...
-tamandua logs-tail 8a3b2c1d          # follow events as they arrive
+formiga logs-tail 8a3b2c1d          # follow events as they arrive
 ```
 
 ### 2.3) Dashboard lifecycle and source path
@@ -626,50 +626,50 @@ tamandua logs-tail 8a3b2c1d          # follow events as they arrive
 Start, stop, and check the web dashboard:
 
 ```bash
-tamandua dashboard start [--port N]    # Start dashboard (default: 3334)
-tamandua dashboard stop                # Stop dashboard
-tamandua dashboard status              # Check dashboard + MCP status
+formiga dashboard start [--port N]    # Start dashboard (default: 3334)
+formiga dashboard stop                # Stop dashboard
+formiga dashboard status              # Check dashboard + MCP status
 ```
 
 `dashboard status` reports both dashboard and MCP server status in a single
 output. The remote MCP server can be managed independently with
-`tamandua mcp start [--port N]`, `tamandua mcp stop`, and `tamandua mcp status`
+`formiga mcp start [--port N]`, `formiga mcp stop`, and `formiga mcp status`
 (standalone on port 3338 by default).
 
-`tamandua source-path` prints the source checkout path that `tamandua update`
+`formiga source-path` prints the source checkout path that `formiga update`
 uses to pull, rebuild, and reinstall.
 
 ### 2.4) First-time setup with get-ready
 
-Use `tamandua get-ready` to prepare a fresh Tamandua checkout.
+Use `formiga get-ready` to prepare a fresh Formiga checkout.
 
 ```bash
-tamandua get-ready
+formiga get-ready
 ```
 
 `get-ready` performs these setup steps in order:
 
-1. Installs all bundled workflows into your Tamandua state directory
-2. Ensures the CLI launcher symlink exists at `~/.local/bin/tamandua`
+1. Installs all bundled workflows into your Formiga state directory
+2. Ensures the CLI launcher symlink exists at `~/.local/bin/formiga`
 3. Starts the dashboard daemon if it is not already running
    (the daemon co-manages the dashboard HTTP server and the in-process control plane)
 4. Reports dashboard and MCP server status
 
-Run `get-ready` after pulling a new Tamandua checkout or after
-`tamandua update` if workflows or services need reinstallation.
+Run `get-ready` after pulling a new Formiga checkout or after
+`formiga update` if workflows or services need reinstallation.
 It is safe to run multiple times — already-installed workflows are
 skipped and a running daemon is left untouched.
 
 Example session:
 
 ```bash
-cd /path/to/tamandua
+cd /path/to/formiga
 ./build && ./install
-tamandua get-ready
+formiga get-ready
 # -> Installs bundled workflows
 # -> Ensures CLI symlink exists
 # -> Dashboard is running on port 3334
-# -> MCP server is not running (start it with: tamandua mcp start)
+# -> MCP server is not running (start it with: formiga mcp start)
 ```
 
 ### 2.5) Hermes harness support (Alpha)
@@ -678,7 +678,7 @@ The `--hermes-as-harness` flag runs agents with the Hermes harness instead of
 the default pi harness.
 
 ```bash
-tamandua workflow run <workflow-id> "<task>" --hermes-as-harness
+formiga workflow run <workflow-id> "<task>" --hermes-as-harness
 ```
 
 > ⚠️ **Hermes support is in alpha.** It is **very slow** compared to pi, and
@@ -691,15 +691,15 @@ default, so the flag is rarely needed unless a previous run used
 
 These flags are mutually exclusive — you cannot specify both in the same run.
 
-To use a custom Hermes binary, set the `TAMANDUA_HERMES_BINARY` environment
+To use a custom Hermes binary, set the `FORMIGA_HERMES_BINARY` environment
 variable:
 
 ```bash
-export TAMANDUA_HERMES_BINARY=/path/to/hermes
-tamandua workflow run <workflow-id> "<task>" --hermes-as-harness
+export FORMIGA_HERMES_BINARY=/path/to/hermes
+formiga workflow run <workflow-id> "<task>" --hermes-as-harness
 ```
 
-If `TAMANDUA_HERMES_BINARY` is not set, Tamandua searches for `hermes` on
+If `FORMIGA_HERMES_BINARY` is not set, Formiga searches for `hermes` on
 `PATH`. The binary is validated at scheduling time — if it is not found or
 not executable, the run fails at startup.
 
@@ -729,11 +729,11 @@ files reflect the change.
 
 ```bash
 # Phase 1: Peek
-tamandua step peek feature-dev_developer --run-id 7aeb4da9-1111-4222-8333-abcdefabcdef
+formiga step peek feature-dev_developer --run-id 7aeb4da9-1111-4222-8333-abcdefabcdef
 # -> NO_WORK (stop) OR HAS_WORK (continue)
 
 # Phase 2: Claim
-tamandua step claim feature-dev_developer --run-id 7aeb4da9-1111-4222-8333-abcdefabcdef
+formiga step claim feature-dev_developer --run-id 7aeb4da9-1111-4222-8333-abcdefabcdef
 # -> {"stepId":"87409f73-...","runId":"7aeb4da9-...","input":"Implement ..."}
 # Save stepId=87409f73-...
 
@@ -742,16 +742,16 @@ tamandua step claim feature-dev_developer --run-id 7aeb4da9-1111-4222-8333-abcde
 # Success report (uses saved stepId)
 echo 'STATUS: done
 CHANGES: Added skill docs and tests
-TESTS: node --test tests/*.test.ts' | tamandua step complete 87409f73-4ba6-492a-be44-30b2b6ffbadb
+TESTS: node --test tests/*.test.ts' | formiga step complete 87409f73-4ba6-492a-be44-30b2b6ffbadb
 
 # Failure alternative
-# tamandua step fail 87409f73-4ba6-492a-be44-30b2b6ffbadb "Missing repository path"
+# formiga step fail 87409f73-4ba6-492a-be44-30b2b6ffbadb "Missing repository path"
 ```
 
 ### Manual step inspection
 
 ```bash
-tamandua step stories <run-id>
+formiga step stories <run-id>
 ```
 
 Use `step stories` to inspect current story status for a run when diagnosing blocked pipelines.

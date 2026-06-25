@@ -11,10 +11,10 @@ import {
   getRecentEvents,
   getRunEvents,
   getEventsPath,
-  type TamanduaEvent,
+  type FormigaEvent,
 } from "../../dist/installer/events.js";
 
-function makeEvent(runId: string, event: string): TamanduaEvent {
+function makeEvent(runId: string, event: string): FormigaEvent {
   return {
     ts: new Date().toISOString(),
     event,
@@ -27,14 +27,14 @@ describe("events", () => {
   let originalStateDir: string | undefined;
 
   beforeEach(() => {
-    originalStateDir = process.env.TAMANDUA_STATE_DIR;
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-events-"));
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    originalStateDir = process.env.FORMIGA_STATE_DIR;
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-events-"));
+    process.env.FORMIGA_STATE_DIR = stateDir;
   });
 
   afterEach(() => {
-    if (originalStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = originalStateDir;
+    if (originalStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = originalStateDir;
 
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
@@ -92,7 +92,7 @@ describe("events", () => {
     });
 
     it("includes optional fields when present", () => {
-      const evt: TamanduaEvent = {
+      const evt: FormigaEvent = {
         ts: new Date().toISOString(),
         event: "story.done",
         runId: "run-5",
@@ -351,9 +351,9 @@ describe("events", () => {
     let webhookReceived: string | null = null;
 
     beforeEach(() => {
-      originalDbPath = process.env.TAMANDUA_DB_PATH;
-      dbPath = path.join(stateDir, "tamandua.db");
-      process.env.TAMANDUA_DB_PATH = dbPath;
+      originalDbPath = process.env.FORMIGA_DB_PATH;
+      dbPath = path.join(stateDir, "formiga.db");
+      process.env.FORMIGA_DB_PATH = dbPath;
 
       fs.mkdirSync(stateDir, { recursive: true });
       db = new DatabaseSync(dbPath);
@@ -372,8 +372,8 @@ describe("events", () => {
     });
 
     afterEach(async () => {
-      if (originalDbPath !== undefined) process.env.TAMANDUA_DB_PATH = originalDbPath;
-      else delete process.env.TAMANDUA_DB_PATH;
+      if (originalDbPath !== undefined) process.env.FORMIGA_DB_PATH = originalDbPath;
+      else delete process.env.FORMIGA_DB_PATH;
       try { db.close(); } catch {}
       if (server) { server.close(); server = null; }
     });
@@ -441,14 +441,14 @@ describe("emitEvent", () => {
   let originalStateDir: string | undefined;
 
   beforeEach(() => {
-    originalStateDir = process.env.TAMANDUA_STATE_DIR;
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-emit-"));
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    originalStateDir = process.env.FORMIGA_STATE_DIR;
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-emit-"));
+    process.env.FORMIGA_STATE_DIR = stateDir;
   });
 
   afterEach(() => {
-    if (originalStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = originalStateDir;
+    if (originalStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = originalStateDir;
 
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
@@ -483,14 +483,14 @@ describe("getRecentEvents", () => {
   let originalStateDir: string | undefined;
 
   beforeEach(() => {
-    originalStateDir = process.env.TAMANDUA_STATE_DIR;
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-recent-"));
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    originalStateDir = process.env.FORMIGA_STATE_DIR;
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-recent-"));
+    process.env.FORMIGA_STATE_DIR = stateDir;
   });
 
   afterEach(() => {
-    if (originalStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = originalStateDir;
+    if (originalStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = originalStateDir;
 
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
@@ -559,14 +559,14 @@ describe("getRunEvents", () => {
   let originalStateDir: string | undefined;
 
   beforeEach(() => {
-    originalStateDir = process.env.TAMANDUA_STATE_DIR;
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-runevents-"));
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    originalStateDir = process.env.FORMIGA_STATE_DIR;
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-runevents-"));
+    process.env.FORMIGA_STATE_DIR = stateDir;
   });
 
   afterEach(() => {
-    if (originalStateDir === undefined) delete process.env.TAMANDUA_STATE_DIR;
-    else process.env.TAMANDUA_STATE_DIR = originalStateDir;
+    if (originalStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = originalStateDir;
 
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
@@ -620,7 +620,7 @@ describe("getRunEvents", () => {
 });
 
 describe("getEventsPath", () => {
-  it("returns the events directory under TAMANDUA_STATE_DIR", () => {
+  it("returns the events directory under FORMIGA_STATE_DIR", () => {
     const p = getEventsPath();
     assert.ok(p.includes("events"));
   });

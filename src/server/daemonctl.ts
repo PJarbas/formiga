@@ -1,11 +1,11 @@
 /**
- * Tamandua Dashboard Daemon Lifecycle Controller
+ * Formiga Dashboard Daemon Lifecycle Controller
  *
- * Manages the lifecycle of the tamandua dashboard daemon process.
+ * Manages the lifecycle of the formiga dashboard daemon process.
  *
- * - PID file:    ~/.tamandua/tamandua.pid
- * - Port file:   ~/.tamandua/port
- * - Log file:    ~/.tamandua/dashboard.log
+ * - PID file:    ~/.formiga/formiga.pid
+ * - Port file:   ~/.formiga/port
+ * - Log file:    ~/.formiga/dashboard.log
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -22,19 +22,19 @@ const START_LOCK_STALE_MS = 30_000;
 
 // ── File path defaults ─────────────────────────────────────────────
 
-function defaultTamanduaDir(): string {
-  return path.join(process.env.HOME?.trim() || os.homedir(), ".tamandua");
+function defaultFormigaDir(): string {
+  return path.join(process.env.HOME?.trim() || os.homedir(), ".formiga");
 }
 
 // ── Control plane file paths ──────────────────────────────────────
 
-export const CONTROL_PLANE_PID_FILE = path.join(defaultTamanduaDir(), "control-plane.pid");
-export const CONTROL_PLANE_PORT_FILE = path.join(defaultTamanduaDir(), "control-plane-port");
-export const CONTROL_PLANE_LOG_FILE = path.join(defaultTamanduaDir(), "control-plane.log");
+export const CONTROL_PLANE_PID_FILE = path.join(defaultFormigaDir(), "control-plane.pid");
+export const CONTROL_PLANE_PORT_FILE = path.join(defaultFormigaDir(), "control-plane-port");
+export const CONTROL_PLANE_LOG_FILE = path.join(defaultFormigaDir(), "control-plane.log");
 
 export interface DaemonctlPathOptions {
   /**
-   * When set, use this directory instead of ~/.tamandua for PID, port,
+   * When set, use this directory instead of ~/.formiga for PID, port,
    * and log files. Tests should use this to avoid touching live state.
    */
   homeDir?: string;
@@ -42,36 +42,36 @@ export interface DaemonctlPathOptions {
 
 // ── File path helpers ───────────────────────────────────────────────
 
-function getTamanduaDir(opts?: DaemonctlPathOptions): string {
-  return opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : defaultTamanduaDir();
+function getFormigaDir(opts?: DaemonctlPathOptions): string {
+  return opts?.homeDir ? path.join(opts.homeDir, ".formiga") : defaultFormigaDir();
 }
 
 export function getPidFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "tamandua.pid");
+  return path.join(getFormigaDir(opts), "formiga.pid");
 }
 
 export function getPortFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "port");
+  return path.join(getFormigaDir(opts), "port");
 }
 
 export function getLogFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "dashboard.log");
+  return path.join(getFormigaDir(opts), "dashboard.log");
 }
 
 function getStartLockFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "daemon-start.lock");
+  return path.join(getFormigaDir(opts), "daemon-start.lock");
 }
 
 export function getControlPlanePidFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "control-plane.pid");
+  return path.join(getFormigaDir(opts), "control-plane.pid");
 }
 
 export function getControlPlanePortFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "control-plane-port");
+  return path.join(getFormigaDir(opts), "control-plane-port");
 }
 
 export function getControlPlaneLogFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "control-plane.log");
+  return path.join(getFormigaDir(opts), "control-plane.log");
 }
 
 function readLogTail(logPath: string = getLogFile(), lines = STARTUP_ERROR_TAIL_LINES): string {
@@ -101,8 +101,8 @@ export function readPort(opts?: DaemonctlPathOptions): number {
 }
 
 export function writePort(port: number, opts?: DaemonctlPathOptions): void {
-  const tamanduaDir = getTamanduaDir(opts);
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  const formigaDir = getFormigaDir(opts);
+  fs.mkdirSync(formigaDir, { recursive: true });
   fs.writeFileSync(getPortFile(opts), String(port), "utf-8");
 }
 
@@ -289,7 +289,7 @@ export type StartControlPlaneResult = {
  * Start the dashboard daemon.
  *
  * Spawns a detached node process running dist/server/daemon.js.
- * Writes the port to ~/.tamandua/port before spawning.
+ * Writes the port to ~/.formiga/port before spawning.
  *
  * If the daemon is already running, returns its info without restarting.
  *
@@ -300,7 +300,7 @@ export async function startDaemon(port?: number): Promise<{ pid: number; port: n
 export async function startDaemon(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
 export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
   // When homeDir is set, compute isolated paths for all filesystem operations.
-  const tamanduaDir = getTamanduaDir(opts);
+  const formigaDir = getFormigaDir(opts);
   const pidFile = getPidFile(opts);
   const portFile = getPortFile(opts);
   const logFile = getLogFile(opts);
@@ -319,7 +319,7 @@ export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ p
     return { pid: status.pid, port: existingPort };
   }
 
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  fs.mkdirSync(formigaDir, { recursive: true });
   const lockFd = acquireStartLock(lockFile);
   if (lockFd === null) {
     const existing = await waitForDaemonPid(pidFile, portFile, port);
@@ -506,7 +506,7 @@ async function detectExistingControlPlane(
   if (health.healthy) {
     if (health.pid !== null && !canSignalPid(health.pid, opts)) {
       throw new Error(
-        `Port ${port} is already used by a Tamandua control plane outside the requested HOME. ` +
+        `Port ${port} is already used by a Formiga control plane outside the requested HOME. ` +
         `Stop the other process or choose a different port.`,
       );
     }
@@ -525,7 +525,7 @@ async function detectExistingControlPlane(
   if (await isTcpPortOpen(port)) {
     const suffix = health.status ? `; health endpoint returned HTTP ${health.status}` : "";
     throw new Error(
-      `Port ${port} is already in use, but it is not a healthy Tamandua control plane${suffix}. ` +
+      `Port ${port} is already in use, but it is not a healthy Formiga control plane${suffix}. ` +
       `Stop the other process or choose a different port.`,
     );
   }
@@ -554,8 +554,8 @@ export function readControlPlanePort(opts?: DaemonctlPathOptions): number {
  * Write the control plane port to the control plane port file.
  */
 export function writeControlPlanePort(port: number, opts?: DaemonctlPathOptions): void {
-  const tamanduaDir = getTamanduaDir(opts);
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  const formigaDir = getFormigaDir(opts);
+  fs.mkdirSync(formigaDir, { recursive: true });
   fs.writeFileSync(getControlPlanePortFile(opts), String(port), "utf-8");
 }
 
@@ -599,7 +599,7 @@ export async function startControlPlane(port?: number): Promise<StartControlPlan
 export async function startControlPlane(port: number, opts: StartOptions & { keepHandle: true }): Promise<StartControlPlaneResult & { child: ChildProcess }>;
 export async function startControlPlane(port?: number, opts?: StartOptions): Promise<StartControlPlaneResult | (StartControlPlaneResult & { child: ChildProcess })> {
   // When homeDir is set, compute isolated paths for all filesystem operations.
-  const tamanduaDir = getTamanduaDir(opts);
+  const formigaDir = getFormigaDir(opts);
   const cpPidFile = getControlPlanePidFile(opts);
   const cpPortFile = getControlPlanePortFile(opts);
   const cpLogFile = getControlPlaneLogFile(opts);
@@ -622,7 +622,7 @@ export async function startControlPlane(port?: number, opts?: StartOptions): Pro
   const existing = await detectExistingControlPlane(cpPort, cpPidFile, cpPortFile, opts);
   if (existing) return existing;
 
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  fs.mkdirSync(formigaDir, { recursive: true });
   fs.writeFileSync(cpPortFile, String(cpPort), "utf-8");
 
   const out = fs.openSync(cpLogFile, "a");

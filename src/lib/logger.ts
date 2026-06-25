@@ -5,12 +5,12 @@ import os from "node:os";
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
 
 function getLogDir(): string {
-  const stateDir = process.env.TAMANDUA_STATE_DIR?.trim();
-  return stateDir ? path.resolve(stateDir) : path.join(os.homedir(), ".tamandua");
+  const stateDir = process.env.FORMIGA_STATE_DIR?.trim();
+  return stateDir ? path.resolve(stateDir) : path.join(os.homedir(), ".formiga");
 }
 
 function getLogFile(): string {
-  return path.join(getLogDir(), "tamandua.log");
+  return path.join(getLogDir(), "formiga.log");
 }
 
 function ensureDir(): void {

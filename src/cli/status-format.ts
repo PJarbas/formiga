@@ -1,7 +1,7 @@
 /**
- * Status formatting for the `tamandua status` command.
+ * Status formatting for the `formiga status` command.
  *
- * Formats dashboard, MCP, control-plane, and tamandua installation info
+ * Formats dashboard, MCP, control-plane, and formiga installation info
  * into human-readable string sections.
  *
  * Accepts optional dependency injection for unit testing.
@@ -10,7 +10,7 @@ import { execSync } from "node:child_process";
 import { getDaemonStatus, getControlPlaneStatus, isRunning } from "../server/daemonctl.js";
 
 /**
- * Platform-aware process-listing helper for `tamandua status`.
+ * Platform-aware process-listing helper for `formiga status`.
  *
  * Branches on process.platform:
  * - darwin (macOS/BSD): uses `ps -ax -o pid,etime,command`, strips the column header.
@@ -72,7 +72,7 @@ export function formatServiceStatus(opts?: {
   return lines.join("\n");
 }
 
-export function formatTamanduaInfo(opts?: {
+export function formatFormigaInfo(opts?: {
   getVersion?: () => string;
   resolveSourcePath?: () => string;
   resolveSkillPath?: () => string;
@@ -97,7 +97,7 @@ export function formatTamanduaInfo(opts?: {
   }
 
   const lines: string[] = [];
-  lines.push("Tamandua Info");
+  lines.push("Formiga Info");
   lines.push("-------------");
   lines.push(`Source-path:    ${srcPath}`);
   lines.push(`Skill-path:     ${skillPath}`);
@@ -199,10 +199,10 @@ export function formatProcessList(opts?: {
     }> = [];
 
     for (const line of processLines) {
-      // Match on tamandua-related patterns
+      // Match on formiga-related patterns
       const lowers = line.toLowerCase();
       if (
-        !lowers.includes("tamandua") &&
+        !lowers.includes("formiga") &&
         !lowers.includes("pi ") &&
         !lowers.includes("hermes")
       ) {
@@ -219,10 +219,10 @@ export function formatProcessList(opts?: {
         harness = "pi";
       } else if (command.includes("hermes")) {
         harness = "hermes";
-      } else if (command.includes("tamandua step")) {
+      } else if (command.includes("formiga step")) {
         harness = "pi";
-      } else if (command.includes("tamandua")) {
-        harness = "tamandua";
+      } else if (command.includes("formiga")) {
+        harness = "formiga";
       }
 
       // Build a short summary of the command

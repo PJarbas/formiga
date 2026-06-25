@@ -113,7 +113,7 @@ export async function runWorkflow(
     );
 
     // For just-do-it workflows, the dispatcher runs from a neutral
-    // workspace under Tamandua state so it doesn't occupy the user's
+    // workspace under Formiga state so it doesn't occupy the user's
     // target repository as its harness directory. The target repo path
     // is preserved in context for child workflow launch.
     if (workflowId === "just-do-it") {

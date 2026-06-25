@@ -44,7 +44,7 @@ const CANNED_MESSAGE_END = JSON.stringify({
 });
 
 function createTempHome() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-pi-token-e2e-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-pi-token-e2e-"));
   const homeDir = path.join(root, "home");
   fs.mkdirSync(homeDir, { recursive: true });
   return { root, homeDir };
@@ -210,14 +210,14 @@ describe("pi token end-to-end with fake pi shell script", () => {
           const finalTokens = row.tokens_spent;
 
           // Check for run.tokens.updated event in the run-specific events file
-          const eventsPath = path.join(process.env.HOME, ".tamandua", "events", runId + ".jsonl");
+          const eventsPath = path.join(process.env.HOME, ".formiga", "events", runId + ".jsonl");
           const events = fs.existsSync(eventsPath)
             ? fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
             : [];
           const tokenEvent = events.find((evt) => evt.event === "run.tokens.updated");
 
           // Also check global events file
-          const globalEventsPath = path.join(process.env.HOME, ".tamandua", "events", "all.jsonl");
+          const globalEventsPath = path.join(process.env.HOME, ".formiga", "events", "all.jsonl");
           const globalEvents = fs.existsSync(globalEventsPath)
             ? fs.readFileSync(globalEventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
             : [];
@@ -233,7 +233,7 @@ describe("pi token end-to-end with fake pi shell script", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 

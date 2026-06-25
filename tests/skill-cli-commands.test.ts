@@ -3,163 +3,163 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const skillPath = resolve(import.meta.dirname, "..", "skills", "tamandua-agents", "SKILL.md");
+const skillPath = resolve(import.meta.dirname, "..", "skills", "formiga-agents", "SKILL.md");
 const skillContent = readFileSync(skillPath, "utf-8");
 
 // CLI commands documented in SKILL.md that should exist in the actual CLI.
 // Format: [commandString, sectionDescription]
 const documentedCommands: [string, string][] = [
   // Section 1: CLI access
-  ["tamandua version", "version command"],
-  ["tamandua source-path", "source path command"],
-  ["tamandua skill-path", "skill path command"],
+  ["formiga version", "version command"],
+  ["formiga source-path", "source path command"],
+  ["formiga skill-path", "skill path command"],
 
   // Section 2: workflow-level commands
-  ["tamandua workflow list", "workflow list"],
-  ["tamandua workflow install", "workflow install"],
-  ["tamandua workflow uninstall", "workflow uninstall"],
-  ["tamandua workflow run", "workflow run"],
-  ["tamandua workflow status", "workflow status"],
-  ["tamandua workflow runs", "workflow runs"],
-  ["tamandua workflow pause", "workflow pause"],
-  ["tamandua workflow pause-all", "workflow pause-all"],
-  ["tamandua workflow resume", "workflow resume"],
-  ["tamandua workflow resume-all", "workflow resume-all"],
-  ["tamandua workflow stop", "workflow stop"],
-  ["tamandua workflow autoresearch", "workflow autoresearch"],
+  ["formiga workflow list", "workflow list"],
+  ["formiga workflow install", "workflow install"],
+  ["formiga workflow uninstall", "workflow uninstall"],
+  ["formiga workflow run", "workflow run"],
+  ["formiga workflow status", "workflow status"],
+  ["formiga workflow runs", "workflow runs"],
+  ["formiga workflow pause", "workflow pause"],
+  ["formiga workflow pause-all", "workflow pause-all"],
+  ["formiga workflow resume", "workflow resume"],
+  ["formiga workflow resume-all", "workflow resume-all"],
+  ["formiga workflow stop", "workflow stop"],
+  ["formiga workflow autoresearch", "workflow autoresearch"],
 
   // Section 2.2: logs
-  ["tamandua logs", "logs command"],
-  ["tamandua logs-tail", "logs-tail command"],
+  ["formiga logs", "logs command"],
+  ["formiga logs-tail", "logs-tail command"],
 
   // Section 2.3: dashboard
-  ["tamandua dashboard start", "dashboard start"],
-  ["tamandua dashboard stop", "dashboard stop"],
-  ["tamandua dashboard status", "dashboard status"],
+  ["formiga dashboard start", "dashboard start"],
+  ["formiga dashboard stop", "dashboard stop"],
+  ["formiga dashboard status", "dashboard status"],
 
   // Section 2.3: MCP
-  ["tamandua mcp start", "mcp start"],
-  ["tamandua mcp stop", "mcp stop"],
-  ["tamandua mcp status", "mcp status"],
+  ["formiga mcp start", "mcp start"],
+  ["formiga mcp stop", "mcp stop"],
+  ["formiga mcp status", "mcp status"],
 
   // Section 2.4: get-ready
-  ["tamandua get-ready", "get-ready command"],
+  ["formiga get-ready", "get-ready command"],
 
   // Section 2.6: system status
-  ["tamandua status", "status command"],
+  ["formiga status", "status command"],
 
   // Section 2.7: worktree
-  ["tamandua worktree list", "worktree list"],
-  ["tamandua worktree status", "worktree status"],
-  ["tamandua worktree remove", "worktree remove"],
-  ["tamandua worktree prune", "worktree prune"],
+  ["formiga worktree list", "worktree list"],
+  ["formiga worktree status", "worktree status"],
+  ["formiga worktree remove", "worktree remove"],
+  ["formiga worktree prune", "worktree prune"],
 
   // Section 2.8: control-plane
-  ["tamandua control-plane start", "control-plane start"],
-  ["tamandua control-plane stop", "control-plane stop"],
-  ["tamandua control-plane status", "control-plane status"],
+  ["formiga control-plane start", "control-plane start"],
+  ["formiga control-plane stop", "control-plane stop"],
+  ["formiga control-plane status", "control-plane status"],
 
   // Section 2.9: uninstall
-  ["tamandua uninstall", "uninstall command"],
+  ["formiga uninstall", "uninstall command"],
 
   // Section 2.10: autoresearch core
-  ["tamandua autoresearch init", "autoresearch init"],
-  ["tamandua autoresearch run-experiment", "autoresearch run-experiment"],
-  ["tamandua autoresearch log-experiment", "autoresearch log-experiment"],
+  ["formiga autoresearch init", "autoresearch init"],
+  ["formiga autoresearch run-experiment", "autoresearch run-experiment"],
+  ["formiga autoresearch log-experiment", "autoresearch log-experiment"],
 
   // Section 2.11: autoresearch loop
-  ["tamandua autoresearch loop", "autoresearch loop"],
-  ["tamandua autoresearch run-loop-iteration", "autoresearch run-loop-iteration"],
+  ["formiga autoresearch loop", "autoresearch loop"],
+  ["formiga autoresearch run-loop-iteration", "autoresearch run-loop-iteration"],
 
   // Section 2.12: autoresearch monitoring and setup
-  ["tamandua autoresearch status", "autoresearch status"],
-  ["tamandua autoresearch next", "autoresearch next"],
-  ["tamandua autoresearch prune", "autoresearch prune"],
-  ["tamandua autoresearch wizard", "autoresearch wizard"],
+  ["formiga autoresearch status", "autoresearch status"],
+  ["formiga autoresearch next", "autoresearch next"],
+  ["formiga autoresearch prune", "autoresearch prune"],
+  ["formiga autoresearch wizard", "autoresearch wizard"],
 
   // Section 2: update
-  ["tamandua update", "update command"],
+  ["formiga update", "update command"],
 
   // Section 3: step lifecycle
-  ["tamandua step peek", "step peek"],
-  ["tamandua step claim", "step claim"],
-  ["tamandua step complete", "step complete"],
-  ["tamandua step fail", "step fail"],
-  ["tamandua step stories", "step stories"],
+  ["formiga step peek", "step peek"],
+  ["formiga step claim", "step claim"],
+  ["formiga step complete", "step complete"],
+  ["formiga step fail", "step fail"],
+  ["formiga step stories", "step stories"],
 ];
 
 // Actual CLI commands verified from src/cli/cli.ts
 // These are the command groups handled by main()
 const actualCommands: string[] = [
   // Top-level / standalone
-  "tamandua version",
-  "tamandua tamandua",
-  "tamandua skill-path",
-  "tamandua source-path",
-  "tamandua update",
-  "tamandua get-ready",
-  "tamandua uninstall",
-  "tamandua status",
-  "tamandua logs",
-  "tamandua logs-tail",
+  "formiga version",
+  "formiga formiga",
+  "formiga skill-path",
+  "formiga source-path",
+  "formiga update",
+  "formiga get-ready",
+  "formiga uninstall",
+  "formiga status",
+  "formiga logs",
+  "formiga logs-tail",
 
   // dashboard
-  "tamandua dashboard start",
-  "tamandua dashboard stop",
-  "tamandua dashboard status",
+  "formiga dashboard start",
+  "formiga dashboard stop",
+  "formiga dashboard status",
 
   // mcp
-  "tamandua mcp start",
-  "tamandua mcp stop",
-  "tamandua mcp status",
+  "formiga mcp start",
+  "formiga mcp stop",
+  "formiga mcp status",
 
   // control-plane
-  "tamandua control-plane start",
-  "tamandua control-plane stop",
-  "tamandua control-plane status",
+  "formiga control-plane start",
+  "formiga control-plane stop",
+  "formiga control-plane status",
 
   // autoresearch
-  "tamandua autoresearch init",
-  "tamandua autoresearch run-experiment",
-  "tamandua autoresearch log-experiment",
-  "tamandua autoresearch loop",
-  "tamandua autoresearch run-loop-iteration",
-  "tamandua autoresearch status",
-  "tamandua autoresearch next",
-  "tamandua autoresearch prune",
-  "tamandua autoresearch wizard",
+  "formiga autoresearch init",
+  "formiga autoresearch run-experiment",
+  "formiga autoresearch log-experiment",
+  "formiga autoresearch loop",
+  "formiga autoresearch run-loop-iteration",
+  "formiga autoresearch status",
+  "formiga autoresearch next",
+  "formiga autoresearch prune",
+  "formiga autoresearch wizard",
 
   // step
-  "tamandua step peek",
-  "tamandua step claim",
-  "tamandua step complete",
-  "tamandua step fail",
-  "tamandua step stories",
+  "formiga step peek",
+  "formiga step claim",
+  "formiga step complete",
+  "formiga step fail",
+  "formiga step stories",
 
   // workflow
-  "tamandua workflow list",
-  "tamandua workflow runs",
-  "tamandua workflow install",
-  "tamandua workflow uninstall",
-  "tamandua workflow run",
-  "tamandua workflow status",
-  "tamandua workflow stop",
-  "tamandua workflow autoresearch",
-  "tamandua workflow pause",
-  "tamandua workflow resume",
-  "tamandua workflow pause-all",
-  "tamandua workflow resume-all",
+  "formiga workflow list",
+  "formiga workflow runs",
+  "formiga workflow install",
+  "formiga workflow uninstall",
+  "formiga workflow run",
+  "formiga workflow status",
+  "formiga workflow stop",
+  "formiga workflow autoresearch",
+  "formiga workflow pause",
+  "formiga workflow resume",
+  "formiga workflow pause-all",
+  "formiga workflow resume-all",
 
   // worktree
-  "tamandua worktree list",
-  "tamandua worktree status",
-  "tamandua worktree remove",
-  "tamandua worktree prune",
+  "formiga worktree list",
+  "formiga worktree status",
+  "formiga worktree remove",
+  "formiga worktree prune",
 ];
 
 // Commands intentionally not documented in SKILL.md (easter eggs, etc.)
 const excludedFromSkill: Set<string> = new Set([
-  "tamandua tamandua", // ASCII art easter egg
+  "formiga formiga", // ASCII art easter egg
 ]);
 
 describe("SKILL.md command reference completeness", () => {
@@ -438,56 +438,56 @@ describe("SKILL.md workflow install and uninstall documented", () => {
 });
 
 describe("SKILL.md top-level maintenance commands", () => {
-  it("documents tamandua status", () => {
+  it("documents formiga status", () => {
     assert.ok(
-      skillContent.includes("tamandua status"),
-      "SKILL.md must document tamandua status"
+      skillContent.includes("formiga status"),
+      "SKILL.md must document formiga status"
     );
   });
 
-  it("documents tamandua uninstall", () => {
+  it("documents formiga uninstall", () => {
     assert.ok(
-      skillContent.includes("tamandua uninstall"),
-      "SKILL.md must document tamandua uninstall"
+      skillContent.includes("formiga uninstall"),
+      "SKILL.md must document formiga uninstall"
     );
   });
 
-  it("documents tamandua update", () => {
+  it("documents formiga update", () => {
     assert.ok(
-      skillContent.includes("tamandua update"),
-      "SKILL.md must document tamandua update"
+      skillContent.includes("formiga update"),
+      "SKILL.md must document formiga update"
     );
   });
 
-  it("documents tamandua get-ready", () => {
+  it("documents formiga get-ready", () => {
     assert.ok(
-      skillContent.includes("tamandua get-ready"),
-      "SKILL.md must document tamandua get-ready"
+      skillContent.includes("formiga get-ready"),
+      "SKILL.md must document formiga get-ready"
     );
   });
 
-  it("documents tamandua skill-path", () => {
+  it("documents formiga skill-path", () => {
     assert.ok(
-      skillContent.includes("tamandua skill-path"),
-      "SKILL.md must document tamandua skill-path"
+      skillContent.includes("formiga skill-path"),
+      "SKILL.md must document formiga skill-path"
     );
   });
 
-  it("documents tamandua source-path", () => {
+  it("documents formiga source-path", () => {
     assert.ok(
-      skillContent.includes("tamandua source-path"),
-      "SKILL.md must document tamandua source-path"
+      skillContent.includes("formiga source-path"),
+      "SKILL.md must document formiga source-path"
     );
   });
 });
 
 describe("SKILL.md logs commands documented", () => {
   it("documents logs with selector syntax", () => {
-    assert.ok(skillContent.includes("tamandua logs"), "SKILL.md must document logs");
+    assert.ok(skillContent.includes("formiga logs"), "SKILL.md must document logs");
   });
 
   it("documents logs-tail with selector syntax", () => {
-    assert.ok(skillContent.includes("tamandua logs-tail"), "SKILL.md must document logs-tail");
+    assert.ok(skillContent.includes("formiga logs-tail"), "SKILL.md must document logs-tail");
   });
 
   it("documents logs-tail live following behavior", () => {

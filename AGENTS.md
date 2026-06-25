@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Instructions for AI coding assistants and developers working on the tamandua codebase.
+Instructions for AI coding assistants and developers working on the formiga codebase.
 
 ## Development
 
@@ -9,13 +9,13 @@ Instructions for AI coding assistants and developers working on the tamandua cod
 ```bash
 # Build from source (checkout root):
 ./build              # npm install + tsc + inject-version
-./install            # symlink ~/.local/bin/tamandua → this checkout
+./install            # symlink ~/.local/bin/formiga → this checkout
 ./build-and-install  # both steps at once
 ```
 
 The `build` script requires Node.js >= 22. It runs `npm install` followed by `npm run build` (TypeScript compilation, HTML copy, version injection).
 
-The `install` script delegates to `scripts/install.sh --local <pwd>` — it creates a symlink so `tamandua` on your PATH always uses the dist from your checkout. No global npm install, no GitHub clone needed.
+The `install` script delegates to `scripts/install.sh --local <pwd>` — it creates a symlink so `formiga` on your PATH always uses the dist from your checkout. No global npm install, no GitHub clone needed.
 
 ```bash
 # After editing source, rebuild:
@@ -28,8 +28,8 @@ npm test
 ## Project Structure
 
 ```
-tamandua/
-├── bin/tamandua                  # Shell wrapper
+formiga/
+├── bin/formiga                  # Shell wrapper
 ├── src/
 │   ├── index.ts                  # Export entry
 │   ├── db.ts                     # SQLite database (runs, steps, stories, worktrees, autoresearch sessions)
@@ -85,7 +85,7 @@ tamandua/
 ├── docs/                         # User documentation
 ├── tests/                        # Integration tests
 ├── e2e-tests/                    # End-to-end tests (smoke + real; NOT part of npm test)
-├── www/                          # Static website (tamandua.org)
+├── www/                          # Static website (formiga.org)
 ├── scripts/                      # Build scripts
 ├── package.json
 ├── tsconfig.json
@@ -94,14 +94,14 @@ tamandua/
 
 ## Architecture
 
-Tamandua is an agent team orchestrator built on top of pi (the coding agent CLI).
+Formiga is an agent team orchestrator built on top of pi (the coding agent CLI).
 
 ### Runtime model
 
 - Agent settings live at `~/.pi/agent/settings.json`
 - Work is dispatched via direct `pi --print` invocation (no gateway HTTP API)
 - Sessions use `pi --print --session`
-- Agent config lives in `~/.tamandua/agents.json`
+- Agent config lives in `~/.formiga/agents.json`
 - Permissions are expressed as role descriptions
 
 ### Agent Scheduler
@@ -143,14 +143,14 @@ in `src/cli/cli.ts` (canonical implementation: commit `bf326a5c015b4da479df83e87
 one function per command or subcommand that returns a multi-line help string.
 Examples: `getStepPeekHelp()`, `getWorkflowRunHelp()`, `getUpdateHelp()`,
 `getDashboardStartHelp()`. The full pattern is `get{Group}{Action}Help` —
-e.g. `getMcpStartHelp` covers `tamandua mcp start --help`.
+e.g. `getMcpStartHelp` covers `formiga mcp start --help`.
 
 **--help dispatch** runs at the very top of `main()` before any command execution,
 I/O, or side effects (including update warnings). This guarantees `--help` is always
 available and never triggers unintended operations.
 
 **`getUsageText()`** (global usage, shown when no recognized command is passed with
-`--help`) opens with: `Run tamandua <command> --help for detailed command help.`
+`--help`) opens with: `Run formiga <command> --help for detailed command help.`
 followed by a top-level command listing.
 
 **When adding or changing commands:** every new command or subcommand needs:
@@ -159,19 +159,19 @@ followed by a top-level command listing.
 
 ## State
 
-- SQLite database: `~/.tamandua/tamandua.db`
-- Agent config: `~/.tamandua/agents.json`
-- Cron jobs: `~/.tamandua/cron-jobs.json`
-- Events: `~/.tamandua/events.jsonl`
-- Logs: `~/.tamandua/tamandua.log`
-- Medic: `~/.tamandua/medic.json`
+- SQLite database: `~/.formiga/formiga.db`
+- Agent config: `~/.formiga/agents.json`
+- Cron jobs: `~/.formiga/cron-jobs.json`
+- Events: `~/.formiga/events.jsonl`
+- Logs: `~/.formiga/formiga.log`
+- Medic: `~/.formiga/medic.json`
 
 ## Artifacts to Review on Changes
 
 When making changes, review whether these artifacts need updating:
 
 - `docs/creating-workflows.md` — user-facing workflow documentation
-- `skills/tamandua-agents/SKILL.md` — provisioned to agents as AGENTS.md/IDENTITY.md/SOUL.md
+- `skills/formiga-agents/SKILL.md` — provisioned to agents as AGENTS.md/IDENTITY.md/SOUL.md
 - `src/server/mcp-server.ts` — MCP tools registered for agent use
 - `src/cli/cli.ts` — CLI commands that agents invoke, and per-command help functions (`get<Thing>Help()`)
 - `src/server/index.html` — dashboard UI
@@ -191,7 +191,7 @@ Changes that typically cascade to multiple artifacts:
 - **Workflow structure**: new step types, loop wiring, pipeline ordering
 - **Output format contracts**: agent output blocks (STATUS/CHANGES/TESTS)
 
-If you update `skills/tamandua-agents/SKILL.md`, verify that bundled workflow persona AGENTS.md files reflect the change.
+If you update `skills/formiga-agents/SKILL.md`, verify that bundled workflow persona AGENTS.md files reflect the change.
 
 ## Testing
 
@@ -214,7 +214,7 @@ distinction is critical:
 | Test | Script | What it does | Duration |
 |------|--------|--------------|----------|
 | **Smoke (state-machine)** | `./run-all-smoke-e2e-tests` | Exercises workflow state machine, pipeline wiring, and step lifecycle using manual `step claim` / `step complete` with canned outputs. No real agents, models, or schedulers. | ~10–15 seconds |
-| **Real (full pipeline)** | `./run-all-real-e2e-tests` | Launches actual Tamandua workflows that run through the full daemon → scheduler → pi agent pipeline. Uses real model invocations, real worktree creation, real git merges. | 30+ minutes per workflow |
+| **Real (full pipeline)** | `./run-all-real-e2e-tests` | Launches actual Formiga workflows that run through the full daemon → scheduler → pi agent pipeline. Uses real model invocations, real worktree creation, real git merges. | 30+ minutes per workflow |
 
 `./run-all-e2e-tests` is the convenience alias — it runs the **smoke test only**
 (fast, no tokens). It does NOT run the real e2e test.
@@ -250,7 +250,7 @@ separate from the regular suite.
 
 ### Parallel Test Safety
 
-Tamandua is often used to develop and test itself. All tests use isolated temporary HOME and TAMANDUA_STATE_DIR directories, so PID/port files never conflict across parallel test files.
+Formiga is often used to develop and test itself. All tests use isolated temporary HOME and FORMIGA_STATE_DIR directories, so PID/port files never conflict across parallel test files.
 
 - **Random ports:** Tests that spawn listeners use `reserveRandomPort()` (bind-to-0). Normal tests must not bind, fetch, or probe default ports 3334/3338/3339.
 - **Temp HOME isolation:** Use `fs.mkdtempSync()` for temporary HOME directories, pass `HOME` env to spawned subprocesses, clean up in `finally` blocks. Helpers that run CLI must use an explicit isolated env — do not fall back to `process.env`.
@@ -259,14 +259,14 @@ Tamandua is often used to develop and test itself. All tests use isolated tempor
 
 `npm test` remains a convenience alias that runs the full parallel suite.
 
-`src/server/mcp-server.ts` supports dependency injection via `createTamanduaMcpServer(..., { services })` / `startTamanduaMcpServer(..., { services })`; protocol tests in `src/server/mcp-server.test.ts` should use this hook instead of duplicating DB/event setup.
+`src/server/mcp-server.ts` supports dependency injection via `createFormigaMcpServer(..., { services })` / `startFormigaMcpServer(..., { services })`; protocol tests in `src/server/mcp-server.test.ts` should use this hook instead of duplicating DB/event setup.
 
-`src/server/daemon.ts` starts dashboard + MCP together (dashboard port from `~/.tamandua/port`, MCP fixed to 3338). Co-lifecycle regression coverage lives in `src/server/daemon.test.ts`.
+`src/server/daemon.ts` starts dashboard + MCP together (dashboard port from `~/.formiga/port`, MCP fixed to 3338). Co-lifecycle regression coverage lives in `src/server/daemon.test.ts`.
 
 Dashboard UI regressions are covered in `src/server/dashboard.test.ts` by fetching `/` from `createDashboardServer(...)` and asserting required HTML/script hooks (including logs-tail cursor polling markup).
 
-`tests/workflow-validation.test.ts` validates bundled workflows: directory discovery, `workflow.yml` id matching, `workspace.files` path existence, skill wiring and frontmatter, README catalog entries (e.g., `feature-dev-merge-worktree`). Bundled workflow agents should declare `tamandua-agents` in `workspace.skills`, preserving any existing skills like `agent-browser`.
+`tests/workflow-validation.test.ts` validates bundled workflows: directory discovery, `workflow.yml` id matching, `workspace.files` path existence, skill wiring and frontmatter, README catalog entries (e.g., `feature-dev-merge-worktree`). Bundled workflow agents should declare `formiga-agents` in `workspace.skills`, preserving any existing skills like `agent-browser`.
 Step output parsing (`parseOutputKeyValues` in `src/installer/step-ops.ts`) lowercases keys, so an agent output like `ORIGINAL_BRANCH: main` is consumed downstream as `{{original_branch}}`.
 Installer skill copy behavior (workflow-local + shared bundled skills) is covered in `tests/agent-skill-provisioning.test.ts`.
 
-Integration tests (CLI and dashboard API) should spawn subprocesses with temp `HOME` and `TAMANDUA_STATE_DIR` to isolate event files, SQLite, and DB path resolution.
+Integration tests (CLI and dashboard API) should spawn subprocesses with temp `HOME` and `FORMIGA_STATE_DIR` to isolate event files, SQLite, and DB path resolution.

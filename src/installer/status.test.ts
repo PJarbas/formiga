@@ -14,11 +14,11 @@ describe("stopWorkflow", () => {
   let db: DatabaseSync;
 
   beforeEach(() => {
-    originalDbPath = process.env.TAMANDUA_DB_PATH;
+    originalDbPath = process.env.FORMIGA_DB_PATH;
     originalHome = process.env.HOME;
-    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-stopwf-"));
-    const dbPath = path.join(tempRoot, ".tamandua", "tamandua.db");
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-stopwf-"));
+    const dbPath = path.join(tempRoot, ".formiga", "formiga.db");
+    process.env.FORMIGA_DB_PATH = dbPath;
     process.env.HOME = tempRoot;
 
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -86,8 +86,8 @@ describe("stopWorkflow", () => {
   });
 
   afterEach(() => {
-    if (originalDbPath) process.env.TAMANDUA_DB_PATH = originalDbPath;
-    else delete process.env.TAMANDUA_DB_PATH;
+    if (originalDbPath) process.env.FORMIGA_DB_PATH = originalDbPath;
+    else delete process.env.FORMIGA_DB_PATH;
     if (originalHome) process.env.HOME = originalHome;
     else delete process.env.HOME;
     try { db.close(); } catch {}

@@ -76,9 +76,9 @@ describe("workflow structure", () => {
     }
   });
 
-  it("tamandua-agents skill exists with required frontmatter", () => {
+  it("formiga-agents skill exists with required frontmatter", () => {
     const repoRoot = resolve(workflowsDir, "..");
-    const skillPath = resolve(repoRoot, "skills", "tamandua-agents", "SKILL.md");
+    const skillPath = resolve(repoRoot, "skills", "formiga-agents", "SKILL.md");
     assert.ok(existsSync(skillPath));
 
     const content = readFileSync(skillPath, "utf-8");
@@ -91,18 +91,18 @@ describe("workflow structure", () => {
 
     assert.ok(nameMatch, "frontmatter must include name");
     assert.ok(descriptionMatch, "frontmatter must include description");
-    assert.equal(nameMatch![1].trim(), "tamandua-agents");
+    assert.equal(nameMatch![1].trim(), "formiga-agents");
     assert.match(nameMatch![1].trim(), /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
   });
 
-  it("bundled workflow agents declare tamandua-agents skill", async () => {
+  it("bundled workflow agents declare formiga-agents skill", async () => {
     for (const id of workflowIds) {
       const spec = await loadWorkflowSpec(wfDir(id));
       for (const agent of spec.agents) {
         const skills = agent.workspace.skills ?? [];
         assert.ok(
-          skills.includes("tamandua-agents"),
-          `${id}/${agent.id}: workspace.skills must include tamandua-agents`,
+          skills.includes("formiga-agents"),
+          `${id}/${agent.id}: workspace.skills must include formiga-agents`,
         );
       }
     }
@@ -325,13 +325,13 @@ describe("US-005: do-review-do-verify workflow structure", () => {
     assert.deepEqual(stepIds, ["do", "review", "do-again", "verify"]);
   });
 
-  it("all agents have tamandua-agents skill", async () => {
+  it("all agents have formiga-agents skill", async () => {
     const spec = await loadSpec();
     for (const agent of spec.agents) {
       const skills = agent.workspace.skills ?? [];
       assert.ok(
-        skills.includes("tamandua-agents"),
-        `do-review-do-verify/${agent.id}: workspace.skills must include tamandua-agents`,
+        skills.includes("formiga-agents"),
+        `do-review-do-verify/${agent.id}: workspace.skills must include formiga-agents`,
       );
     }
   });

@@ -1,18 +1,18 @@
-# Tamandua
+# Formiga
 
-<p align="center"><img src="www/assets/tamandua.png" alt="Tamandua logo" width="180"></p>
+<p align="center"><img src="www/assets/formiga.png" alt="Formiga logo" width="180"></p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node.js >= 22">
   <img src="https://img.shields.io/badge/install-from%20source-orange.svg" alt="Install from source (not on npm)">
   <img src="https://img.shields.io/badge/workflows-23%20bundled-8a2be2.svg" alt="23 bundled workflows">
-  <a href="https://igorhvr.github.io/tamandua/"><img src="https://img.shields.io/badge/website-tamandua-1f6feb.svg" alt="Website"></a>
+  <a href="https://igorhvr.github.io/formiga/"><img src="https://img.shields.io/badge/website-formiga-1f6feb.svg" alt="Website"></a>
 </p>
 
 Build your agent team in [pi](https://github.com/mariozechner/pi-coding-agent) with one command.
 
-You don't need to hire a dev team. You need to define one. Tamandua gives you a team of specialized AI agents — planner, developer, verifier, tester, reviewer — that work together in reliable, repeatable workflows. One install. Zero infrastructure.
+You don't need to hire a dev team. You need to define one. Formiga gives you a team of specialized AI agents — planner, developer, verifier, tester, reviewer — that work together in reliable, repeatable workflows. One install. Zero infrastructure.
 
 ## Contents
 
@@ -32,16 +32,16 @@ You don't need to hire a dev team. You need to define one. Tamandua gives you a 
 ### Install from GitHub
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/igorhvr/tamandua/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/igorhvr/formiga/main/scripts/install.sh | bash
 ```
 
-Or just tell your agent: **"Clone github.com/igorhvr/tamandua to my home dir, install it and learn the skill included inside it."**
+Or just tell your agent: **"Clone github.com/igorhvr/formiga to my home dir, install it and learn the skill included inside it."**
 
 ### Install from local checkout
 
 ```bash
-git clone https://github.com/igorhvr/tamandua.git
-cd tamandua
+git clone https://github.com/igorhvr/formiga.git
+cd formiga
 ./build-and-install
 ```
 
@@ -52,13 +52,13 @@ Or step by step:
 ./install      # symlink into ~/.local/bin
 ```
 
-The `build` script handles everything: checks Node.js >= 22, runs `npm install`, compiles TypeScript. The `install` script creates a symlink at `~/.local/bin/tamandua` pointed at your checkout — so you can keep the source wherever you like and `tamandua` stays in sync. Both call into `scripts/install.sh` internally.
+The `build` script handles everything: checks Node.js >= 22, runs `npm install`, compiles TypeScript. The `install` script creates a symlink at `~/.local/bin/formiga` pointed at your checkout — so you can keep the source wherever you like and `formiga` stays in sync. Both call into `scripts/install.sh` internally.
 
-That's it. Run `tamandua workflow list` to see available workflows.
+That's it. Run `formiga workflow list` to see available workflows.
 
-> **Not on npm.** Tamandua is installed from source (or GitHub), not the npm registry.
+> **Not on npm.** Formiga is installed from source (or GitHub), not the npm registry.
 
-> **Requires Node.js >= 22.** If `tamandua` fails with a `node:sqlite` error, make sure you're running real Node.js 22+, not Bun's node wrapper.
+> **Requires Node.js >= 22.** If `formiga` fails with a `node:sqlite` error, make sure you're running real Node.js 22+, not Bun's node wrapper.
 
 ---
 
@@ -67,18 +67,18 @@ That's it. Run `tamandua workflow list` to see available workflows.
 Sixty seconds from install to a running agent team:
 
 ```bash
-$ tamandua workflow install feature-dev
+$ formiga workflow install feature-dev
 
 # Or install all bundled workflows at once
-$ tamandua workflow install --all
+$ formiga workflow install --all
 ✓ Installed workflow: feature-dev
 
-$ tamandua workflow run feature-dev "Add user authentication with OAuth"
+$ formiga workflow run feature-dev "Add user authentication with OAuth"
 Run: a1fdf573
 Workflow: feature-dev
 Status: running
 
-$ tamandua workflow status "OAuth"
+$ formiga workflow status "OAuth"
 Run: a1fdf573
 Workflow: feature-dev
 Steps:
@@ -92,16 +92,16 @@ Steps:
 Then watch your team work in real time:
 
 ```bash
-$ tamandua dashboard    # web UI at http://localhost:3334
+$ formiga dashboard    # web UI at http://localhost:3334
 ```
 
-<p align="center"><img src="www/assets/dashboard-screenshot.png" alt="Tamandua dashboard showing workflow runs, step progress, and token usage statistics" width="800"></p>
+<p align="center"><img src="www/assets/dashboard-screenshot.png" alt="Formiga dashboard showing workflow runs, step progress, and token usage statistics" width="800"></p>
 
 ---
 
 ## What You Get: Bundled Workflows
 
-Tamandua ships with 23 bundled workflows organized into six families. Use `tamandua workflow list` to see available workflows, and `tamandua workflow install <id>` to install one.
+Formiga ships with 23 bundled workflows organized into six families. Use `formiga workflow list` to see available workflows, and `formiga workflow install <id>` to install one.
 
 ### Worktree Variants
 
@@ -115,7 +115,7 @@ the result back into the original branch.
 ### Rugpull Handling
 
 When a merge workflow (`-merge`, `-merge-worktree`) fails at the `finalize_merge`
-step and the base branch tip has moved since the run started, Tamandua automatically
+step and the base branch tip has moved since the run started, Formiga automatically
 launches a fresh replacement run with the same parameters. This "rugpull" detection
 runs after the final merge failure — if the base branch stayed put, no replacement is
 triggered. Pass `--no-relaunch-upon-rugpull` to `workflow run` to suppress the
@@ -219,7 +219,7 @@ Workflows for auditing and validating the project itself.
 Install all bundled workflows at once with:
 
 ```bash
-$ tamandua workflow install --all
+$ formiga workflow install --all
 ```
 
 ---
@@ -241,7 +241,7 @@ $ tamandua workflow install --all
 
 ```mermaid
 flowchart LR
-    CLI["tamandua CLI<br/>workflow run"] -->|create run| DB[("SQLite<br/>~/.tamandua/tamandua.db")]
+    CLI["formiga CLI<br/>workflow run"] -->|create run| DB[("SQLite<br/>~/.formiga/formiga.db")]
     CLI -->|register run| Daemon["Background daemon<br/>control plane"]
     Daemon -->|schedules polling| Agents["Agent team<br/>planner · developer · verifier · tester"]
     Agents -->|"pi --print"| Harness["pi harness<br/>(or Hermes, alpha)"]
@@ -252,7 +252,7 @@ flowchart LR
 
 ### Minimal by design
 
-YAML + SQLite + polling. That's it. No Redis, no Kafka, no container orchestrator. Tamandua is a TypeScript CLI with zero external dependencies. It runs wherever pi runs.
+YAML + SQLite + polling. That's it. No Redis, no Kafka, no container orchestrator. Formiga is a TypeScript CLI with zero external dependencies. It runs wherever pi runs.
 
 ---
 
@@ -285,7 +285,7 @@ Full guide: [docs/creating-workflows.md](docs/creating-workflows.md)
 
 ## Native AutoResearch
 
-Tamandua includes native AutoResearch primitives for measurable optimization loops.
+Formiga includes native AutoResearch primitives for measurable optimization loops.
 Unlike a normal workflow, AutoResearch stores durable project-local state so an
 agent can resume after restarts, learn from each measured run, and choose the next
 experiment from evidence.
@@ -296,28 +296,28 @@ raising test coverage, reducing validation loss, improving latency, or lowering
 cost while preserving correctness.
 
 ```bash
-tamandua autoresearch init \
+formiga autoresearch init \
   --goal "reduce validation loss" \
   --metric val_bpb \
   --direction lower \
   --command "uv run train.py"
 
-tamandua autoresearch run-experiment
-tamandua autoresearch log-experiment --status auto \
+formiga autoresearch run-experiment
+formiga autoresearch log-experiment --status auto \
   --description "try lower learning rate" \
   --hypothesis "smaller LR improves stability" \
   --learned "validation improved but training slowed" \
   --next-focus "test warmup schedule"
-tamandua autoresearch next
+formiga autoresearch next
 
-# Inspect the loop for a Tamandua workflow run
-tamandua workflow autoresearch <run-id>
+# Inspect the loop for a Formiga workflow run
+formiga workflow autoresearch <run-id>
 ```
 
 ### Triggering AutoResearch
 
 AutoResearch can be driven manually from any project directory, or delegated to a
-Tamandua workflow agent. In both cases the project needs a metric command that
+Formiga workflow agent. In both cases the project needs a metric command that
 prints one parseable number. The command should be deterministic enough to compare
 experiments and should exclude generated or third-party code when measuring a
 project-owned objective.
@@ -327,7 +327,7 @@ Manual loop:
 ```bash
 cd /path/to/project
 
-tamandua autoresearch init \
+formiga autoresearch init \
   --goal "Increase unit test coverage to 1.000 without changing application code" \
   --metric coverage \
   --unit ratio \
@@ -336,23 +336,23 @@ tamandua autoresearch init \
   --metric-regex "^([0-9]\\.[0-9]{3})$" \
   --checks-command "./measure-test-coverage.sh"
 
-tamandua autoresearch run-experiment
-tamandua autoresearch log-experiment --status auto \
+formiga autoresearch run-experiment
+formiga autoresearch log-experiment --status auto \
   --description "baseline coverage" \
   --hypothesis "establish current coverage" \
   --learned "baseline recorded" \
   --next-focus "cover the lowest-risk uncovered module"
-tamandua autoresearch next
+formiga autoresearch next
 ```
 
 Workflow-driven loop:
 
 ```bash
-tamandua workflow install do-now
-tamandua dashboard start
+formiga workflow install do-now
+formiga dashboard start
 
-tamandua workflow run do-now \
-  "In the target repo, create or verify ./measure-test-coverage.sh, initialize tamandua autoresearch, then run 10 bounded experiments. Before each edit run tamandua autoresearch next. Only add or change tests/fixtures/test config. After each experiment run tamandua autoresearch run-experiment and tamandua autoresearch log-experiment --status auto with description, hypothesis, learned, and next-focus. Stop and report best metric, commits, and remaining gaps." \
+formiga workflow run do-now \
+  "In the target repo, create or verify ./measure-test-coverage.sh, initialize formiga autoresearch, then run 10 bounded experiments. Before each edit run formiga autoresearch next. Only add or change tests/fixtures/test config. After each experiment run formiga autoresearch run-experiment and formiga autoresearch log-experiment --status auto with description, hypothesis, learned, and next-focus. Stop and report best metric, commits, and remaining gaps." \
   --working-directory-for-harness /path/that/contains/or/is/the/project \
   --pi-as-harness
 ```
@@ -360,8 +360,8 @@ tamandua workflow run do-now \
 Monitor it while the workflow runs:
 
 ```bash
-tamandua workflow status <run-id>
-tamandua workflow autoresearch <run-id>
+formiga workflow status <run-id>
+formiga workflow autoresearch <run-id>
 open http://localhost:3334
 ```
 
@@ -372,16 +372,16 @@ and the green line are the kept best-so-far frontier.
 
 ### Session Registry
 
-Tamandua maintains a SQLite registry of AutoResearch sessions so the dashboard
+Formiga maintains a SQLite registry of AutoResearch sessions so the dashboard
 can discover them directly without scanning workflow runs. The registry lives in
-a table called `autoresearch_sessions` inside the main Tamandua database
-(`~/.tamandua/tamandua.db`).
+a table called `autoresearch_sessions` inside the main Formiga database
+(`~/.formiga/formiga.db`).
 
 - **Project-local files are the source of truth.** `autoresearch.config.json`,
   `autoresearch.jsonl`, `autoresearch.md`, and `autoresearch.sh` remain on disk
   in your project. The DB registry is an index/cache for discovery and dashboard
   UX — it never modifies your project files.
-- **Sessions are registered automatically.** Every `tamandua autoresearch` command
+- **Sessions are registered automatically.** Every `formiga autoresearch` command
   (init, run-experiment, log-experiment, status, next, loop) updates or creates
   the registry entry for that project directory.
 - **Backfill on dashboard start.** When the dashboard starts, it scans recent
@@ -390,18 +390,18 @@ a table called `autoresearch_sessions` inside the main Tamandua database
 
 ### Pruning Stale Registry Entries
 
-Use `tamandua autoresearch prune` to clean up stale registry rows without
+Use `formiga autoresearch prune` to clean up stale registry rows without
 removing any project-local files.
 
 ```bash
 # Prune sessions not updated in 30 days
-tamandua autoresearch prune --older-than 30d
+formiga autoresearch prune --older-than 30d
 
 # Prune only sessions whose project files no longer exist
-tamandua autoresearch prune --older-than 7d --missing
+formiga autoresearch prune --older-than 7d --missing
 
 # Preview what would be pruned without deleting
-tamandua autoresearch prune --older-than 30d --dry-run
+formiga autoresearch prune --older-than 30d --dry-run
 ```
 
 The prune command only touches the SQLite registry — your `autoresearch.jsonl`,
@@ -414,7 +414,7 @@ before editing and measurable enough to keep or discard after the run.
 
 ```bash
 # 1. Ask the ratchet what evidence should drive the next edit.
-tamandua autoresearch next
+formiga autoresearch next
 
 # Example returned focus:
 # Best run 1: 0.336 ratio
@@ -426,8 +426,8 @@ tamandua autoresearch next
 # coverage without requiring Spark or changing runtime code."
 
 # 3. Measure and log the result.
-tamandua autoresearch run-experiment
-tamandua autoresearch log-experiment --status auto \
+formiga autoresearch run-experiment
+formiga autoresearch log-experiment --status auto \
   --description "cover batch_processor pure helpers" \
   --hypothesis "pure-helper tests increase coverage without Spark" \
   --learned "coverage increased from 0.336 to 0.477; helper paths are now covered" \
@@ -436,7 +436,7 @@ tamandua autoresearch log-experiment --status auto \
 
 If the metric improves in the configured direction and checks pass, the logged run
 is kept. If it regresses, crashes, or fails checks, it is logged as discarded,
-crash, or checks_failed; with `--revert-discard`, Tamandua can revert non-state
+crash, or checks_failed; with `--revert-discard`, Formiga can revert non-state
 experiment files while preserving `autoresearch.jsonl`.
 
 Project files:
@@ -466,7 +466,7 @@ starts another experiment.
 
 You're installing agent teams that run code on your machine. We take that seriously.
 
-- **Curated repo only** — Tamandua only installs workflows from the official repository. No arbitrary remote sources.
+- **Curated repo only** — Formiga only installs workflows from the official repository. No arbitrary remote sources.
 - **Reviewed for prompt injection** — Every workflow is reviewed for prompt injection attacks and malicious agent files before merging.
 - **Community contributions welcome** — Want to add a workflow? Submit a PR. All submissions go through careful security review before they ship.
 - **Transparent by default** — Every workflow is plain YAML and Markdown. You can read exactly what each agent will do before you install it.
@@ -479,40 +479,40 @@ You're installing agent teams that run code on your machine. We take that seriou
 
 | Command | Description |
 |---------|-------------|
-| `tamandua get-ready` | Install bundled workflows and start dashboard/control plane |
-| `tamandua source-path` | Print the Tamandua source checkout path |
-| `tamandua skill-path` | Print the path to the bundled tamandua-agents agent skill |
-| `tamandua update [--force]` | Pull the source checkout, rebuild, reinstall workflows, and restart previously running services |
-| `tamandua uninstall [--force]` | Full teardown (agents, crons, DB) |
+| `formiga get-ready` | Install bundled workflows and start dashboard/control plane |
+| `formiga source-path` | Print the Formiga source checkout path |
+| `formiga skill-path` | Print the path to the bundled formiga-agents agent skill |
+| `formiga update [--force]` | Pull the source checkout, rebuild, reinstall workflows, and restart previously running services |
+| `formiga uninstall [--force]` | Full teardown (agents, crons, DB) |
 
 ### Workflows
 
 | Command | Description |
 |---------|-------------|
-| `tamandua workflow run <id> <task> [--working-directory-for-harness <dir>] [--pi-as-harness \| --hermes-as-harness]` | Start a run (defaults harness CWD to your current directory) |
-| `tamandua workflow status <query>` | Check run status |
-| `tamandua workflow runs` | List all runs |
-| `tamandua workflow resume <run-id>` | Resume a failed run |
-| `tamandua workflow delete <run-id> [--force]` | Permanently delete a workflow run and associated data |
-| `tamandua workflow list` | List available workflows |
-| `tamandua workflow install <id> [--all]` | Install one or all workflows |
-| `tamandua workflow uninstall <id>` | Remove a single workflow |
+| `formiga workflow run <id> <task> [--working-directory-for-harness <dir>] [--pi-as-harness \| --hermes-as-harness]` | Start a run (defaults harness CWD to your current directory) |
+| `formiga workflow status <query>` | Check run status |
+| `formiga workflow runs` | List all runs |
+| `formiga workflow resume <run-id>` | Resume a failed run |
+| `formiga workflow delete <run-id> [--force]` | Permanently delete a workflow run and associated data |
+| `formiga workflow list` | List available workflows |
+| `formiga workflow install <id> [--all]` | Install one or all workflows |
+| `formiga workflow uninstall <id>` | Remove a single workflow |
 
 ### Management
 
 | Command | Description |
 |---------|-------------|
-| `tamandua dashboard` | Start the web dashboard (also starts remote MCP on `http://localhost:3338/mcp`) |
-| `tamandua logs [<lines>|<run-id>|#<run-number>]` | View recent log entries |
-| `tamandua logs-tail [<lines>|<run-id>|#<run-number>]` | Follow recent activity as new events arrive |
-| `tamandua nudge` | Wake all scheduled agents for running runs to poll immediately |
+| `formiga dashboard` | Start the web dashboard (also starts remote MCP on `http://localhost:3338/mcp`) |
+| `formiga logs [<lines>|<run-id>|#<run-number>]` | View recent log entries |
+| `formiga logs-tail [<lines>|<run-id>|#<run-number>]` | Follow recent activity as new events arrive |
+| `formiga nudge` | Wake all scheduled agents for running runs to poll immediately |
 
-When you start the management dashboard (`tamandua dashboard`), Tamandua automatically starts the remote MCP server too.
+When you start the management dashboard (`formiga dashboard`), Formiga automatically starts the remote MCP server too.
 
 - Dashboard: `http://localhost:3334` (or your custom `--port`)
 - MCP endpoint: `http://localhost:3338/mcp` (fixed port)
 
-Use `tamandua dashboard status` to verify both endpoints are up.
+Use `formiga dashboard status` to verify both endpoints are up.
 
 #### Kanban view
 
@@ -525,12 +525,12 @@ failed) and the page polls `/api/runs/<run-id>/kanban` every 3 seconds. The
 JSON endpoint is also useful for external integrations — see
 `src/server/kanban-data.ts` for the response shape.
 
-<p align="center"><img src="www/assets/dashboard-kanban.png" alt="Tamandua kanban board showing swim-lane workflow step cards colour-coded by status" width="800"></p>
+<p align="center"><img src="www/assets/dashboard-kanban.png" alt="Formiga kanban board showing swim-lane workflow step cards colour-coded by status" width="800"></p>
 
 ### Harness Selection
 
-By default, Tamandua uses **pi** (`pi --print`) as its agent harness. You can
-override this with the harness selection flags on `tamandua workflow run`:
+By default, Formiga uses **pi** (`pi --print`) as its agent harness. You can
+override this with the harness selection flags on `formiga workflow run`:
 
 | Flag | Description |
 |------|-------------|
@@ -546,14 +546,14 @@ These flags are **mutually exclusive** — specifying both is an error.
 > broken** (token usage numbers in runs and the dashboard will be inaccurate).
 > Use pi (`--pi-as-harness`) for production workflows.
 
-To use a custom Hermes binary path, set the `TAMANDUA_HERMES_BINARY`
+To use a custom Hermes binary path, set the `FORMIGA_HERMES_BINARY`
 environment variable:
 
 ```bash
-export TAMANDUA_HERMES_BINARY=/path/to/hermes
+export FORMIGA_HERMES_BINARY=/path/to/hermes
 ```
 
-If `TAMANDUA_HERMES_BINARY` is not set, Tamandua searches for `hermes` on your
+If `FORMIGA_HERMES_BINARY` is not set, Formiga searches for `hermes` on your
 `PATH`. The harness validation runs at scheduling time — if the Hermes binary
 isn't found or isn't executable, the run fails immediately with a clear error.
 
@@ -565,32 +565,32 @@ The remote MCP endpoint exposes 14 tools:
 
 | Tool | Description |
 |------|-------------|
-| `tamandua.runs.list` | List recent Tamandua workflow runs. Accepts optional `limit` (integer, 1–200, default 50). |
-| `tamandua.run.status` | Fetch detailed status for a run. Requires `query` (run id, prefix, or task substring). |
-| `tamandua.run.start` | Start a workflow run. Requires `workflowId` and `taskTitle`. |
-| `tamandua.run.pause` | Pause a running workflow run. Requires `runId`. Optional `drain` (boolean) to wait for in-flight work before pausing. |
-| `tamandua.run.resume` | Resume a paused workflow run. Requires `runId`. |
-| `tamandua.run.delete` | Permanently delete a workflow run and associated steps, stories, and worktree metadata. Requires `runId`. Optional `force` (boolean) cancels and deletes running or paused runs. |
+| `formiga.runs.list` | List recent Formiga workflow runs. Accepts optional `limit` (integer, 1–200, default 50). |
+| `formiga.run.status` | Fetch detailed status for a run. Requires `query` (run id, prefix, or task substring). |
+| `formiga.run.start` | Start a workflow run. Requires `workflowId` and `taskTitle`. |
+| `formiga.run.pause` | Pause a running workflow run. Requires `runId`. Optional `drain` (boolean) to wait for in-flight work before pausing. |
+| `formiga.run.resume` | Resume a paused workflow run. Requires `runId`. |
+| `formiga.run.delete` | Permanently delete a workflow run and associated steps, stories, and worktree metadata. Requires `runId`. Optional `force` (boolean) cancels and deletes running or paused runs. |
 
 #### Events & Metadata
 
 | Tool | Description |
 |------|-------------|
-| `tamandua.events.recent` | List recent global Tamandua events. Accepts optional `limit` (integer, 1–500, default 50). |
-| `tamandua.source.path` | Return the local Tamandua source checkout path. No parameters. |
-| `tamandua.skill.path` | Return the path to the bundled tamandua-agents agent skill. No parameters. |
-| `tamandua.update.command` | Return local CLI guidance for updating Tamandua safely. No parameters. |
+| `formiga.events.recent` | List recent global Formiga events. Accepts optional `limit` (integer, 1–500, default 50). |
+| `formiga.source.path` | Return the local Formiga source checkout path. No parameters. |
+| `formiga.skill.path` | Return the path to the bundled formiga-agents agent skill. No parameters. |
+| `formiga.update.command` | Return local CLI guidance for updating Formiga safely. No parameters. |
 
 #### AutoResearch
 
 | Tool | Description |
 |------|-------------|
-| `tamandua.autoresearch.init` | Create project-local AutoResearch state. Requires `cwd`, `goal`, `metricName`, `direction`, and `command`. Optional `metricUnit`, `metricRegex`, `checksCommand`, and `overwrite`. |
-| `tamandua.autoresearch.run_experiment` | Run the configured experiment command in `cwd`, parse the metric, run optional checks, and append a `run_result`. Optional `command`, `metricRegex`, `checksCommand`, and `timeoutMs`. |
-| `tamandua.autoresearch.log_experiment` | Append the decision and learning for the latest run. Requires `cwd` and `description`; optional `status`, `metric`, `hypothesis`, `learned`, `nextFocus`, `commit`, and `revertDiscard`. |
-| `tamandua.autoresearch.status` | Summarize baseline, best result, failures, and the next ratchet prompt for `cwd`. |
+| `formiga.autoresearch.init` | Create project-local AutoResearch state. Requires `cwd`, `goal`, `metricName`, `direction`, and `command`. Optional `metricUnit`, `metricRegex`, `checksCommand`, and `overwrite`. |
+| `formiga.autoresearch.run_experiment` | Run the configured experiment command in `cwd`, parse the metric, run optional checks, and append a `run_result`. Optional `command`, `metricRegex`, `checksCommand`, and `timeoutMs`. |
+| `formiga.autoresearch.log_experiment` | Append the decision and learning for the latest run. Requires `cwd` and `description`; optional `status`, `metric`, `hypothesis`, `learned`, `nextFocus`, `commit`, and `revertDiscard`. |
+| `formiga.autoresearch.status` | Summarize baseline, best result, failures, and the next ratchet prompt for `cwd`. |
 
-#### `tamandua.run.start` Parameters
+#### `formiga.run.start` Parameters
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
@@ -609,7 +609,7 @@ The remote MCP endpoint exposes 14 tools:
 
 - Node.js >= 22
 - [pi](https://github.com/mariozechner/pi-coding-agent) installed on the host
-  - Tamandua uses pi for AI agent execution. Agents run via `pi --print` in non-interactive mode.
+  - Formiga uses pi for AI agent execution. Agents run via `pi --print` in non-interactive mode.
 - `gh` CLI for PR creation steps
 
 ---
@@ -622,7 +622,7 @@ The remote MCP endpoint exposes 14 tools:
 
 ## Origins
 
-Tamandua began as a fork of [antfarm](https://github.com/snarktank/antfarm) and pursues the same goal — orchestrating teams of AI agents through deterministic, repeatable workflows — but is built on top of [pi](https://github.com/mariozechner/pi-coding-agent) instead of OpenClaw. Credit to the original authors for the design and inspiration.
+Formiga began as a fork of [antfarm](https://github.com/snarktank/antfarm) and pursues the same goal — orchestrating teams of AI agents through deterministic, repeatable workflows — but is built on top of [pi](https://github.com/mariozechner/pi-coding-agent) instead of OpenClaw. Credit to the original authors for the design and inspiration.
 
 ---
 

@@ -5,22 +5,22 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 import {
   resolveRunRoot,
-  resolveTamanduaRoot,
+  resolveFormigaRoot,
   resolveWorkflowRoot,
   resolveWorkflowDir,
   resolveWorkflowWorkspaceRoot,
   resolveWorkflowWorkspaceDir,
 } from "../../dist/installer/paths.js";
 
-const originalStateDir = process.env.TAMANDUA_STATE_DIR;
-const testStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-paths-"));
-process.env.TAMANDUA_STATE_DIR = testStateDir;
+const originalStateDir = process.env.FORMIGA_STATE_DIR;
+const testStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-paths-"));
+process.env.FORMIGA_STATE_DIR = testStateDir;
 
 after(() => {
   if (originalStateDir === undefined) {
-    delete process.env.TAMANDUA_STATE_DIR;
+    delete process.env.FORMIGA_STATE_DIR;
   } else {
-    process.env.TAMANDUA_STATE_DIR = originalStateDir;
+    process.env.FORMIGA_STATE_DIR = originalStateDir;
   }
   fs.rmSync(testStateDir, { recursive: true, force: true });
 });
@@ -32,9 +32,9 @@ describe("paths resolveRunRoot", () => {
   });
 });
 
-describe("paths resolveTamanduaRoot", () => {
+describe("paths resolveFormigaRoot", () => {
   it("returns the state dir", () => {
-    const dir = resolveTamanduaRoot();
+    const dir = resolveFormigaRoot();
     assert.equal(dir, testStateDir);
   });
 });

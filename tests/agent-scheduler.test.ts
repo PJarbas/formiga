@@ -11,16 +11,16 @@ import {
   extractTokenUsage,
 } from "../dist/installer/agent-scheduler.js";
 
-// Isolate log output to a temp directory so tests don't write to ~/.tamandua/tamandua.log
-const originalStateDir = process.env.TAMANDUA_STATE_DIR;
-const testStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-agent-scheduler-"));
-process.env.TAMANDUA_STATE_DIR = testStateDir;
+// Isolate log output to a temp directory so tests don't write to ~/.formiga/formiga.log
+const originalStateDir = process.env.FORMIGA_STATE_DIR;
+const testStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-agent-scheduler-"));
+process.env.FORMIGA_STATE_DIR = testStateDir;
 
 after(() => {
   if (originalStateDir === undefined) {
-    delete process.env.TAMANDUA_STATE_DIR;
+    delete process.env.FORMIGA_STATE_DIR;
   } else {
-    process.env.TAMANDUA_STATE_DIR = originalStateDir;
+    process.env.FORMIGA_STATE_DIR = originalStateDir;
   }
   fs.rmSync(testStateDir, { recursive: true, force: true });
 });
@@ -31,9 +31,9 @@ try {
   const result = spawnSync("pi", ["--version"], { encoding: "utf-8", timeout: 5000 });
   piAvailable = result.status === 0 && (result.stdout.length > 0 || result.stderr.length > 0);
 } catch {
-  // TAMANDUA_PI_BINARY may point elsewhere
+  // FORMIGA_PI_BINARY may point elsewhere
   try {
-    const piPath = process.env.TAMANDUA_PI_BINARY;
+    const piPath = process.env.FORMIGA_PI_BINARY;
     if (piPath) {
       fs.accessSync(piPath, fs.constants.X_OK);
       piAvailable = true;
@@ -47,7 +47,7 @@ try {
 
 /** Create a fake pi shell script in a temp directory. Returns the script path. */
 function createFakePiScript(scriptContent: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-test-pi-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-test-pi-"));
   const scriptPath = path.join(dir, "fake-pi");
 
   const fullScript = `#!/usr/bin/env bash
@@ -91,14 +91,14 @@ function cannedMessageUpdateLine(text: string): string {
 
 describe("runPi (streaming)", () => {
   // Track original env so we can restore it
-  const originalPiBinary = process.env.TAMANDUA_PI_BINARY;
+  const originalPiBinary = process.env.FORMIGA_PI_BINARY;
 
   // Restore after all tests
   const restoreEnv = () => {
     if (originalPiBinary !== undefined) {
-      process.env.TAMANDUA_PI_BINARY = originalPiBinary;
+      process.env.FORMIGA_PI_BINARY = originalPiBinary;
     } else {
-      delete process.env.TAMANDUA_PI_BINARY;
+      delete process.env.FORMIGA_PI_BINARY;
     }
   };
 
@@ -113,8 +113,8 @@ done
 # Emit one real message_end
 echo '${cannedMessageEndLine("Hello after big stream", 150)}'
 `);
-    // Use TAMANDUA_PI_BINARY to point at fake script
-    process.env.TAMANDUA_PI_BINARY = fakeScript;
+    // Use FORMIGA_PI_BINARY to point at fake script
+    process.env.FORMIGA_PI_BINARY = fakeScript;
 
     try {
       const result = await runPi([], { timeout: 30 });
@@ -140,7 +140,7 @@ echo '${cannedMessageEndLine("Hello after big stream", 150)}'
     const fakeScript = createFakePiScript(`
 echo "HEARTBEAT_OK"
 `);
-    process.env.TAMANDUA_PI_BINARY = fakeScript;
+    process.env.FORMIGA_PI_BINARY = fakeScript;
 
     try {
       const result = await runPi([], { timeout: 10 });
@@ -156,7 +156,7 @@ echo "STATUS: done"
 echo "CHANGES: implemented streaming runPi"
 echo "TESTS: all passing"
 `);
-    process.env.TAMANDUA_PI_BINARY = fakeScript;
+    process.env.FORMIGA_PI_BINARY = fakeScript;
 
     try {
       const result = await runPi([], { timeout: 10 });
@@ -177,7 +177,7 @@ echo "unclosed { json"
 echo '${cannedMessageEndLine("Still works fine", 200)}'
 echo "trailing garbage"
 `);
-    process.env.TAMANDUA_PI_BINARY = fakeScript;
+    process.env.FORMIGA_PI_BINARY = fakeScript;
 
     try {
       const result = await runPi([], { timeout: 10 });
@@ -197,7 +197,7 @@ echo "trailing garbage"
 echo '${cannedMessageUpdateLine("thinking...")}'
 echo '${cannedMessageEndLine("Done", 999)}'
 `);
-    process.env.TAMANDUA_PI_BINARY = fakeScript;
+    process.env.FORMIGA_PI_BINARY = fakeScript;
 
     try {
       const result = await runPi([], { timeout: 10 });
@@ -219,7 +219,7 @@ echo '${cannedMessageEndLine("Done", 999)}'
 # We just verify runPi returns quickly.
 echo "ok"
 `);
-    process.env.TAMANDUA_PI_BINARY = fakeScript;
+    process.env.FORMIGA_PI_BINARY = fakeScript;
 
     try {
       const start = Date.now();
@@ -239,7 +239,7 @@ echo "ok"
 echo "some output before failure" >&2
 exit 1
 `);
-    process.env.TAMANDUA_PI_BINARY = fakeScript;
+    process.env.FORMIGA_PI_BINARY = fakeScript;
 
     try {
       await runPi([], { timeout: 10 });
@@ -257,7 +257,7 @@ exit 1
     const fakeScript = createFakePiScript(`
 sleep 30
 `);
-    process.env.TAMANDUA_PI_BINARY = fakeScript;
+    process.env.FORMIGA_PI_BINARY = fakeScript;
 
     try {
       await runPi([], { timeout: 2 }); // 2 second timeout

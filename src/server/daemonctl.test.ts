@@ -88,15 +88,15 @@ async function getAvailablePort(): Promise<number> {
 // ── Isolated control plane helpers ────────────────────────────────
 
 function createControlPlaneTempHome(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-daemonctl-cp-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "formiga-daemonctl-cp-"));
 }
 
 function getIsolatedControlPlanePidFile(homeDir: string): string {
-  return path.join(homeDir, ".tamandua", "control-plane.pid");
+  return path.join(homeDir, ".formiga", "control-plane.pid");
 }
 
 function getIsolatedControlPlanePortFile(homeDir: string): string {
-  return path.join(homeDir, ".tamandua", "control-plane-port");
+  return path.join(homeDir, ".formiga", "control-plane-port");
 }
 
 function readIsolatedControlPlanePort(homeDir: string): number {
@@ -150,21 +150,21 @@ function cleanupIsolatedControlPlaneFiles(homeDir: string): void {
 const CONTROL_STANDALONE_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "control-standalone.js");
 
 describe("daemonctl control plane file paths", () => {
-  it("CONTROL_PLANE_PID_FILE points to ~/.tamandua/control-plane.pid", async () => {
+  it("CONTROL_PLANE_PID_FILE points to ~/.formiga/control-plane.pid", async () => {
     const { CONTROL_PLANE_PID_FILE } = await import("../../dist/server/daemonctl.js");
-    assert.ok(CONTROL_PLANE_PID_FILE.includes(".tamandua"));
+    assert.ok(CONTROL_PLANE_PID_FILE.includes(".formiga"));
     assert.ok(CONTROL_PLANE_PID_FILE.endsWith("control-plane.pid"));
   });
 
-  it("CONTROL_PLANE_PORT_FILE points to ~/.tamandua/control-plane-port", async () => {
+  it("CONTROL_PLANE_PORT_FILE points to ~/.formiga/control-plane-port", async () => {
     const { CONTROL_PLANE_PORT_FILE } = await import("../../dist/server/daemonctl.js");
-    assert.ok(CONTROL_PLANE_PORT_FILE.includes(".tamandua"));
+    assert.ok(CONTROL_PLANE_PORT_FILE.includes(".formiga"));
     assert.ok(CONTROL_PLANE_PORT_FILE.endsWith("control-plane-port"));
   });
 
-  it("CONTROL_PLANE_LOG_FILE points to ~/.tamandua/control-plane.log", async () => {
+  it("CONTROL_PLANE_LOG_FILE points to ~/.formiga/control-plane.log", async () => {
     const { CONTROL_PLANE_LOG_FILE } = await import("../../dist/server/daemonctl.js");
-    assert.ok(CONTROL_PLANE_LOG_FILE.includes(".tamandua"));
+    assert.ok(CONTROL_PLANE_LOG_FILE.includes(".formiga"));
     assert.ok(CONTROL_PLANE_LOG_FILE.endsWith("control-plane.log"));
   });
 
@@ -373,7 +373,7 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
     const server = await new Promise<http.Server>((resolve, reject) => {
       const s = http.createServer((_req, res) => {
         res.writeHead(404, { "content-type": "text/plain" });
-        res.end("not tamandua");
+        res.end("not formiga");
       });
       s.once("error", reject);
       s.listen(0, "127.0.0.1", () => resolve(s));
@@ -385,7 +385,7 @@ describe("daemonctl control plane lifecycle", { concurrency: 1 }, () => {
 
       await assert.rejects(
         () => startControlPlane(address.port, { homeDir: tempHome }),
-        /not a healthy Tamandua control plane/,
+        /not a healthy Formiga control plane/,
       );
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

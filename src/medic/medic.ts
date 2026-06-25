@@ -1,5 +1,5 @@
 /**
- * Medic — the tamandua health watchdog.
+ * Medic — the formiga health watchdog.
  *
  * Runs periodic health checks on workflow runs, detects stuck/stalled/dead state,
  * and takes corrective action where safe. Logs all findings to the medic_checks table.

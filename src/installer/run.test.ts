@@ -24,8 +24,8 @@ function runGit(args: string[], cwd: string): string | null {
 function initGitRepo(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
   runGit(["init", "--initial-branch=main"], dir);
-  runGit(["config", "user.email", "test@tamandua.local"], dir);
-  runGit(["config", "user.name", "Tamandua Test"], dir);
+  runGit(["config", "user.email", "test@formiga.local"], dir);
+  runGit(["config", "user.name", "Formiga Test"], dir);
   fs.writeFileSync(path.join(dir, "README.md"), "# Test Repo\n", "utf-8");
   runGit(["add", "README.md"], dir);
   runGit(["commit", "-m", "initial commit"], dir);
@@ -54,7 +54,7 @@ async function waitForPidExit(pid: number, timeoutMs = 3000): Promise<void> {
 }
 
 function writeMinimalWorkflow(homeDir: string, workflowId: string): void {
-  const workflowDir = path.join(homeDir, ".tamandua", "workflows", workflowId);
+  const workflowDir = path.join(homeDir, ".formiga", "workflows", workflowId);
   fs.mkdirSync(workflowDir, { recursive: true });
   fs.writeFileSync(path.join(workflowDir, "workflow.yml"),
     `id: ${workflowId}\nrun:\n  workspace: direct\nagents:\n  - id: dev\n    model: fake\n    workspace:\n      baseDir: .\nsteps:\n  - id: implement\n    agent: dev\n    input: Implement the task\n    expects: STATUS, CHANGES, TESTS\n`,
@@ -71,25 +71,25 @@ describe("runWorkflow", () => {
   let origStateDir: string | undefined;
 
   before(async () => {
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-run-"));
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-run-"));
     origHome = process.env.HOME;
-    origControlPort = process.env.TAMANDUA_CONTROL_PORT;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
-    origStateDir = process.env.TAMANDUA_STATE_DIR;
+    origControlPort = process.env.FORMIGA_CONTROL_PORT;
+    origDbPath = process.env.FORMIGA_DB_PATH;
+    origStateDir = process.env.FORMIGA_STATE_DIR;
 
-    const tamanduaDir = path.join(tempHome, ".tamandua");
+    const formigaDir = path.join(tempHome, ".formiga");
     const dashboardPort = await reserveRandomPort();
     let controlPort = await reserveRandomPort();
     while (controlPort === dashboardPort) {
       controlPort = await reserveRandomPort();
     }
-    fs.mkdirSync(tamanduaDir, { recursive: true });
-    fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
+    fs.mkdirSync(formigaDir, { recursive: true });
+    fs.writeFileSync(path.join(formigaDir, "port"), String(dashboardPort), "utf-8");
 
     process.env.HOME = tempHome;
-    process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
-    process.env.TAMANDUA_DB_PATH = path.join(tamanduaDir, "tamandua.db");
-    process.env.TAMANDUA_STATE_DIR = tamanduaDir;
+    process.env.FORMIGA_CONTROL_PORT = String(controlPort);
+    process.env.FORMIGA_DB_PATH = path.join(formigaDir, "formiga.db");
+    process.env.FORMIGA_STATE_DIR = formigaDir;
   });
 
   after(async () => {
@@ -103,19 +103,19 @@ describe("runWorkflow", () => {
       delete process.env.HOME;
     }
     if (origControlPort !== undefined) {
-      process.env.TAMANDUA_CONTROL_PORT = origControlPort;
+      process.env.FORMIGA_CONTROL_PORT = origControlPort;
     } else {
-      delete process.env.TAMANDUA_CONTROL_PORT;
+      delete process.env.FORMIGA_CONTROL_PORT;
     }
     if (origDbPath !== undefined) {
-      process.env.TAMANDUA_DB_PATH = origDbPath;
+      process.env.FORMIGA_DB_PATH = origDbPath;
     } else {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
     if (origStateDir !== undefined) {
-      process.env.TAMANDUA_STATE_DIR = origStateDir;
+      process.env.FORMIGA_STATE_DIR = origStateDir;
     } else {
-      delete process.env.TAMANDUA_STATE_DIR;
+      delete process.env.FORMIGA_STATE_DIR;
     }
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -345,7 +345,7 @@ describe("runWorkflow", () => {
     it("stores base_branch_sha as empty string when git rev-parse fails in direct mode", async () => {
       const workflowId = "test-ctx-bbsha-empty";
       writeMinimalWorkflow(tempHome, workflowId);
-      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-non-git-sha-"));
+      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-non-git-sha-"));
 
       try {
         try {

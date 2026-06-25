@@ -94,10 +94,10 @@ describe("workflow-fetch", () => {
     });
 
     it("fetches a bundled workflow into target directory", async () => {
-      const tmpDir = path.join(tmpdir(), `tamandua-test-${process.pid}-fetch-wf`);
-      const orig = process.env.TAMANDUA_STATE_DIR;
+      const tmpDir = path.join(tmpdir(), `formiga-test-${process.pid}-fetch-wf`);
+      const orig = process.env.FORMIGA_STATE_DIR;
       try {
-        process.env.TAMANDUA_STATE_DIR = tmpDir;
+        process.env.FORMIGA_STATE_DIR = tmpDir;
         const result = await fetchWorkflow("do-now");
         assert.ok(result.workflowDir.length > 0);
         assert.ok(result.bundledSourceDir.length > 0);
@@ -105,9 +105,9 @@ describe("workflow-fetch", () => {
         assert.ok(existsSync(path.join(result.workflowDir, "workflow.yml")), "workflow.yml should be copied");
       } finally {
         if (orig !== undefined) {
-          process.env.TAMANDUA_STATE_DIR = orig;
+          process.env.FORMIGA_STATE_DIR = orig;
         } else {
-          delete process.env.TAMANDUA_STATE_DIR;
+          delete process.env.FORMIGA_STATE_DIR;
         }
         rmSync(tmpDir, { recursive: true, force: true });
       }
