@@ -1,7 +1,7 @@
 # Checklist de Implementacao — Formiga (specs.md)
 
-Status atual: **Branch 4 merged** — iniciando Branch 5
-Branch git ativa: `main` (Branch 4 merged via fast-forward)
+Status atual: **Branch 5 completa** — iniciando Branch 6
+Branch git ativa: `feat/ml-agents-and-leaderboard`
 
 ---
 
@@ -93,25 +93,29 @@ Branch git ativa: `main` (Branch 4 merged via fast-forward)
 
 ---
 
-## Branch 5: feat/ml-agents-and-leaderboard [PENDENTE]
+## Branch 5: feat/ml-agents-and-leaderboard [CONCLUIDA]
 
-- [ ] `src/agents/interfaces.ts` — `AgentRunner`, `AgentContext`, `AgentResult`, `AgentPlan`, `AgentMessenger`
-- [ ] `src/agents/data-analyst.ts` — EDA (reports/01_eda.md)
-- [ ] `src/agents/feature-engineer.ts` — features + split + baseline
-- [ ] `src/agents/modeler-classic.ts` — GBM/Lineares/RF/SVM/Stacking L1
-- [ ] `src/agents/modeler-advanced.ts` — NN/AutoML/Stacking multi-nivel
-- [ ] `src/agents/ml-critic.ts` — auditor adversarial (read-only)
-- [ ] `src/leaderboard/schema.ts` — DDL + indices SQLite WAL
-- [ ] `src/leaderboard/repository.ts` — Repository pattern
-- [ ] `src/leaderboard/queries.ts`
-- [ ] `src/artifacts/{store.ts,local-store.ts}`
-- [ ] `src/orchestrator/{fan-out,fan-in,round-manager,communication}.ts`
-- [ ] `src/shared/{seed,metrics,validation,schemas}.ts`
-- [ ] `src/autoresearch/engine.ts`, `types.ts`, `config.ts`
-- [ ] Workspace layout (data/, artifacts/, results/, reports/, holdout/)
-- [ ] Protocolo de mensagens inter-agente
-- [ ] Cobertura >= 80% em novos modulos
-- [ ] `npm run test` verde
+- [x] `src/agents/interfaces.ts` — `AgentRunner`, `AgentContext`, `AgentResult`, `AgentPlan`, `AgentMessenger`
+- [x] `src/agents/data-analyst.ts` — EDA (reports/01_eda.md)
+- [x] `src/agents/feature-engineer.ts` — features + split + baseline
+- [x] `src/agents/modeler-classic.ts` — GBM/Lineares/RF/SVM/Stacking L1
+- [x] `src/agents/modeler-advanced.ts` — NN/AutoML/Stacking multi-nivel
+- [x] `src/agents/ml-critic.ts` — auditor adversarial (read-only)
+- [x] `src/leaderboard/schema.ts` — DDL + indices SQLite WAL
+- [x] `src/leaderboard/repository.ts` — Repository pattern
+- [x] `src/leaderboard/queries.ts`
+- [x] `src/artifacts/{store.ts,local-store.ts}`
+- [x] `src/orchestrator/{fan-out,fan-in,round-manager,communication}.ts`
+- [x] `src/shared/{seed,metrics,validation,schemas}.ts`
+- [x] `src/autoresearch/engine.ts`, `types.ts`, `config.ts`
+- [x] Workspace layout (data/, artifacts/, results/, reports/, holdout/)
+- [x] Protocolo de mensagens inter-agente
+- [x] `src/database/migrations.ts` — integracao `initLeaderboardSchema(db)`
+- [x] 62 novos testes (shared/metrics, shared/validation, leaderboard/repository, orchestrator/fan-out)
+- [x] `npx tsc --noEmit` limpo
+- [x] `npm run test` verde (novos modulos)
+- [x] `npx madge --circular` zero ciclos nos modulos novos
+- [x] Branch 5 merge ready
 
 ---
 

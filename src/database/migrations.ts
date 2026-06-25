@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { initLeaderboardSchema } from "../leaderboard/schema.js";
 
 export function migrate(db: DatabaseSync): void {
   db.exec(`
@@ -183,4 +184,7 @@ export function migrate(db: DatabaseSync): void {
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_autoresearch_sessions_last_seen_at ON autoresearch_sessions(last_seen_at)",
   );
+
+  // ── Leaderboard experiments table ──
+  initLeaderboardSchema(db);
 }
