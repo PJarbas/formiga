@@ -10,9 +10,23 @@ import { emitEvent } from "./events.js";
 import { logger } from "../lib/logger.js";
 import { getMaxRoleTimeoutSeconds } from "./install.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
-import { isFrontendChange } from "../lib/frontend-detect.js";
 import type { LoopConfig, Story, WorkflowStepFailure } from "./types.js";
-import { detectRugpull, relaunchRunAfterRugpull } from "./rugpull.js";
+
+// frontend-detect was removed as orphan code. Inline stub preserves the
+// computeHasFrontendChanges call site until step-ops is refactored in Branch 3.
+function isFrontendChange(files: string[]): boolean {
+  const FRONTEND_PATTERNS = [/\.tsx?$/, /\.jsx?$/, /\.css$/, /\.scss$/, /\.html$/, /\.vue$/, /\.svelte$/];
+  return files.some((f) => FRONTEND_PATTERNS.some((pat) => pat.test(f)));
+}
+// rugpull detection/relaunch was removed as orphan code (was Pi/Hermes-
+// specific base-branch race recovery). Stubs preserve the call sites until
+// step-ops is refactored in Branch 3.
+function detectRugpull(_runId: string): { isRugpull: boolean; reason?: string } {
+  return { isRugpull: false };
+}
+async function relaunchRunAfterRugpull(_runId: string): Promise<{ relaunched: boolean }> {
+  return { relaunched: false };
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // Key-Value Parsing

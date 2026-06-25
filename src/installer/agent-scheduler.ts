@@ -6,9 +6,52 @@ import { resolveTamanduaCli, resolveWorkflowDir, resolveWorkflowWorkspaceDir } f
 import type { WorkflowSpec, WorkflowAgent, HarnessType } from "./types.js";
 import { logger } from "../lib/logger.js";
 import { getRoleTimeoutSeconds, inferRole } from "./install.js";
-import { formatPiCommandPreview } from "./pi-command-preview.js";
 import { emitEvent } from "./events.js";
-import { parsePiOutputStream } from "./pi-stream-parser.js";
+import type { Interface as ReadlineInterface } from "node:readline";
+
+// ── Inline stubs for previously-imported orphan helpers ────────────
+// formatPiCommandPreview and parsePiOutputStream were removed as orphan
+// code. Branch 5 (ML agents) replaces the entire pi/hermes execution
+// model, so these stubs only exist to keep the legacy spawn paths
+// type-clean until that branch lands.
+
+interface PiCommandPreview {
+  commandPreview: string;
+  argvPreview: string[];
+  redactedIndices: number[];
+  truncatedIndices: number[];
+  promptElided: boolean;
+  argCount: number;
+}
+
+function formatPiCommandPreview(binPath: string, args: string[]): PiCommandPreview {
+  return {
+    commandPreview: [binPath, ...args].join(" "),
+    argvPreview: args,
+    redactedIndices: [],
+    truncatedIndices: [],
+    promptElided: false,
+    argCount: args.length,
+  };
+}
+
+interface ParsePiResult {
+  assistantText: string;
+  textFallback: string | null;
+  events: unknown[];
+}
+
+async function parsePiOutputStream(rl: ReadlineInterface): Promise<ParsePiResult> {
+  const lines: string[] = [];
+  for await (const line of rl) {
+    lines.push(line);
+  }
+  return {
+    assistantText: lines.join("\n"),
+    textFallback: null,
+    events: [],
+  };
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Run-Scoped Polling

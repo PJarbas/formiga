@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-import { runWorkflow, type RunWorkflowParams } from "../../dist/installer/run.js";
+import { runWorkflow } from "../../dist/installer/run.js";
 import { getRunHarnessType } from "../../dist/installer/run-harness.js";
 import {
   createAgentCronJob,
@@ -14,16 +14,12 @@ import type { WorkflowAgent } from "../../dist/installer/types.js";
 
 // ── Helpers ──
 
-function writeMinimalWorkflow(
-  homeDir: string,
-  workflowId: string,
-  workspaceMode: "direct" | "worktree" = "direct",
-): void {
+function writeMinimalWorkflow(homeDir: string, workflowId: string): void {
   const workflowDir = path.join(homeDir, ".tamandua", "workflows", workflowId);
   fs.mkdirSync(workflowDir, { recursive: true });
   fs.writeFileSync(
     path.join(workflowDir, "workflow.yml"),
-    `id: ${workflowId}\nrun:\n  workspace: ${workspaceMode}\nagents:\n  - id: dev\n    model: fake\n    workspace:\n      baseDir: .\nsteps:\n  - id: implement\n    agent: dev\n    input: Implement the task\n    expects: STATUS, CHANGES, TESTS\n`,
+    `id: ${workflowId}\nrun:\n  workspace: direct\nagents:\n  - id: dev\n    model: fake\n    workspace:\n      baseDir: .\nsteps:\n  - id: implement\n    agent: dev\n    input: Implement the task\n    expects: STATUS, CHANGES, TESTS\n`,
     "utf-8",
   );
 }
@@ -72,7 +68,7 @@ describe("HarnessType flow (US-001)", () => {
   describe("RunWorkflowParams.harnessType", () => {
     it("is optional and defaults to 'pi' in run context", async () => {
       const workflowId = "test-harness-default";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -97,7 +93,7 @@ describe("HarnessType flow (US-001)", () => {
 
     it("stores 'hermes' when harnessType is 'hermes'", async () => {
       const workflowId = "test-harness-hermes";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -123,7 +119,7 @@ describe("HarnessType flow (US-001)", () => {
 
     it("stores 'pi' when harnessType is explicitly 'pi'", async () => {
       const workflowId = "test-harness-explicit-pi";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({

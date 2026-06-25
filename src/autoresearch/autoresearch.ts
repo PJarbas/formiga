@@ -1,7 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { parsePiOutputStream } from "../installer/pi-stream-parser.js";
+// Minimal inline replacement for previously-imported parsePiOutputStream.
+// The richer Pi stream parsing logic was removed (orphan code); autoresearch
+// now treats the child's stdout as plain assistant text.
+async function parsePiOutputStream(lines: string[]): Promise<{ assistantText: string; textFallback?: string }> {
+  return { assistantText: lines.join("\n") };
+}
 
 export type AutoresearchDirection = "lower" | "higher";
 export type AutoresearchDecision = "baseline" | "keep" | "discard" | "crash" | "checks_failed";

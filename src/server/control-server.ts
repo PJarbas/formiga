@@ -26,7 +26,6 @@ import crypto from "node:crypto";
 import { logger } from "../lib/logger.js";
 import { getDb } from "../db.js";
 import { emitEvent } from "../installer/events.js";
-import { validateRunHarnessForScheduling } from "../installer/run-harness.js";
 
 export const DEFAULT_CONTROL_PORT = 3339;
 const DEFAULT_MAX_ACTIVE_TIMERS = 50;
@@ -155,12 +154,9 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
   const {
     _scheduledJobCount,
     _scheduledJobCountForRun,
-    _runIdForScheduledHarnessWorkdir,
     removeRunCrons,
     setupAgentCrons,
   } = await import("../installer/agent-scheduler.js");
-
-  const harness = validateRunHarnessForScheduling(run.id, run.context);
 
   let isSaveTokensMode = false;
   try {
@@ -168,16 +164,6 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
     isSaveTokensMode = contextParsed.no_hurry_save_tokens_mode === 'true';
   } catch {
     // context might be malformed; default to false
-  }
-
-  const duplicateRunId = _runIdForScheduledHarnessWorkdir(
-    harness.workingDirectoryForHarness,
-    run.id,
-  );
-  if (duplicateRunId && process.env.TAMANDUA_ALLOW_SHARED_HARNESS_WORKDIR !== "1") {
-    throw new Error(
-      `Run ${run.id} harness workdir is already scheduled for run ${duplicateRunId}: ${harness.workingDirectoryForHarness}`,
-    );
   }
 
   const existingForRun = _scheduledJobCountForRun(run.id);
@@ -237,7 +223,6 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
 
   try {
     await setupAgentCrons(workflow, run.id, {
-      workingDirectoryForHarness: harness.workingDirectoryForHarness,
       noHurrySaveTokensMode: isSaveTokensMode,
     });
     const scheduledForRun = _scheduledJobCountForRun(run.id);
@@ -414,21 +399,6 @@ async function handleResumeRun(runId: string): Promise<JsonResponse> {
   if (isTerminal(run.status)) return conflict(`Run is terminal: ${run.status}`);
   if (run.status === "running" && run.scheduling_status === "active") {
     return ok({ state: "active" });
-  }
-  try {
-    validateRunHarnessForScheduling(run.id, run.context);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    try {
-      getDb()
-        .prepare(
-          "UPDATE runs SET scheduling_status = 'error', scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .run(message, runId);
-    } catch {
-      /* best-effort */
-    }
-    return unprocessable(`Cannot resume run: ${message}`);
   }
   try {
     getDb()

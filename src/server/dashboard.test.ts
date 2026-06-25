@@ -9,7 +9,6 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createDashboardServer } from "../../dist/server/dashboard.js";
 import { type TamanduaEvent } from "../../dist/installer/events.js";
-import { DEFAULT_MCP_PORT } from "../../dist/server/mcp-server.js";
 import { getDb, incrementSystemTokenSpend, getSystemTokenSpend } from "../../dist/db.js";
 
 interface LogsTailResponse {
@@ -1025,24 +1024,6 @@ describe("dashboard relaunch UI", () => {
       assert.match(html, /\.action-btn\.resume-btn/);
       assert.match(html, /handlePause\(/);
       assert.match(html, /handleResume\(/);
-    } finally {
-      await stopDashboard(server);
-    }
-  });
-});
-
-describe("dashboard MCP status API", () => {
-  it("GET /api/mcp-status returns { running, port, path }", async () => {
-    const { server, baseUrl } = await startDashboard();
-
-    try {
-      const response = await fetch(`${baseUrl}/api/mcp-status`);
-      assert.equal(response.status, 200);
-
-      const body = await response.json() as { running: boolean; port: number; path: string };
-      assert.equal(typeof body.running, "boolean");
-      assert.equal(body.port, DEFAULT_MCP_PORT);
-      assert.equal(body.path, "/mcp");
     } finally {
       await stopDashboard(server);
     }
@@ -2664,96 +2645,6 @@ describe("dashboard relaunch integration", () => {
     }
   });
 
-  it("relaunches a failed run in worktree mode preserving workflow_id, task, workspace settings, notify_url", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-relaunch-integration-"));
-    const homeDir = path.join(root, "home");
-    fs.mkdirSync(homeDir, { recursive: true });
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
-    const previousControlPort = process.env.TAMANDUA_CONTROL_PORT;
-
-    try {
-      process.env.HOME = homeDir;
-
-      // Install a worktree-mode workflow
-      installWorkflowInHome(homeDir, "feature-dev-merge-worktree");
-
-      // Create a minimal git repo to serve as origin for the worktree
-      const originRepo = path.join(root, "origin-repo");
-      createMinimalGitRepo(originRepo);
-      // Get the commit SHA and branch for the context
-      const shaResult = spawnSync("git", ["-C", originRepo, "rev-parse", "HEAD"], { encoding: "utf-8" });
-      const originSha = shaResult.stdout.trim();
-
-      // Set up mock control server
-      const mockControl = await startMockControlServer();
-      process.env.TAMANDUA_CONTROL_PORT = String(mockControl.port);
-
-      // Initialize DB and create a failed worktree run
-      const db = getDb();
-      const failedRunId = "run-failed-worktree-001";
-      const originalTask = "Worktree task";
-      const notifyUrl = "https://hooks.example.com/worktree-notify";
-      const context = {
-        workspace_mode: "worktree",
-        working_directory_for_harness: "/tmp/nonexistent-worktree",
-        worktree_origin_repository: originRepo,
-        worktree_origin_ref: "main",
-        worktree_origin_sha: originSha,
-        repo: "/tmp/nonexistent-worktree",
-      };
-
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, notify_url, created_at, updated_at)
-        VALUES (?, 1, 'feature-dev-merge-worktree', ?, 'failed', ?, 0, ?, '2026-01-01', '2026-01-01')
-      `).run(failedRunId, originalTask, JSON.stringify(context), notifyUrl);
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/runs/${failedRunId}/relaunch`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ task: "Modified worktree task" }),
-        });
-
-        assert.equal(response.status, 200);
-        const body = await response.json() as { relaunched: boolean; originalRunId: string; runId: string; runNumber: number };
-        assert.equal(body.relaunched, true);
-        assert.equal(body.originalRunId, failedRunId);
-        assert.ok(typeof body.runId === "string" && body.runId.length > 0);
-
-        // Verify the new run in the DB
-        const newRun = db.prepare(
-          "SELECT workflow_id, task, context, notify_url FROM runs WHERE id = ?",
-        ).get(body.runId) as { workflow_id: string; task: string; context: string; notify_url: string | null } | undefined;
-        assert.ok(newRun, "new run should exist in DB");
-        assert.equal(newRun.workflow_id, "feature-dev-merge-worktree");
-        assert.equal(newRun.task, "Modified worktree task");
-        assert.equal(newRun.notify_url, notifyUrl);
-
-        // Parse context to verify workspace settings are preserved
-        const newContext = JSON.parse(newRun.context) as Record<string, string>;
-        assert.equal(newContext.workspace_mode, "worktree");
-        assert.equal(newContext.worktree_origin_repository, originRepo);
-        assert.equal(newContext.worktree_origin_ref, "main");
-        // worktree_path should be set by runWorkflow
-        assert.ok(typeof newContext.worktree_path === "string" && newContext.worktree_path.length > 0);
-      } finally {
-        await stopDashboard(server);
-      }
-
-      mockControl.server.close();
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.TAMANDUA_DB_PATH;
-      else process.env.TAMANDUA_DB_PATH = previousDbPath;
-      if (previousControlPort === undefined) delete process.env.TAMANDUA_CONTROL_PORT;
-      else process.env.TAMANDUA_CONTROL_PORT = previousControlPort;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("dashboard cancel UI", () => {

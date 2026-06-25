@@ -22,12 +22,10 @@ import { fileURLToPath } from "node:url";
 import { getDb, getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession } from "../db.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
-import { getMcpStatus } from "./daemonctl.js";
 import { buildKanbanSnapshot, buildKanbanCardDetail } from "./kanban-data.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 import { runWorkflow } from "../installer/run.js";
 import { stopWorkflow, deleteWorkflow, getWorkflowStatus } from "../installer/status.js";
-import { readVersionStatus } from "../lib/version-check.js";
 import { getBuildVersion } from "../lib/version.js";
 import {
   findAutoresearchSessionCwd,
@@ -874,28 +872,6 @@ function handleVersion(_req: http.IncomingMessage, res: http.ServerResponse): vo
   }
 }
 
-function handleVersionStatus(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const status = readVersionStatus();
-    jsonResponse(res, status);
-  } catch (err) {
-    errorResponse(res, `Failed to read version status: ${(err as Error).message}`);
-  }
-}
-
-function handleMcpStatus(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const status = getMcpStatus();
-    jsonResponse(res, {
-      running: status.running,
-      port: status.port,
-      path: status.endpoint,
-    });
-  } catch (err) {
-    errorResponse(res, `Failed to get MCP status: ${(err as Error).message}`);
-  }
-}
-
 // ── Router ───────────────────────────────────────────────────────────
 
 function route(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -1027,18 +1003,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /api/version (registered before /api/version-status to avoid prefix conflict)
   if (method === "GET" && pathname === "/api/version") {
     handleVersion(req, res);
-    return;
-  }
-
-  // GET /api/version-status
-  if (method === "GET" && pathname === "/api/version-status") {
-    handleVersionStatus(req, res);
-    return;
-  }
-
-  // GET /api/mcp-status
-  if (method === "GET" && pathname === "/api/mcp-status") {
-    handleMcpStatus(req, res);
     return;
   }
 

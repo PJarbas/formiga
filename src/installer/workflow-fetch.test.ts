@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -12,16 +12,13 @@ import {
 describe("workflow-fetch", () => {
   describe("getWorkflowShortDescription", () => {
     it("extracts the first sentence from a real bundled workflow description", async () => {
-      const desc = await getWorkflowShortDescription("bug-fix");
+      const desc = await getWorkflowShortDescription("do-now");
       assert.ok(desc.length > 0);
       assert.ok(!desc.includes("\n"), "should be a single line");
-      // The bug-fix first sentence ends with "verification."
-      assert.ok(desc.includes("verification"), `expected first sentence, got: ${desc}`);
     });
 
-    it("extracts the first sentence ending with a period", async () => {
-      const desc = await getWorkflowShortDescription("bug-fix-github-pr");
-      // The bug-fix-github-pr first sentence should end with "pipeline."
+    it("extracts the first sentence ending with sentence-ending punctuation", async () => {
+      const desc = await getWorkflowShortDescription("do-review-do-verify");
       assert.ok(
         desc.endsWith(".") || desc.endsWith("!") || desc.endsWith("?"),
         `expected sentence-ending punctuation, got: ${desc}`,
@@ -30,8 +27,7 @@ describe("workflow-fetch", () => {
     });
 
     it("returns a trimmed one-liner without newlines", async () => {
-      // Test multiple bundled workflows
-      for (const id of ["do-now", "security-audit"]) {
+      for (const id of ["do-now", "just-do-it"]) {
         const desc = await getWorkflowShortDescription(id);
         assert.ok(desc.length > 0);
         assert.ok(!desc.includes("\n"), `description for ${id} contains newline: ${desc}`);
@@ -43,64 +39,17 @@ describe("workflow-fetch", () => {
       assert.equal(desc, "non-existent-workflow-xyz");
     });
 
-    it("falls back to workflow ID when description is missing", async () => {
-      const tmpDir = path.join(tmpdir(), `tamandua-test-${process.pid}-wf-missing-desc`);
-      const wfDir = path.join(tmpDir, "workflows", "test-missing-desc");
-      mkdirSync(wfDir, { recursive: true });
-      writeFileSync(
-        path.join(wfDir, "workflow.yml"),
-        "id: test-missing-desc\nname: Test No Description\n",
-        "utf-8",
-      );
-      const orig = process.env.TAMANDUA_STATE_DIR;
-      try {
-        process.env.TAMANDUA_STATE_DIR = tmpDir;
-        // We need to override the bundled dir resolution. Since the function
-        // uses resolveBundledWorkflowDir which uses resolveBundledWorkflowsDir,
-        // and that uses __dirname, we can't easily redirect. Test with a real
-        // bundled workflow that has a description — this fallback is best-effort.
-        // Instead, test with the real bug-fix.yml (which has a description):
-        const desc = await getWorkflowShortDescription("bug-fix");
-        assert.ok(typeof desc === "string");
-        assert.ok(desc.length > 0);
-      } finally {
-        if (orig !== undefined) {
-          process.env.TAMANDUA_STATE_DIR = orig;
-        } else {
-          delete process.env.TAMANDUA_STATE_DIR;
-        }
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
-    it("does not throw when description is missing from YAML", async () => {
-      // Test with a workflow that has description field.
-      // The fallback for missing description can only be tested by checking
-      // that a known-good workflow returns a non-empty string.
-      const desc = await getWorkflowShortDescription("feature-dev");
-      assert.ok(desc.length > 0);
-      assert.ok(!desc.includes("\n"));
-    });
-
     it("returns the workflow ID when the YAML is empty (unparseable gracefully)", async () => {
-      // We can't redirect paths.ts to point to a temp dir without mocking,
-      // but we verify the function doesn't crash on nonexistent workflows.
-      // The function catches ENOENT and returns the workflow ID.
       const desc = await getWorkflowShortDescription("not-a-real-workflow-99999");
       assert.equal(desc, "not-a-real-workflow-99999");
     });
 
     it("description does not repeat the workflow ID verbatim", async () => {
-      // For all real workflows, the description should be different from the ID
       const workflows = await listBundledWorkflows();
       for (const id of workflows) {
         const desc = await getWorkflowShortDescription(id);
         assert.ok(desc.length > 0, `empty description for ${id}`);
-        // The description should not solely be the ID
         if (desc === id) {
-          // Acceptable only if there is genuinely no description defined,
-          // but for now we know all bundled workflows have descriptions.
-          // This ensures descriptions are meaningful.
           assert.fail(`description for ${id} falls back to ID — descriptions should be defined`);
         }
       }
@@ -126,6 +75,13 @@ describe("workflow-fetch", () => {
         assert.equal(typeof id, "string");
         assert.ok(id.length > 0);
       }
+    });
+
+    it("contains the surviving bundled workflows", async () => {
+      const workflows = await listBundledWorkflows();
+      assert.ok(workflows.includes("do-now"));
+      assert.ok(workflows.includes("do-review-do-verify"));
+      assert.ok(workflows.includes("just-do-it"));
     });
   });
 
@@ -159,46 +115,14 @@ describe("workflow-fetch", () => {
   });
 
   describe("getWorkflowShortDescription edge cases", () => {
-    it("falls back to workflowId when YAML is not a parseable object", async () => {
-      const tmpDir = path.join(tmpdir(), `tamandua-test-${process.pid}-wf-invalid-yaml`);
-      const wfDir = path.join(tmpDir, "workflows", "test-invalid-yaml");
-      mkdirSync(wfDir, { recursive: true });
-      // Write a YAML file that parses to a non-object (e.g., a plain string)
-      writeFileSync(path.join(wfDir, "workflow.yml"), "just a string\n", "utf-8");
-      const orig = process.env.TAMANDUA_STATE_DIR;
-      try {
-        // We can't redirect BUNDLED dir resolution, so test that a real
-        // workflow with description works. For the invalid YAML fallback,
-        // we verify the function doesn't crash by testing known good paths.
-        // The fallback-to-ID path is already tested via non-existent workflow.
-        const desc = await getWorkflowShortDescription("feature-dev");
-        assert.ok(desc.length > 0, "real workflow should have a description");
-        assert.ok(!desc.includes("\n"), "description should be single-line");
-      } finally {
-        if (orig !== undefined) {
-          process.env.TAMANDUA_STATE_DIR = orig;
-        } else {
-          delete process.env.TAMANDUA_STATE_DIR;
-        }
-        rmSync(tmpDir, { recursive: true, force: true });
-      }
-    });
-
     it("falls back to workflowId when description field is empty string", async () => {
-      // The function returns workflowId when description is missing or empty.
-      // For non-existent workflows this is already tested.
       const desc = await getWorkflowShortDescription("zzz-no-such-workflow");
       assert.equal(desc, "zzz-no-such-workflow");
     });
 
-    it("returns full description when no sentence-ending punctuation found", async () => {
-      // Test with bug-fix which has a period in its first sentence
-      // For a description without punctuation, we'd need a test workflow.
-      // At minimum, verify that real workflows with punctuation return
-      // a truncated first sentence.
-      const desc = await getWorkflowShortDescription("bug-fix");
+    it("returns first sentence ending with sentence-ending punctuation", async () => {
+      const desc = await getWorkflowShortDescription("do-now");
       assert.ok(desc.length > 0);
-      // First sentence should end with . ! or ?
       const lastChar = desc[desc.length - 1];
       assert.ok(
         lastChar === "." || lastChar === "!" || lastChar === "?",

@@ -7,7 +7,7 @@
  * Accepts optional dependency injection for unit testing.
  */
 import { execSync } from "node:child_process";
-import { getDaemonStatus, getMcpStatus, getControlPlaneStatus, isRunning } from "../server/daemonctl.js";
+import { getDaemonStatus, getControlPlaneStatus, isRunning } from "../server/daemonctl.js";
 
 /**
  * Platform-aware process-listing helper for `tamandua status`.
@@ -42,16 +42,13 @@ export function listProcessesForStatus(
   return exSync("ps -eo pid,etime,args --no-headers", options).toString();
 }
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
-import { readVersionStatus, type VersionStatus } from "../lib/version-check.js";
 import { listRuns as defaultListRuns, type RunInfo } from "../installer/status.js";
 
 export function formatServiceStatus(opts?: {
   getDaemonStatus?: typeof getDaemonStatus;
-  getMcpStatus?: typeof getMcpStatus;
   getControlPlaneStatus?: typeof getControlPlaneStatus;
 }): string {
   const dashboard = (opts?.getDaemonStatus ?? getDaemonStatus)();
-  const mcp = (opts?.getMcpStatus ?? getMcpStatus)();
   const controlPlane = (opts?.getControlPlaneStatus ?? getControlPlaneStatus)();
 
   const lines: string[] = [];
@@ -63,13 +60,6 @@ export function formatServiceStatus(opts?: {
     lines.push(`Dashboard:      UP   (pid ${dashboard.pid}, port ${dashboard.port}, http://localhost:${dashboard.port})`);
   } else {
     lines.push(`Dashboard:      DOWN (port ${dashboard.port})`);
-  }
-
-  // MCP
-  if (mcp.running) {
-    lines.push(`MCP:            UP   (pid ${mcp.pid}, port ${mcp.port}, http://localhost:${mcp.port}${mcp.endpoint})`);
-  } else {
-    lines.push(`MCP:            DOWN (port ${mcp.port}, endpoint ${mcp.endpoint})`);
   }
 
   // Control-plane
@@ -86,14 +76,12 @@ export function formatTamanduaInfo(opts?: {
   getVersion?: () => string;
   resolveSourcePath?: () => string;
   resolveSkillPath?: () => string;
-  getReadVersionStatus?: () => VersionStatus;
   execSync?: (cmd: string) => string;
 }): string {
   const version = (opts?.getVersion ?? (() => "unknown"))();
   const exSync = opts?.execSync ?? execSync;
   const srcPath = (opts?.resolveSourcePath ?? resolveSourcePath)();
   const skillPath = (opts?.resolveSkillPath ?? resolveSkillPath)();
-  const versionStatus = (opts?.getReadVersionStatus ?? readVersionStatus)();
 
   // Compute source tree SHA256
   let treeSha = "unavailable";
@@ -114,9 +102,6 @@ export function formatTamanduaInfo(opts?: {
   lines.push(`Source-path:    ${srcPath}`);
   lines.push(`Skill-path:     ${skillPath}`);
   lines.push(`Version:        ${version}`);
-  if (versionStatus.updateAvailable) {
-    lines.push(`Update:         available (run 'tamandua update')`);
-  }
   lines.push(`Source tree:    ${treeSha}`);
 
   return lines.join("\n");

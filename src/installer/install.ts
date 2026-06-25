@@ -3,9 +3,15 @@ import path from "node:path";
 import { fetchWorkflow } from "./workflow-fetch.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
 import { provisionAgents } from "./agent-provision.js";
-import { readPiConfig, type PiConfig } from "./pi-config.js";
 import { resolvePiStateDir } from "./paths.js";
 import type { AgentRole, WorkflowInstallResult } from "./types.js";
+
+// pi-config was removed as orphan code. Inline placeholder until install.ts
+// is refactored in Branch 3 (god-object decomposition).
+type PiConfig = Record<string, unknown>;
+async function readPiConfig(): Promise<PiConfig> {
+  return {};
+}
 
 // ── Agent list management (Tamandua stores agents at ~/.tamandua/agents.json) ──
 

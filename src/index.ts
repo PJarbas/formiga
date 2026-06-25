@@ -8,7 +8,6 @@ export { uninstallWorkflow, uninstallAllWorkflows, checkActiveRuns } from "./ins
 export { getWorkflowStatus, listRuns, stopWorkflow } from "./installer/status.js";
 export { runWorkflow } from "./installer/run.js";
 export { emitEvent, getRecentEvents, getRunEvents, getEventsPath } from "./installer/events.js";
-export { ensureCliSymlink, isCliSymlinked, removeCliSymlink } from "./installer/symlink.js";
 
 // Agent scheduler
 export {
@@ -45,13 +44,6 @@ export {
 } from "./installer/paths.js";
 
 export {
-  createDefaultUpdateServices,
-  defaultRunCommand,
-  installAllBundledWorkflowsForUpdate,
-  runUpdate,
-} from "./cli/update.js";
-
-export {
   getAutoresearchPaths,
   hasDirtyNonAutoresearchFiles,
   isAutoresearchProtectedFile,
@@ -71,14 +63,6 @@ export {
 
 // Database
 export { getDb, nextRunNumber, getDbPath } from "./db.js";
-
-// MCP server
-export {
-  DEFAULT_MCP_PORT,
-  createTamanduaMcpServer,
-  startTamanduaMcpServer,
-  stopTamanduaMcpServer,
-} from "./server/mcp-server.js";
 
 // Types
 export type {
@@ -103,7 +87,6 @@ export type { RunWorkflowParams, RunWorkflowResult } from "./installer/run.js";
 export type { RunInfo, RunDetail, StepInfo, StoryInfo } from "./installer/status.js";
 export type { WriteFileStatus, WriteWorkflowFileParams, WriteWorkflowFileResult } from "./installer/workspace-files.js";
 export type { CronJobInfo, CreateCronJobParams } from "./installer/agent-scheduler.js";
-export type { TamanduaMcpServer, TamanduaMcpServerOptions, TamanduaMcpToolServices } from "./server/mcp-server.js";
 export type {
   AutoresearchDecision,
   AutoresearchConfidence,

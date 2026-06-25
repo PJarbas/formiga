@@ -13,7 +13,6 @@ import os from "node:os";
 import net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "./mcp-server.js";
 import { DEFAULT_CONTROL_PORT } from "./control-server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,14 +20,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STARTUP_ERROR_TAIL_LINES = 20;
 const START_LOCK_STALE_MS = 30_000;
 
-// ── MCP file paths ─────────────────────────────────────────────────
+// ── File path defaults ─────────────────────────────────────────────
 
 function defaultTamanduaDir(): string {
   return path.join(process.env.HOME?.trim() || os.homedir(), ".tamandua");
 }
-
-export const MCP_PID_FILE = path.join(defaultTamanduaDir(), "mcp.pid");
-export const MCP_PORT_FILE = path.join(defaultTamanduaDir(), "mcp-port");
 
 // ── Control plane file paths ──────────────────────────────────────
 
@@ -64,18 +60,6 @@ export function getLogFile(opts?: DaemonctlPathOptions): string {
 
 function getStartLockFile(opts?: DaemonctlPathOptions): string {
   return path.join(getTamanduaDir(opts), "daemon-start.lock");
-}
-
-export function getMcpPidFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "mcp.pid");
-}
-
-export function getMcpPortFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "mcp-port");
-}
-
-function getMcpLogFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "mcp.log");
 }
 
 export function getControlPlanePidFile(opts?: DaemonctlPathOptions): string {
@@ -239,7 +223,7 @@ export function isRunning(opts?: DaemonctlPathOptions): { running: true; pid: nu
 }
 
 /**
- * Get daemon status (dashboard only — MCP is independently managed).
+ * Get daemon status (dashboard only — control plane is independently managed).
  */
 export function getDaemonStatus(opts?: DaemonctlPathOptions): { running: false; pid: null; port: number } | { running: true; pid: number; port: number } {
   const status = isRunning(opts);
@@ -256,7 +240,7 @@ export function getDaemonStatus(opts?: DaemonctlPathOptions): { running: false; 
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
-/** Options for startDaemon / startMcp. */
+/** Options for startDaemon / startControlPlane. */
 export interface StartOptions extends DaemonctlPathOptions {
   /**
    * When true, skips child.unref() and includes the ChildProcess handle
@@ -402,197 +386,6 @@ export function stopDaemon(opts?: DaemonctlPathOptions): boolean {
   // but we do it here as a safety measure
   try {
     fs.unlinkSync(getPidFile(opts));
-  } catch {
-    // Best effort
-  }
-
-  return true;
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// MCP standalone lifecycle management
-// ═══════════════════════════════════════════════════════════════════
-
-/**
- * Resolve the mcp-standalone.js path.
- * In production (compiled JS), the file lives alongside daemonctl.js in dist/server/.
- * In development (tsx on-the-fly transpilation), the compiled output is in dist/server/.
- */
-function resolveStandaloneScript(): string {
-  // Production: same directory as daemonctl.js (dist/server/)
-  const prodPath = path.resolve(__dirname, "mcp-standalone.js");
-  if (fs.existsSync(prodPath)) return prodPath;
-
-  // Development (tsx): compiled output lives in dist/server/
-  const devPath = path.resolve(__dirname, "..", "..", "dist", "server", "mcp-standalone.js");
-  if (fs.existsSync(devPath)) return devPath;
-
-  // Fallback: return prodPath so the caller gets a clear error
-  return prodPath;
-}
-
-/**
- * Read the MCP port from the MCP port file.
- * Returns DEFAULT_MCP_PORT (3338) when no port file exists.
- */
-export function readMcpPort(opts?: DaemonctlPathOptions): number {
-  try {
-    const raw = fs.readFileSync(getMcpPortFile(opts), "utf-8").trim();
-    const port = parseInt(raw, 10);
-    if (!isNaN(port) && port > 0 && port < 65536) {
-      return port;
-    }
-  } catch {
-    // File doesn't exist or is invalid
-  }
-  return DEFAULT_MCP_PORT;
-}
-
-/**
- * Write the MCP port to the MCP port file.
- */
-export function writeMcpPort(port: number, opts?: DaemonctlPathOptions): void {
-  const tamanduaDir = getTamanduaDir(opts);
-  fs.mkdirSync(tamanduaDir, { recursive: true });
-  fs.writeFileSync(getMcpPortFile(opts), String(port), "utf-8");
-}
-
-/**
- * Check if the standalone MCP server is running.
- * Uses the MCP PID file and kill(0) for existence check.
- */
-export function isMcpRunning(opts?: DaemonctlPathOptions): { running: true; pid: number } | { running: false } {
-  return checkPidFile(getMcpPidFile(opts));
-}
-
-/**
- * Get full MCP status.
- */
-export function getMcpStatus(opts?: DaemonctlPathOptions): {
-  running: boolean;
-  pid: number | null;
-  port: number;
-  endpoint: string;
-} {
-  const status = isMcpRunning(opts);
-  const port = readMcpPort(opts);
-  return {
-    running: status.running,
-    pid: status.running ? status.pid : null,
-    port,
-    endpoint: MCP_ENDPOINT_PATH,
-  };
-}
-
-/**
- * Start the standalone MCP server.
- *
- * Spawns a detached node process running dist/server/mcp-standalone.js.
- * Writes PID and port files that the spawned process also updates.
- * Waits for startup and checks health.
- *
- * If the MCP server is already running, returns its info without restarting.
- */
-export async function startMcp(port?: number): Promise<{ pid: number; port: number }>;
-export async function startMcp(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
-export async function startMcp(port?: number, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
-  // When homeDir is set, compute isolated paths for all filesystem operations.
-  const tamanduaDir = getTamanduaDir(opts);
-  const mcpPidFile = getMcpPidFile(opts);
-  const mcpPortFile = getMcpPortFile(opts);
-  const mcpLogFile = getMcpLogFile(opts);
-
-  const status = checkPidFile(mcpPidFile);
-  if (status.running) {
-    let existingPort: number = DEFAULT_MCP_PORT;
-    try {
-      const raw = fs.readFileSync(mcpPortFile, "utf-8").trim();
-      const p = parseInt(raw, 10);
-      if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
-    } catch {
-      // File missing or unreadable — use default
-    }
-    return { pid: status.pid, port: existingPort };
-  }
-
-  const mcpPort = port ?? DEFAULT_MCP_PORT;
-
-  fs.mkdirSync(tamanduaDir, { recursive: true });
-  fs.writeFileSync(mcpPortFile, String(mcpPort), "utf-8");
-
-  const out = fs.openSync(mcpLogFile, "a");
-  const errFd = fs.openSync(mcpLogFile, "a");
-
-  const standaloneScript = resolveStandaloneScript();
-  const spawnOpts: Parameters<typeof spawn>[2] = {
-    detached: true,
-    stdio: ["ignore", out, errFd],
-  };
-  if (opts?.homeDir) {
-    spawnOpts.env = { ...process.env, HOME: opts.homeDir };
-  }
-  const child = spawn("node", ["--disable-warning=ExperimentalWarning", standaloneScript, String(mcpPort)], spawnOpts);
-
-  if (opts?.keepHandle) {
-    // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
-    // Don't unref — the handle keeps the event loop alive, which is fine
-    // because the caller is responsible for killing the child.
-  } else {
-    child.unref();
-  }
-
-  // Wait for the MCP server to start and write its PID file. Poll instead
-  // of a single fixed sleep: under heavy load (e.g. the parallel test suite)
-  // node startup can take well over a second.
-  const deadline = Date.now() + 10_000;
-  let check = checkPidFile(mcpPidFile);
-  while (!check.running && Date.now() < deadline) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 250));
-    check = checkPidFile(mcpPidFile);
-  }
-  if (!check.running) {
-    const logTail = readLogTail(mcpLogFile);
-    if (logTail) {
-      throw new Error(`MCP server failed to start. Recent MCP log:\n${logTail}`);
-    }
-    throw new Error("MCP server failed to start. Check " + mcpLogFile);
-  }
-
-  if (opts?.keepHandle) {
-    return { pid: check.pid, port: mcpPort, child };
-  }
-
-  return { pid: check.pid, port: mcpPort };
-}
-
-/**
- * Stop the standalone MCP server.
- *
- * Sends SIGTERM to the MCP process and cleans up the PID file.
- * Returns true if an MCP server was stopped, false if none was running.
- */
-export function stopMcp(opts?: DaemonctlPathOptions): boolean {
-  const status = isMcpRunning(opts);
-  if (!status.running) return false;
-  if (!canSignalPid(status.pid, opts)) return false;
-
-  try {
-    process.kill(status.pid, "SIGTERM");
-  } catch {
-    // Process may have already exited
-  }
-
-  // Clean up PID file — the MCP process also cleans up on exit,
-  // but we do it here as a safety measure
-  try {
-    fs.unlinkSync(getMcpPidFile(opts));
-  } catch {
-    // Best effort
-  }
-
-  // Clean up port file so a fresh start can pick a different port
-  try {
-    fs.unlinkSync(getMcpPortFile(opts));
   } catch {
     // Best effort
   }

@@ -18,27 +18,17 @@ import { resolveBundledWorkflowDir } from "../installer/paths.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource, type TamanduaEvent } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { parseLogsSelector, lookupRunIdByNumber } from "./logs-selector.js";
-import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startMcp, stopMcp, getMcpStatus, isMcpRunning, startControlPlane, stopControlPlane, getControlPlaneStatus, isControlPlaneRunning } from "../server/daemonctl.js";
-import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "../server/mcp-server.js";
+import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startControlPlane, stopControlPlane, getControlPlaneStatus, isControlPlaneRunning } from "../server/daemonctl.js";
 import { DEFAULT_CONTROL_PORT } from "../server/control-server.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon, nudgeWithDaemon } from "../server/control-client.js";
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
-import { ensureCliSymlink } from "../installer/symlink.js";
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
 import { formatServiceStatus, formatTamanduaInfo, formatRunsSummary, formatProcessList } from "./status-format.js";
-import {
-  listRunWorktrees,
-  getRunWorktree,
-  removeRunWorktree,
-  type ManagedRunWorktree,
-} from "../installer/worktree-manager.js";
 import { getWorkflowStatus as getWorkflowStatusFn } from "../installer/status.js";
-import { runUpdate } from "./update.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { readVersionStatus } from "../lib/version-check.js";
 import { getBuildVersion } from "../lib/version.js";
 import { parseWorkflowRunArgs } from "./workflow-run-args.js";
 import type { HarnessType } from "../installer/types.js";
@@ -102,17 +92,6 @@ function parseDuration(input: string): number {
     default:
       throw new Error(`Unknown duration unit: ${unit}`);
   }
-}
-
-function formatWorktreeStatus(wt: ManagedRunWorktree): string {
-  const idShort = wt.runId.substring(0, 8);
-  const repoShort =
-    wt.worktreeOriginRepository.split("/").slice(-2).join("/") ||
-    wt.worktreeOriginRepository;
-  return [
-    `  [${wt.status.padEnd(9)}] ${idShort}  ${wt.cleanupPolicy.padEnd(20)} ${wt.worktreePath}`,
-    `           origin: ${repoShort}${wt.worktreeOriginRef ? ` @ ${wt.worktreeOriginRef}` : ""}`,
-  ].join("\n");
 }
 
 function getLogsTailPollIntervalMs(): number {
@@ -254,7 +233,7 @@ function resolveAutoresearchCwdForRun(runIdOrPrefix: string): { runId: string; c
 
   return {
     runId: detail.id,
-    cwd: readString("working_directory_for_harness") ?? readString("worktree_path") ?? readString("cwd"),
+    cwd: readString("working_directory_for_harness") ?? readString("cwd"),
   };
 }
 
@@ -303,19 +282,6 @@ function printWorkflowAutoresearch(runIdOrPrefix: string): void {
   }
 }
 
-function getTamanduaHelp(): string {
-  return `tamandua — ASCII art easter egg
-
-Usage: tamandua tamandua
-
-Prints a large ASCII art representation of a tamandua (anteater) along with
-a randomly selected tamandua-themed quote. This is a fun easter egg with no
-functional purpose beyond entertainment.
-
-Examples:
-  tamandua tamandua          # Print the tamandua ASCII art and a random quote`;
-}
-
 function getVersionHelp(): string {
   return `tamandua version — Display build version
 
@@ -361,52 +327,12 @@ Examples:
   tamandua source-path       # Prints the source checkout path`;
 }
 
-function getUpdateHelp(): string {
-  return `tamandua update — Pull latest source, rebuild, and reinstall
-
-Usage: tamandua update [--force]
-
-tamandua update is local source maintenance, not a package-manager update.
-
-In order, it does this:
-
-  1. Resolves the installed Tamandua source checkout and verifies it has
-     package.json and build-and-install.
-  2. Reads current git HEAD.
-  3. Runs git pull in that checkout, using the checkout's current
-     branch/remote config.
-  4. Reads git HEAD again.
-  5. If HEAD did not change and --force is not set, it stops there: no
-     build, no workflow install, no service restart. With --force, it
-     continues to rebuild even without source changes.
-  6. If HEAD changed, it runs ./build-and-install.
-  7. Takes a snapshot of currently running Tamandua services: dashboard
-     daemon, standalone MCP, and control plane.
-  8. Checks for active runs with status running or paused.
-  9. If active runs exist and --force is not set, it exits with code 1
-     and leaves services/workflows unchanged.
-  10. Otherwise, it stops the services that were running before the
-      update.
-  11. Installs every bundled workflow.
-  12. Restarts only the services that were running before, on their
-      previous ports.
-
-Options:
-  --force    Continue update despite active runs (step 9). Also forces
-             rebuild/reinstall even without source changes (step 5).
-
-Examples:
-  tamandua update             # Pull, rebuild, reinstall (blocks if active runs exist)
-  tamandua update --force     # Force update even with active runs`;
-}
-
 function getGetReadyHelp(): string {
   return `tamandua get-ready — Install all bundled workflows from the source checkout
 
 Usage: tamandua get-ready
 
-tamandua get-ready sets up Tamandua by installing every bundled workflow and
-establishing the CLI symlink so tamandua is available on your PATH.
+tamandua get-ready sets up Tamandua by installing every bundled workflow.
 
 In order, it does this:
 
@@ -414,12 +340,9 @@ In order, it does this:
   2. Installs each workflow: fetches workflow files, loads the YAML spec,
      provisions agent workspaces (AGENTS.md, IDENTITY.md, SOUL.md), and
      registers agents in ~/.tamandua/agents.json.
-  3. Creates the CLI symlink at ~/.local/bin/tamandua (or updates it if
-     it already exists).
-  4. Reports whether the dashboard daemon is already running.
-  5. If the dashboard is not running, starts it on the default port
+  3. Reports whether the dashboard daemon is already running.
+  4. If the dashboard is not running, starts it on the default port
      (3334) so you can monitor workflow runs.
-  6. Reports whether the MCP server is running.
 
 Examples:
   tamandua get-ready            # Install all bundled workflows and start dashboard
@@ -440,11 +363,9 @@ In order, it does this:
   2. If active runs exist and --force is not set, lists them and exits
      with code 1.
   3. Stops the dashboard daemon if it is running.
-  4. Stops the standalone MCP server if it is running.
-  5. Uninstalls every workflow: removes workflow directories, agent
+  4. Uninstalls every workflow: removes workflow directories, agent
      workspaces, agent entries from ~/.tamandua/agents.json, and cron
-     jobs. Stops and removes any managed git worktrees associated with
-     completed runs.
+     jobs.
 
 Options:
   --force    Skip the active-runs check and uninstall anyway.
@@ -463,7 +384,7 @@ Usage: tamandua status
 
 Displays a comprehensive status overview of the Tamandua system, including:
 
-  Services — Dashboard, MCP, and control-plane status (up/down, PID, port)
+  Services — Dashboard and control-plane status (up/down, PID, port)
   Tamandua Info — Source path, skill path, version, and source tree SHA256
   Workflow Runs — Summary of all runs (running, paused, done, failed)
   Running Processes — Active pi/hermes harness processes spawned by tamandua
@@ -579,96 +500,20 @@ Examples:
   tamandua step stories abc12345`;
 }
 
-function getMcpHelp(): string {
-  return `tamandua mcp — Manage the standalone MCP HTTP server
-
-Usage: tamandua mcp <start|stop|status>
-
-The MCP (Model Context Protocol) server provides a remote MCP endpoint for
-agent tool access. It runs as a standalone HTTP server, independent of the
-dashboard daemon.
-
-Default port: 3338
-Default endpoint: http://localhost:3338/mcp
-
-Subcommands:
-  start  [--port N]   Start the MCP server on the given port
-  stop                Stop the MCP server
-  status              Show whether the MCP server is running (PID, port, endpoint)
-
-Start will refuse if the MCP server is already running, printing its current
-status instead.
-
-Examples:
-  tamandua mcp start                   # Start on default port 3338
-  tamandua mcp start --port 5555       # Start on a custom port
-  tamandua mcp stop                    # Stop the MCP server
-  tamandua mcp status                  # Check if the MCP server is running`;
-}
-
-function getMcpStartHelp(): string {
-  return `tamandua mcp start — Start the standalone MCP HTTP server
-
-Usage: tamandua mcp start [--port N]
-
-Starts the MCP server on the specified port (default: 3338). The server
-provides a remote MCP endpoint at http://localhost:<port>/mcp.
-
-If the MCP server is already running, the command prints the current
-PID, port, and endpoint instead of starting a duplicate.
-
-Options:
-  --port N    Port to listen on (default: 3338)
-
-Examples:
-  tamandua mcp start                   # Start on default port 3338
-  tamandua mcp start --port 5555       # Start on port 5555`;
-}
-
-function getMcpStopHelp(): string {
-  return `tamandua mcp stop — Stop the standalone MCP HTTP server
-
-Usage: tamandua mcp stop
-
-Stops the MCP server if it is running. If the server is not running, the
-command prints a message and exits successfully — it is safe to run even
-when no MCP server is active.
-
-Examples:
-  tamandua mcp stop`;
-}
-
-function getMcpStatusHelp(): string {
-  return `tamandua mcp status — Show MCP server status
-
-Usage: tamandua mcp status
-
-Reports whether the MCP server is running. When running, it prints the
-PID, port, and full endpoint URL. When not running, it prints the default
-endpoint that would be used on start.
-
-Examples:
-  tamandua mcp status`;
-}
-
 function getDashboardHelp(): string {
   return `tamandua dashboard — Manage the web dashboard daemon
 
 Usage: tamandua dashboard <start|stop|status>
 
 The dashboard daemon runs the Tamandua web dashboard, a local HTTP server
-for monitoring workflow runs, logs, and agent activity. It also shows the
-status of the standalone MCP server.
+for monitoring workflow runs, logs, and agent activity.
 
 Default port: 3334
 
 Subcommands:
   start  [--port N]   Start the dashboard daemon on the given port
   stop                Stop the dashboard daemon
-  status              Show dashboard status and MCP server status
-
-Dashboard status output includes both dashboard and MCP server information
-(PID, port, endpoint for each).
+  status              Show dashboard status
 
 Start will refuse if the dashboard is already running.
 
@@ -676,7 +521,7 @@ Examples:
   tamandua dashboard start             # Start on default port 3334
   tamandua dashboard start --port 8080 # Start on port 8080
   tamandua dashboard stop              # Stop the dashboard
-  tamandua dashboard status            # Check dashboard and MCP status`;
+  tamandua dashboard status            # Check dashboard status`;
 }
 
 function getDashboardStartHelp(): string {
@@ -687,9 +532,6 @@ Usage: tamandua dashboard start [--port N]
 Starts the dashboard daemon on the specified port (default: 3334). The
 dashboard provides an HTTP interface at http://localhost:<port> for
 monitoring workflow runs, logs, and agent activity.
-
-The daemon also co-manages the standalone MCP server; the dashboard
-status command will report both services.
 
 If the dashboard is already running, the command prints the current
 status instead of starting a duplicate.
@@ -715,14 +557,12 @@ Examples:
 }
 
 function getDashboardStatusHelp(): string {
-  return `tamandua dashboard status — Show dashboard and MCP server status
+  return `tamandua dashboard status — Show dashboard status
 
 Usage: tamandua dashboard status
 
-Reports whether the dashboard daemon is running (PID, port) and also
-shows the status of the MCP server. When either service is running, it
-prints PID, port, and endpoint URL. When not running, it prints the
-default endpoint that would be used on start.
+Reports whether the dashboard daemon is running (PID, port, endpoint URL).
+When not running, it prints the default endpoint that would be used on start.
 
 Examples:
   tamandua dashboard status`;
@@ -848,92 +688,6 @@ Examples:
   tamandua control-plane status`;
 }
 
-function getWorktreeListHelp(): string {
-  return `tamandua worktree list — List all managed worktrees
-
-Usage: tamandua worktree list
-
-Lists every managed git worktree created by Tamandua workflow runs.
-Each entry shows the run ID, status, cleanup policy, and filesystem path.
-
-Output columns:
-  Status    Worktree status (ready, removed, etc.)
-  Run ID    8-char run identifier prefix
-  Cleanup   When the worktree will be cleaned up (e.g. on-completion)
-  Path      Absolute filesystem path to the worktree
-  Origin    Source repository and ref (below the main line)
-
-Examples:
-  tamandua worktree list`;
-}
-
-function getWorktreeStatusHelp(): string {
-  return `tamandua worktree status — Show detailed worktree info for a run
-
-Usage: tamandua worktree status <run-id>
-
-Shows detailed information about the managed git worktree associated with
-a specific workflow run. Accepts a run-id prefix.
-
-Output includes:
-  Run          Run ID prefix
-  Status       Worktree status (ready, removed, etc.)
-  Origin repo  Source repository the worktree was cloned from
-  Origin ref   Git ref used to create the worktree (branch, tag, SHA)
-  Origin SHA   Full commit SHA the worktree is at
-  Orig branch  Original branch the run was started from
-  Worktree     Absolute filesystem path to the worktree
-  Cleanup      When the worktree will be cleaned up
-
-Examples:
-  tamandua worktree status abc12345`;
-}
-
-function getWorktreeRemoveHelp(): string {
-  return `tamandua worktree remove — Remove a managed worktree
-
-Usage: tamandua worktree remove <run-id> [--force]
-
-Removes a managed git worktree and its associated tracking entry.
-Accepts a run-id prefix to identify the worktree.
-
-By default, removal is only allowed for worktrees with a non-ready status
-(e.g. removed or after cleanup). To remove a worktree that is still active
-or in ready status, use --force.
-
-Options:
-  --force    Allow removal of worktrees in any status (not just non-ready).
-
-Examples:
-  tamandua worktree remove abc12345
-  tamandua worktree remove abc12345 --force`;
-}
-
-function getWorktreePruneHelp(): string {
-  return `tamandua worktree prune — Remove old completed worktrees
-
-Usage: tamandua worktree prune --completed --older-than <duration>
-
-Prunes (removes) managed git worktrees that are associated with completed
-or canceled workflow runs and are older than the specified duration.
-This is a cleanup command that helps reclaim disk space from old worktrees.
-
-Options (both required):
-  --completed        Only prune worktrees for completed or canceled runs.
-  --older-than <d>   Only prune worktrees older than the given duration.
-
-Duration format:
-  Duration is specified as a number followed by a unit letter:
-    d — days   (e.g. 7d  = 7 days)
-    h — hours  (e.g. 24h = 24 hours)
-    m — minutes(e.g. 30m = 30 minutes)
-
-Examples:
-  tamandua worktree prune --completed --older-than 7d
-  tamandua worktree prune --completed --older-than 24h
-  tamandua worktree prune --completed --older-than 30m`;
-}
-
 function getWorkflowListHelp(): string {
   return `tamandua workflow list — List available bundled workflows with descriptions
 
@@ -1023,12 +777,6 @@ Options:
   --working-directory-for-harness <dir>
       Set the working directory for the agent harness during this run.
       Agents will operate within this directory.
-  --worktree-origin-repository <dir>
-      Repository to clone when creating a worktree for this run.
-      Defaults to the current repository.
-  --worktree-origin-ref <ref>
-      Git ref (branch, tag, or SHA) to check out in the worktree.
-      Defaults to the current branch.
   --pi-as-harness
       Use pi as the agent harness (this is the default).
       Mutually exclusive with --hermes-as-harness.
@@ -1037,16 +785,14 @@ Options:
       Mutually exclusive with --pi-as-harness.
   --no-relaunch-upon-rugpull
       Disable automatic replacement-run after a rugpull (base branch move)
-      is detected on a failed merge/merge-worktree run.
+      is detected on a failed merge run.
 
 Examples:
   tamandua workflow run feature-dev-merge "Add dark mode toggle"
   tamandua workflow run feature-dev-merge "Refactor DB layer" \\
       --no-hurry-please-save-tokens-mode
   tamandua workflow run feature-dev-merge "Build login page" \\
-      --working-directory-for-harness /path/to/project
-  tamandua workflow run feature-dev-merge "Fix bug #42" \\
-      --worktree-origin-repository /repos/myapp --worktree-origin-ref develop`;
+      --working-directory-for-harness /path/to/project`;
 }
 
 function getWorkflowStatusHelp(): string {
@@ -1055,8 +801,8 @@ function getWorkflowStatusHelp(): string {
 Usage: tamandua workflow status <query>
 
 Shows detailed information about a workflow run, including status, token
-usage, workspace mode (for worktree runs), and a list of every step with
-its current status and assigned agent role.
+usage, and a list of every step with its current status and assigned agent
+role.
 
 The query accepts a run-id prefix for matching.
 
@@ -1066,7 +812,6 @@ Output includes:
   Task         Full task description
   Status       Current run status
   Tokens       Total tokens spent
-  Workspace    Workspace mode (only shown for worktree runs)
   Steps        Per-step listing with step ID, status icon, and agent role
 
 Step status indicators:
@@ -1097,8 +842,8 @@ function getWorkflowDeleteHelp(): string {
 
 Usage: tamandua workflow delete <run-id> [--force]
 
-Permanently deletes a workflow run and all associated data, including steps,
-stories, and managed worktrees. The run-id accepts prefix matching.
+Permanently deletes a workflow run and all associated data, including steps
+and stories. The run-id accepts prefix matching.
 
 By default, active runs (running or paused) cannot be deleted — they must
 be canceled first. Use --force to cancel and delete an active run in one step.
@@ -1248,28 +993,6 @@ resume paused runs or interrupt in-flight agents.
 
 Examples:
   tamandua nudge            # Nudge all scheduled agents for active runs`;
-}
-
-function getWorktreeGroupHelp(): string {
-  return `tamandua worktree — Manage git worktrees for workflow runs
-
-Usage: tamandua worktree <list|status|remove|prune>
-
-Commands for managing git worktrees that Tamandua creates for workflow
-runs. Worktrees provide isolated working directories so concurrent runs
-never interfere with each other.
-
-Subcommands:
-  list      List all managed worktrees with status, cleanup policy, and paths
-  status    Show detailed info for a specific run's worktree
-  remove    Remove a managed worktree (--force for non-ready statuses)
-  prune     Remove old completed worktrees (requires --completed and --older-than)
-
-Examples:
-  tamandua worktree list
-  tamandua worktree status abc12345
-  tamandua worktree remove abc12345 --force
-  tamandua worktree prune --completed --older-than 7d`;
 }
 
 function getAutoresearchHelp(): string {
@@ -1530,16 +1253,9 @@ function getUsageText(): string {
     "tamandua workflow install <name|--all>  Install a workflow (or all)",
     "tamandua workflow run <name> <task> [--no-hurry-please-save-tokens-mode]",
     "                                      [--working-directory-for-harness <dir>]",
-    "                                      [--worktree-origin-repository <dir>]",
-    "                                      [--worktree-origin-ref <ref>]",
     "                                      [--pi-as-harness | --hermes-as-harness]",
     "                                      [--no-relaunch-upon-rugpull]",
     "                                      Start a workflow run",
-    "", "tamandua worktree list                List managed worktrees",
-    "tamandua worktree status <run-id>     Show worktree details for a run",
-    "tamandua worktree remove <run-id>     Remove managed worktree [--force]",
-    "tamandua worktree prune --completed   Remove old completed worktrees",
-    "           --older-than <duration>    (e.g. 7d, 24h, 30m)",
     "", "tamandua autoresearch init            Create durable experiment-loop state",
     "tamandua autoresearch run-experiment  Run the configured experiment command",
     "tamandua autoresearch log-experiment   Log keep/discard learning for the loop",
@@ -1559,9 +1275,6 @@ function getUsageText(): string {
     "tamandua workflow resume-all           Resume all paused workflows",
     "tamandua workflow stop <run-id>       Stop/cancel a running workflow",
     "tamandua workflow delete <run-id>     Permanently delete a run [--force]",
-    "tamandua mcp start [--port N]         Start MCP server (default: 3338)",
-    "tamandua mcp stop                     Stop MCP server",
-    "tamandua mcp status                   Check MCP server status",
     "tamandua control-plane start [--port N]Start control plane (default: 3339)",
     "tamandua control-plane stop            Stop control plane",
     "tamandua control-plane status          Check control plane status",
@@ -1579,20 +1292,11 @@ function getUsageText(): string {
     "tamandua skill-path                  Print path to the bundled tamandua-agents skill",
     "tamandua source-path                  Print source checkout path",
     "tamandua nudge                       Wake all scheduled agents for all running runs",
-    "tamandua update [--force]             Pull latest, rebuild, reinstall",
   ].join("\n") + "\n";
 }
 
 function printUsage() {
   process.stdout.write(getUsageText());
-}
-
-function shouldSkipUpdateWarning(group: string, action: string): boolean {
-  if (group === "update") return true;
-  if (group === "version" || group === "--version" || group === "-v") return true;
-  if (group === "step" && (action === "peek" || action === "claim")) return true;
-  if (group === "nudge") return true;
-  return false;
 }
 
 async function main() {
@@ -1602,9 +1306,6 @@ async function main() {
   // Check for --help before anything else: display command-specific help
   // if recognized, otherwise show global usage.
   if (hasHelpFlag(args)) {
-    if (group === "tamandua") {
-      printHelp(getTamanduaHelp());
-    }
     if (group === "version" || group === "--version" || group === "-v") {
       printHelp(getVersionHelp());
     }
@@ -1614,9 +1315,6 @@ async function main() {
     if (group === "source-path") {
       printHelp(getSourcePathHelp());
     }
-    if (group === "update") {
-      printHelp(getUpdateHelp());
-    }
     if (group === "get-ready") {
       printHelp(getGetReadyHelp());
     }
@@ -1625,12 +1323,6 @@ async function main() {
     }
     if (group === "status") {
       printHelp(getStatusHelp());
-    }
-    if (group === "mcp") {
-      if (action === "start") { printHelp(getMcpStartHelp()); }
-      if (action === "stop") { printHelp(getMcpStopHelp()); }
-      if (action === "status") { printHelp(getMcpStatusHelp()); }
-      printHelp(getMcpHelp());
     }
     if (group === "dashboard") {
       if (action === "start") { printHelp(getDashboardStartHelp()); }
@@ -1673,13 +1365,6 @@ async function main() {
       if (action === "resume-all") { printHelp(getWorkflowResumeAllHelp()); }
       printHelp(getWorkflowGroupHelp());
     }
-    if (group === "worktree") {
-      if (action === "list") { printHelp(getWorktreeListHelp()); }
-      if (action === "status") { printHelp(getWorktreeStatusHelp()); }
-      if (action === "remove") { printHelp(getWorktreeRemoveHelp()); }
-      if (action === "prune") { printHelp(getWorktreePruneHelp()); }
-      printHelp(getWorktreeGroupHelp());
-    }
     if (group === "autoresearch") {
       if (action === "init") { printHelp(getAutoresearchInitHelp()); }
       if (action === "run-experiment") { printHelp(getAutoresearchRunExperimentHelp()); }
@@ -1698,21 +1383,8 @@ async function main() {
     printHelp(getUsageText());
   }
 
-  // Display update warning before command output, but suppress for
-  // update/version commands (user is already acting on versions) and
-  // step peek/claim (would break polling agent output parsing).
-  if (!shouldSkipUpdateWarning(group, action)) {
-    const status = readVersionStatus();
-    if (status.updateAvailable) {
-      process.stderr.write("WARNING: A new version of tamandua is available! Run: tamandua update\n");
-    }
-  }
-
   if (group === "version" || group === "--version" || group === "-v") {
     console.log(getVersion()); return;
-  }
-  if (group === "tamandua") {
-    const { printTamandua } = await import("./ant.js"); printTamandua(); return;
   }
   if (group === "skill-path") {
     console.log(resolveSkillPath()); return;
@@ -1720,21 +1392,6 @@ async function main() {
 
   if (group === "source-path") {
     console.log(resolveSourcePath()); return;
-  }
-
-  if (group === "update") {
-    const force = args.includes("--force");
-    const unknownArgs = args.slice(1).filter((arg) => arg !== "--force");
-    if (unknownArgs.length > 0) {
-      process.stderr.write(`Unknown update option: ${unknownArgs[0]}\nUsage: tamandua update [--force]\n`);
-      process.exitCode = 1;
-      return;
-    }
-    const result = await runUpdate({ force });
-    if (result.status === "blocked_active_runs") {
-      process.exitCode = 1;
-    }
-    return;
   }
 
   if (group === "uninstall" && (!args[1] || args[1] === "--force")) {
@@ -1746,7 +1403,6 @@ async function main() {
       process.stderr.write(`\nUse --force to uninstall anyway.\n`); process.exit(1);
     }
     if (isRunning().running) { stopDaemon(); console.log("Dashboard stopped."); }
-    if (isMcpRunning().running) { stopMcp(); console.log("MCP server stopped."); }
     await uninstallAllWorkflows();
     console.log("Tamandua fully uninstalled."); return;
   }
@@ -1756,61 +1412,9 @@ async function main() {
     if (workflows.length === 0) { console.log("No bundled workflows found."); return; }
     console.log(`Installing ${workflows.length} workflow(s)...`);
     for (const wf of workflows) { try { await installWorkflow({ workflowId: wf }); console.log(`  ✓ ${wf}`); } catch (err) { console.log(`  ✗ ${wf}: ${err instanceof Error ? err.message : String(err)}`); } }
-    ensureCliSymlink();
     console.log(`\nDone. Start with: tamandua workflow run <name> "your task"`);
     if (!isRunning().running) { try { const r = await startDaemon(3334); console.log(`\nDashboard started (PID ${r.pid}): http://localhost:${r.port}`); } catch (err) { console.log(`\nNote: dashboard not started: ${err instanceof Error ? err.message : String(err)}`); } }
     else console.log("\nDashboard already running.");
-    if (!getMcpStatus().running) {
-      console.log("\nMCP server not started. To start it: tamandua mcp start");
-    } else {
-      console.log("\nMCP server already running.");
-    }
-    return;
-  }
-
-  if (group === "mcp") {
-    const sub = args[1];
-    if (sub === "stop") {
-      console.log(stopMcp() ? "MCP server stopped." : "MCP server is not running.");
-      return;
-    }
-    if (sub === "status") {
-      const st = getMcpStatus();
-      if (!st.running) {
-        console.log("MCP server is not running.");
-        console.log(`Default endpoint: http://localhost:${st.port}${st.endpoint}`);
-        return;
-      }
-      console.log(`MCP server running (PID ${st.pid})`);
-      console.log(`Port: ${st.port}`);
-      console.log(`Endpoint: http://localhost:${st.port}${st.endpoint}`);
-      return;
-    }
-    let port = DEFAULT_MCP_PORT;
-    const portIdx = args.indexOf("--port");
-    if (portIdx !== -1 && args[portIdx + 1]) {
-      port = parseInt(args[portIdx + 1], 10) || DEFAULT_MCP_PORT;
-    }
-    // Support positional port as well: tamandua mcp start 5555
-    if (sub && sub !== "start" && !sub.startsWith("-")) {
-      const p = parseInt(sub, 10);
-      if (!Number.isNaN(p)) port = p;
-    }
-    const running = getMcpStatus();
-    if (running.running) {
-      console.log(`MCP server already running (PID ${running.pid})`);
-      console.log(`Port: ${running.port}`);
-      console.log(`Endpoint: http://localhost:${running.port}${running.endpoint}`);
-      return;
-    }
-    try {
-      const result = await startMcp(port);
-      console.log(`MCP server started (PID ${result.pid})`);
-      console.log(`Endpoint: http://localhost:${result.port}${MCP_ENDPOINT_PATH}`);
-    } catch (err) {
-      process.stderr.write(`Failed to start MCP: ${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(1);
-    }
     return;
   }
 
@@ -1819,21 +1423,12 @@ async function main() {
     if (sub === "stop") { console.log(stopDaemon() ? "Dashboard stopped." : "Dashboard is not running."); return; }
     if (sub === "status") {
       const st = getDaemonStatus();
-      const mcp = getMcpStatus();
 
       if (!st.running) {
         console.log("Dashboard is not running.");
       } else {
         console.log(`Dashboard running (PID ${st.pid})`);
         console.log(`Dashboard endpoint: http://localhost:${st.port}`);
-      }
-
-      if (!mcp.running) {
-        console.log("MCP server is not running.");
-        console.log(`Default MCP endpoint: http://localhost:${mcp.port}${mcp.endpoint}`);
-      } else {
-        console.log(`MCP server running (PID ${mcp.pid})`);
-        console.log(`MCP endpoint: http://localhost:${mcp.port}${mcp.endpoint}`);
       }
       return;
     }
@@ -2036,171 +1631,6 @@ async function main() {
     }
     await streamEventSource({ kind: "run", runId: logsTailRunId }, 50);
     return;
-  }
-
-  if (group === "worktree") {
-    if (action === "list") {
-      const worktrees = listRunWorktrees();
-      if (worktrees.length === 0) {
-        console.log("No managed worktrees found.");
-        return;
-      }
-      console.log("Managed worktrees:");
-      for (const wt of worktrees) {
-        console.log(formatWorktreeStatus(wt));
-      }
-      return;
-    }
-
-    if (action === "status") {
-      if (!target) {
-        process.stderr.write("Missing run-id.\nUsage: tamandua worktree status <run-id>\n");
-        process.exit(1);
-      }
-      // Resolve the run ID prefix to a full run ID via getWorkflowStatus
-      let fullRunId: string;
-      try {
-        fullRunId = getWorkflowStatusFn(target).id;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
-        process.stderr.write(
-          message.startsWith("No run found matching") ? `No run found matching "${target}".\n` : `${message}\n`,
-        );
-        process.exit(1);
-      }
-
-      const wt = getRunWorktree(fullRunId);
-      if (!wt) {
-        console.log(`No managed worktree for run ${fullRunId.slice(0, 8)}.`);
-        return;
-      }
-
-      console.log(`Run:          ${wt.runId.slice(0, 8)}`);
-      console.log(`Status:       ${wt.status}`);
-      console.log(`Origin repo:  ${wt.worktreeOriginRepository}`);
-      console.log(`Origin ref:   ${wt.worktreeOriginRef || "(none)"}`);
-      console.log(`Origin SHA:   ${wt.worktreeOriginSha || "(none)"}`);
-      console.log(`Orig branch:  ${wt.originalBranch || "(none)"}`);
-      console.log(`Worktree:     ${wt.worktreePath}`);
-      console.log(`Cleanup:      ${wt.cleanupPolicy}`);
-      return;
-    }
-
-    if (action === "remove") {
-      if (!target) {
-        process.stderr.write("Missing run-id.\nUsage: tamandua worktree remove <run-id> [--force]\n");
-        process.exit(1);
-      }
-      const force = args.includes("--force");
-      let fullRunId: string;
-      try {
-        fullRunId = getWorkflowStatusFn(target).id;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
-        process.stderr.write(
-          message.startsWith("No run found matching") ? `No run found matching "${target}".\n` : `${message}\n`,
-        );
-        process.exit(1);
-      }
-
-      try {
-        removeRunWorktree({ runId: fullRunId, force });
-        console.log(`Removed managed worktree for run ${fullRunId.slice(0, 8)}.`);
-      } catch (err) {
-        process.stderr.write(
-          `${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        process.exit(1);
-      }
-      return;
-    }
-
-    if (action === "prune") {
-      const completedFlagIdx = args.indexOf("--completed");
-      if (completedFlagIdx === -1) {
-        process.stderr.write(
-          "Missing --completed flag.\nUsage: tamandua worktree prune --completed --older-than <duration>\n",
-        );
-        process.exit(1);
-      }
-
-      const olderThanIdx = args.indexOf("--older-than");
-      if (olderThanIdx === -1 || !args[olderThanIdx + 1]) {
-        process.stderr.write(
-          "Missing --older-than <duration>.\nUsage: tamandua worktree prune --completed --older-than <duration>\n",
-        );
-        process.exit(1);
-      }
-
-      let thresholdMs: number;
-      try {
-        thresholdMs = parseDuration(args[olderThanIdx + 1]);
-      } catch (err) {
-        process.stderr.write(
-          `${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        process.exit(1);
-      }
-
-      const cutoff = Date.now() - thresholdMs;
-      const worktrees = listRunWorktrees();
-      let pruned = 0;
-
-      for (const wt of worktrees) {
-        if (wt.status === "removed") continue;
-
-        // Check if the associated run is completed/canceled
-        let runStatus: string;
-        try {
-          runStatus = getWorkflowStatusFn(wt.runId).status;
-        } catch {
-          // Run not found, skip
-          continue;
-        }
-
-        if (runStatus !== "completed" && runStatus !== "canceled") continue;
-
-        // Check age: we need the worktree created_at from DB
-        // getRunWorktree() doesn't expose created_at, so query DB directly
-        const { getDb } = await import("../db.js");
-        const db = getDb();
-        const row = db
-          .prepare(
-            "SELECT created_at FROM run_worktrees WHERE run_id = ?",
-          )
-          .get(wt.runId) as { created_at: string } | undefined;
-
-        if (!row) continue;
-
-        const createdAt = new Date(row.created_at).getTime();
-        if (createdAt >= cutoff) continue;
-
-        // Remove (force for non-ready status, since it's terminal pruning)
-        try {
-          removeRunWorktree({ runId: wt.runId, force: true });
-          pruned++;
-          console.log(
-            `Pruned worktree for run ${wt.runId.slice(0, 8)} (${runStatus}).`,
-          );
-        } catch (err) {
-          console.warn(
-            `Warning: failed to prune run ${wt.runId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-
-      if (pruned === 0) {
-        console.log("No worktrees to prune.");
-      } else {
-        console.log(`Pruned ${pruned} worktree(s).`);
-      }
-      return;
-    }
-
-    process.stderr.write(
-      `Unknown worktree action: ${action}\nUsage: tamandua worktree <list|status|remove|prune>\n`,
-    );
-    process.exit(1);
   }
 
   if (group === "autoresearch") {
@@ -2434,14 +1864,7 @@ async function main() {
       return;
     }
 
-    if (action === "wizard") {
-      const wizardCwd = readOption(args, "--cwd");
-      const { runWizard } = await import("./wizard-orchestrator.js");
-      await runWizard({ cwd: wizardCwd, binaryName: "tamandua" });
-      return;
-    }
-
-    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|run-loop-iteration|prune|wizard>\n`);
+    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|run-loop-iteration|prune>\n`);
     process.exit(1);
   }
 
@@ -2691,11 +2114,6 @@ async function main() {
     try {
       const result = getWorkflowStatus(target);
       console.log(`Run: ${result.id.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.task}\nStatus: ${result.status}\nTokens: ${result.tokensSpent.toLocaleString()}`);
-      if (result.workspace_mode === "worktree") {
-        console.log(`Workspace: ${result.workspace_mode}`);
-        if (result.worktree_path) console.log(`Worktree: ${result.worktree_path}`);
-        if (result.worktree_origin_ref) console.log(`Origin ref: ${result.worktree_origin_ref}`);
-      }
       console.log(`Steps:`);
       for (const step of result.steps) {
         const icon = step.status === "done" ? "  [done   ]" : step.status === "running" ? "  [running]" : step.status === "failed" ? "  [failed ]" : step.status === "pending" ? "  [pending]" : `  [${step.status.padEnd(7)}]`;
