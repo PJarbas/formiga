@@ -19,7 +19,7 @@
  * representing the step itself.
  */
 import type { DatabaseSync } from "node:sqlite";
-import type { TamanduaEvent } from "../installer/events.js";
+import type { FormigaEvent } from "../installer/events.js";
 
 export type VisualStatus = "todo" | "running" | "done" | "failed";
 
@@ -92,7 +92,7 @@ export interface KanbanCardDetail {
   /** Run task description. */
   task: string;
   /** Events filtered to the relevant step/story. */
-  events: TamanduaEvent[];
+  events: FormigaEvent[];
   /** Timing computed from first and last relevant event. */
   timing?: {
     firstEvent: string;
@@ -231,7 +231,7 @@ function computeElapsed(status: string, created_at: string, updated_at: string):
   return null;
 }
 
-function extractFailureDetail(events: TamanduaEvent[]): string | undefined {
+function extractFailureDetail(events: FormigaEvent[]): string | undefined {
   // Prefer story.failed then step.failed, most recent first.
   const sorted = [...events].sort(
     (a, b) => parseEventIsoMs(b.ts) - parseEventIsoMs(a.ts),
@@ -245,7 +245,7 @@ function extractFailureDetail(events: TamanduaEvent[]): string | undefined {
   return undefined;
 }
 
-function aggregateTokens(events: TamanduaEvent[]): NonNullable<KanbanCardDetail["tokens"]> | undefined {
+function aggregateTokens(events: FormigaEvent[]): NonNullable<KanbanCardDetail["tokens"]> | undefined {
   const deltas: number[] = [];
   let lastTotal = 0;
   for (const e of events) {
@@ -270,7 +270,7 @@ export function buildKanbanCardDetail(
   db: DatabaseSync,
   runId: string,
   cardId: string,
-  runEvents?: TamanduaEvent[],
+  runEvents?: FormigaEvent[],
 ): KanbanCardDetail | null {
   // ── run existence check ─────────────────────────────────────────
   const run = db.prepare(
@@ -361,7 +361,7 @@ export function buildKanbanCardDetail(
   };
 }
 
-function buildTiming(events: TamanduaEvent[]): KanbanCardDetail["timing"] {
+function buildTiming(events: FormigaEvent[]): KanbanCardDetail["timing"] {
   if (events.length === 0) return undefined;
   const sorted = [...events].sort(
     (a, b) => parseEventIsoMs(a.ts) - parseEventIsoMs(b.ts),

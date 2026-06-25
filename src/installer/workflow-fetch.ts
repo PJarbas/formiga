@@ -8,7 +8,7 @@ import {
 } from "./paths.js";
 
 /**
- * Copy a bundled workflow from the tamandua source checkout to ~/.tamandua/workflows/.
+ * Copy a bundled workflow from the formiga source checkout to ~/.formiga/workflows/.
  * Returns the target workflow directory and the bundled source directory.
  */
 export async function fetchWorkflow(

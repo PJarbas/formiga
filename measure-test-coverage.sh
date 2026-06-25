@@ -1,5 +1,5 @@
 #!/bin/bash
-# Measure Tamandua test code coverage with Node's built-in test runner.
+# Measure Formiga test code coverage with Node's built-in test runner.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,21 +7,21 @@ cd "$SCRIPT_DIR"
 
 shopt -s globstar nullglob
 
-RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tamandua-coverage.XXXXXX")"
+RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/formiga-coverage.XXXXXX")"
 trap 'rm -rf "$RUNTIME_DIR"' EXIT
 
 export HOME="$RUNTIME_DIR/home"
 mkdir -p "$HOME"
 
-export GIT_AUTHOR_NAME="Tamandua Coverage"
-export GIT_AUTHOR_EMAIL="coverage@tamandua.local"
+export GIT_AUTHOR_NAME="Formiga Coverage"
+export GIT_AUTHOR_EMAIL="coverage@formiga.local"
 export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
 export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
 
-COVERAGE_OUTPUT="${TAMANDUA_COVERAGE_OUTPUT:-$RUNTIME_DIR/coverage-output.txt}"
+COVERAGE_OUTPUT="${FORMIGA_COVERAGE_OUTPUT:-$RUNTIME_DIR/coverage-output.txt}"
 
 # The tests import compiled files from dist/. Restrict the coverage aggregate to
-# those Tamandua-owned files so dependency code, pi installs, tests, and other
+# those Formiga-owned files so dependency code, pi installs, tests, and other
 # repository artifacts do not dilute the reported number.
 COVERAGE_ARGS=(
   --experimental-test-coverage

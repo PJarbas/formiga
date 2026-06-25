@@ -1,19 +1,18 @@
 /**
- * Tamandua Dashboard Daemon Lifecycle Controller
+ * Formiga Dashboard Daemon Lifecycle Controller
  *
- * Manages the lifecycle of the tamandua dashboard daemon process.
+ * Manages the lifecycle of the formiga dashboard daemon process.
  *
- * - PID file:    ~/.tamandua/tamandua.pid
- * - Port file:   ~/.tamandua/port
- * - Log file:    ~/.tamandua/dashboard.log
+ * - PID file:    ~/.formiga/formiga.pid
+ * - Port file:   ~/.formiga/port
+ * - Log file:    ~/.formiga/dashboard.log
  */
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import net from "node:net";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "./mcp-server.js";
 import { DEFAULT_CONTROL_PORT } from "./control-server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -21,24 +20,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STARTUP_ERROR_TAIL_LINES = 20;
 const START_LOCK_STALE_MS = 30_000;
 
-// ── MCP file paths ─────────────────────────────────────────────────
+// ── File path defaults ─────────────────────────────────────────────
 
-function defaultTamanduaDir(): string {
-  return path.join(process.env.HOME?.trim() || os.homedir(), ".tamandua");
+function defaultFormigaDir(): string {
+  return path.join(process.env.HOME?.trim() || os.homedir(), ".formiga");
 }
-
-export const MCP_PID_FILE = path.join(defaultTamanduaDir(), "mcp.pid");
-export const MCP_PORT_FILE = path.join(defaultTamanduaDir(), "mcp-port");
 
 // ── Control plane file paths ──────────────────────────────────────
 
-export const CONTROL_PLANE_PID_FILE = path.join(defaultTamanduaDir(), "control-plane.pid");
-export const CONTROL_PLANE_PORT_FILE = path.join(defaultTamanduaDir(), "control-plane-port");
-export const CONTROL_PLANE_LOG_FILE = path.join(defaultTamanduaDir(), "control-plane.log");
+export const CONTROL_PLANE_PID_FILE = path.join(defaultFormigaDir(), "control-plane.pid");
+export const CONTROL_PLANE_PORT_FILE = path.join(defaultFormigaDir(), "control-plane-port");
+export const CONTROL_PLANE_LOG_FILE = path.join(defaultFormigaDir(), "control-plane.log");
 
 export interface DaemonctlPathOptions {
   /**
-   * When set, use this directory instead of ~/.tamandua for PID, port,
+   * When set, use this directory instead of ~/.formiga for PID, port,
    * and log files. Tests should use this to avoid touching live state.
    */
   homeDir?: string;
@@ -46,48 +42,36 @@ export interface DaemonctlPathOptions {
 
 // ── File path helpers ───────────────────────────────────────────────
 
-function getTamanduaDir(opts?: DaemonctlPathOptions): string {
-  return opts?.homeDir ? path.join(opts.homeDir, ".tamandua") : defaultTamanduaDir();
+function getFormigaDir(opts?: DaemonctlPathOptions): string {
+  return opts?.homeDir ? path.join(opts.homeDir, ".formiga") : defaultFormigaDir();
 }
 
 export function getPidFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "tamandua.pid");
+  return path.join(getFormigaDir(opts), "formiga.pid");
 }
 
 export function getPortFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "port");
+  return path.join(getFormigaDir(opts), "port");
 }
 
 export function getLogFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "dashboard.log");
+  return path.join(getFormigaDir(opts), "dashboard.log");
 }
 
 function getStartLockFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "daemon-start.lock");
-}
-
-export function getMcpPidFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "mcp.pid");
-}
-
-export function getMcpPortFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "mcp-port");
-}
-
-function getMcpLogFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "mcp.log");
+  return path.join(getFormigaDir(opts), "daemon-start.lock");
 }
 
 export function getControlPlanePidFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "control-plane.pid");
+  return path.join(getFormigaDir(opts), "control-plane.pid");
 }
 
 export function getControlPlanePortFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "control-plane-port");
+  return path.join(getFormigaDir(opts), "control-plane-port");
 }
 
 export function getControlPlaneLogFile(opts?: DaemonctlPathOptions): string {
-  return path.join(getTamanduaDir(opts), "control-plane.log");
+  return path.join(getFormigaDir(opts), "control-plane.log");
 }
 
 function readLogTail(logPath: string = getLogFile(), lines = STARTUP_ERROR_TAIL_LINES): string {
@@ -117,8 +101,8 @@ export function readPort(opts?: DaemonctlPathOptions): number {
 }
 
 export function writePort(port: number, opts?: DaemonctlPathOptions): void {
-  const tamanduaDir = getTamanduaDir(opts);
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  const formigaDir = getFormigaDir(opts);
+  fs.mkdirSync(formigaDir, { recursive: true });
   fs.writeFileSync(getPortFile(opts), String(port), "utf-8");
 }
 
@@ -155,15 +139,41 @@ function checkPidFile(pidFile: string): { running: true; pid: number } | { runni
 }
 
 function processHomeMatches(pid: number, homeDir: string): boolean {
-  try {
-    const environ = fs.readFileSync(`/proc/${pid}/environ`);
-    for (const entry of environ.toString("utf-8").split("\0")) {
-      if (entry === `HOME=${homeDir}`) return true;
+  // Linux: read /proc/<pid>/environ directly
+  if (process.platform === "linux") {
+    try {
+      const environ = fs.readFileSync(`/proc/${pid}/environ`);
+      for (const entry of environ.toString("utf-8").split("\0")) {
+        if (entry === `HOME=${homeDir}`) return true;
+      }
+    } catch {
+      return false;
     }
-  } catch {
     return false;
   }
-  return false;
+
+  // macOS: use `ps eww` to read the target process's environment
+  if (process.platform === "darwin") {
+    try {
+      const result = spawnSync("ps", ["eww", "-p", String(pid), "-o", "command="], {
+        encoding: "utf-8",
+      });
+      if (result.status !== 0) return false;
+      const output = result.stdout ?? "";
+      // ps eww outputs command followed by env vars (space-separated KEY=VALUE)
+      // We need to find HOME=<homeDir> as a whole token.
+      // Split on whitespace and check each token.
+      for (const token of output.split(/\s+/)) {
+        if (token === `HOME=${homeDir}`) return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
+  // Other platforms: unsafe to assert ownership — allow signal
+  return true;
 }
 
 function canSignalPid(pid: number, opts?: DaemonctlPathOptions): boolean {
@@ -239,7 +249,7 @@ export function isRunning(opts?: DaemonctlPathOptions): { running: true; pid: nu
 }
 
 /**
- * Get daemon status (dashboard only — MCP is independently managed).
+ * Get daemon status (dashboard only — control plane is independently managed).
  */
 export function getDaemonStatus(opts?: DaemonctlPathOptions): { running: false; pid: null; port: number } | { running: true; pid: number; port: number } {
   const status = isRunning(opts);
@@ -256,7 +266,7 @@ export function getDaemonStatus(opts?: DaemonctlPathOptions): { running: false; 
 
 // ── Lifecycle ───────────────────────────────────────────────────────
 
-/** Options for startDaemon / startMcp. */
+/** Options for startDaemon / startControlPlane. */
 export interface StartOptions extends DaemonctlPathOptions {
   /**
    * When true, skips child.unref() and includes the ChildProcess handle
@@ -279,7 +289,7 @@ export type StartControlPlaneResult = {
  * Start the dashboard daemon.
  *
  * Spawns a detached node process running dist/server/daemon.js.
- * Writes the port to ~/.tamandua/port before spawning.
+ * Writes the port to ~/.formiga/port before spawning.
  *
  * If the daemon is already running, returns its info without restarting.
  *
@@ -290,7 +300,7 @@ export async function startDaemon(port?: number): Promise<{ pid: number; port: n
 export async function startDaemon(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
 export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
   // When homeDir is set, compute isolated paths for all filesystem operations.
-  const tamanduaDir = getTamanduaDir(opts);
+  const formigaDir = getFormigaDir(opts);
   const pidFile = getPidFile(opts);
   const portFile = getPortFile(opts);
   const logFile = getLogFile(opts);
@@ -309,7 +319,7 @@ export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ p
     return { pid: status.pid, port: existingPort };
   }
 
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  fs.mkdirSync(formigaDir, { recursive: true });
   const lockFd = acquireStartLock(lockFile);
   if (lockFd === null) {
     const existing = await waitForDaemonPid(pidFile, portFile, port);
@@ -410,197 +420,6 @@ export function stopDaemon(opts?: DaemonctlPathOptions): boolean {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// MCP standalone lifecycle management
-// ═══════════════════════════════════════════════════════════════════
-
-/**
- * Resolve the mcp-standalone.js path.
- * In production (compiled JS), the file lives alongside daemonctl.js in dist/server/.
- * In development (tsx on-the-fly transpilation), the compiled output is in dist/server/.
- */
-function resolveStandaloneScript(): string {
-  // Production: same directory as daemonctl.js (dist/server/)
-  const prodPath = path.resolve(__dirname, "mcp-standalone.js");
-  if (fs.existsSync(prodPath)) return prodPath;
-
-  // Development (tsx): compiled output lives in dist/server/
-  const devPath = path.resolve(__dirname, "..", "..", "dist", "server", "mcp-standalone.js");
-  if (fs.existsSync(devPath)) return devPath;
-
-  // Fallback: return prodPath so the caller gets a clear error
-  return prodPath;
-}
-
-/**
- * Read the MCP port from the MCP port file.
- * Returns DEFAULT_MCP_PORT (3338) when no port file exists.
- */
-export function readMcpPort(opts?: DaemonctlPathOptions): number {
-  try {
-    const raw = fs.readFileSync(getMcpPortFile(opts), "utf-8").trim();
-    const port = parseInt(raw, 10);
-    if (!isNaN(port) && port > 0 && port < 65536) {
-      return port;
-    }
-  } catch {
-    // File doesn't exist or is invalid
-  }
-  return DEFAULT_MCP_PORT;
-}
-
-/**
- * Write the MCP port to the MCP port file.
- */
-export function writeMcpPort(port: number, opts?: DaemonctlPathOptions): void {
-  const tamanduaDir = getTamanduaDir(opts);
-  fs.mkdirSync(tamanduaDir, { recursive: true });
-  fs.writeFileSync(getMcpPortFile(opts), String(port), "utf-8");
-}
-
-/**
- * Check if the standalone MCP server is running.
- * Uses the MCP PID file and kill(0) for existence check.
- */
-export function isMcpRunning(opts?: DaemonctlPathOptions): { running: true; pid: number } | { running: false } {
-  return checkPidFile(getMcpPidFile(opts));
-}
-
-/**
- * Get full MCP status.
- */
-export function getMcpStatus(opts?: DaemonctlPathOptions): {
-  running: boolean;
-  pid: number | null;
-  port: number;
-  endpoint: string;
-} {
-  const status = isMcpRunning(opts);
-  const port = readMcpPort(opts);
-  return {
-    running: status.running,
-    pid: status.running ? status.pid : null,
-    port,
-    endpoint: MCP_ENDPOINT_PATH,
-  };
-}
-
-/**
- * Start the standalone MCP server.
- *
- * Spawns a detached node process running dist/server/mcp-standalone.js.
- * Writes PID and port files that the spawned process also updates.
- * Waits for startup and checks health.
- *
- * If the MCP server is already running, returns its info without restarting.
- */
-export async function startMcp(port?: number): Promise<{ pid: number; port: number }>;
-export async function startMcp(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
-export async function startMcp(port?: number, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
-  // When homeDir is set, compute isolated paths for all filesystem operations.
-  const tamanduaDir = getTamanduaDir(opts);
-  const mcpPidFile = getMcpPidFile(opts);
-  const mcpPortFile = getMcpPortFile(opts);
-  const mcpLogFile = getMcpLogFile(opts);
-
-  const status = checkPidFile(mcpPidFile);
-  if (status.running) {
-    let existingPort: number = DEFAULT_MCP_PORT;
-    try {
-      const raw = fs.readFileSync(mcpPortFile, "utf-8").trim();
-      const p = parseInt(raw, 10);
-      if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
-    } catch {
-      // File missing or unreadable — use default
-    }
-    return { pid: status.pid, port: existingPort };
-  }
-
-  const mcpPort = port ?? DEFAULT_MCP_PORT;
-
-  fs.mkdirSync(tamanduaDir, { recursive: true });
-  fs.writeFileSync(mcpPortFile, String(mcpPort), "utf-8");
-
-  const out = fs.openSync(mcpLogFile, "a");
-  const errFd = fs.openSync(mcpLogFile, "a");
-
-  const standaloneScript = resolveStandaloneScript();
-  const spawnOpts: Parameters<typeof spawn>[2] = {
-    detached: true,
-    stdio: ["ignore", out, errFd],
-  };
-  if (opts?.homeDir) {
-    spawnOpts.env = { ...process.env, HOME: opts.homeDir };
-  }
-  const child = spawn("node", ["--disable-warning=ExperimentalWarning", standaloneScript, String(mcpPort)], spawnOpts);
-
-  if (opts?.keepHandle) {
-    // Caller wants the ChildProcess handle for direct cleanup (e.g. tests).
-    // Don't unref — the handle keeps the event loop alive, which is fine
-    // because the caller is responsible for killing the child.
-  } else {
-    child.unref();
-  }
-
-  // Wait for the MCP server to start and write its PID file. Poll instead
-  // of a single fixed sleep: under heavy load (e.g. the parallel test suite)
-  // node startup can take well over a second.
-  const deadline = Date.now() + 10_000;
-  let check = checkPidFile(mcpPidFile);
-  while (!check.running && Date.now() < deadline) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 250));
-    check = checkPidFile(mcpPidFile);
-  }
-  if (!check.running) {
-    const logTail = readLogTail(mcpLogFile);
-    if (logTail) {
-      throw new Error(`MCP server failed to start. Recent MCP log:\n${logTail}`);
-    }
-    throw new Error("MCP server failed to start. Check " + mcpLogFile);
-  }
-
-  if (opts?.keepHandle) {
-    return { pid: check.pid, port: mcpPort, child };
-  }
-
-  return { pid: check.pid, port: mcpPort };
-}
-
-/**
- * Stop the standalone MCP server.
- *
- * Sends SIGTERM to the MCP process and cleans up the PID file.
- * Returns true if an MCP server was stopped, false if none was running.
- */
-export function stopMcp(opts?: DaemonctlPathOptions): boolean {
-  const status = isMcpRunning(opts);
-  if (!status.running) return false;
-  if (!canSignalPid(status.pid, opts)) return false;
-
-  try {
-    process.kill(status.pid, "SIGTERM");
-  } catch {
-    // Process may have already exited
-  }
-
-  // Clean up PID file — the MCP process also cleans up on exit,
-  // but we do it here as a safety measure
-  try {
-    fs.unlinkSync(getMcpPidFile(opts));
-  } catch {
-    // Best effort
-  }
-
-  // Clean up port file so a fresh start can pick a different port
-  try {
-    fs.unlinkSync(getMcpPortFile(opts));
-  } catch {
-    // Best effort
-  }
-
-  return true;
-}
-
-// ═══════════════════════════════════════════════════════════════════
 // Control plane standalone lifecycle management
 // ═══════════════════════════════════════════════════════════════════
 
@@ -687,7 +506,7 @@ async function detectExistingControlPlane(
   if (health.healthy) {
     if (health.pid !== null && !canSignalPid(health.pid, opts)) {
       throw new Error(
-        `Port ${port} is already used by a Tamandua control plane outside the requested HOME. ` +
+        `Port ${port} is already used by a Formiga control plane outside the requested HOME. ` +
         `Stop the other process or choose a different port.`,
       );
     }
@@ -706,7 +525,7 @@ async function detectExistingControlPlane(
   if (await isTcpPortOpen(port)) {
     const suffix = health.status ? `; health endpoint returned HTTP ${health.status}` : "";
     throw new Error(
-      `Port ${port} is already in use, but it is not a healthy Tamandua control plane${suffix}. ` +
+      `Port ${port} is already in use, but it is not a healthy Formiga control plane${suffix}. ` +
       `Stop the other process or choose a different port.`,
     );
   }
@@ -735,8 +554,8 @@ export function readControlPlanePort(opts?: DaemonctlPathOptions): number {
  * Write the control plane port to the control plane port file.
  */
 export function writeControlPlanePort(port: number, opts?: DaemonctlPathOptions): void {
-  const tamanduaDir = getTamanduaDir(opts);
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  const formigaDir = getFormigaDir(opts);
+  fs.mkdirSync(formigaDir, { recursive: true });
   fs.writeFileSync(getControlPlanePortFile(opts), String(port), "utf-8");
 }
 
@@ -780,7 +599,7 @@ export async function startControlPlane(port?: number): Promise<StartControlPlan
 export async function startControlPlane(port: number, opts: StartOptions & { keepHandle: true }): Promise<StartControlPlaneResult & { child: ChildProcess }>;
 export async function startControlPlane(port?: number, opts?: StartOptions): Promise<StartControlPlaneResult | (StartControlPlaneResult & { child: ChildProcess })> {
   // When homeDir is set, compute isolated paths for all filesystem operations.
-  const tamanduaDir = getTamanduaDir(opts);
+  const formigaDir = getFormigaDir(opts);
   const cpPidFile = getControlPlanePidFile(opts);
   const cpPortFile = getControlPlanePortFile(opts);
   const cpLogFile = getControlPlaneLogFile(opts);
@@ -803,7 +622,7 @@ export async function startControlPlane(port?: number, opts?: StartOptions): Pro
   const existing = await detectExistingControlPlane(cpPort, cpPidFile, cpPortFile, opts);
   if (existing) return existing;
 
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  fs.mkdirSync(formigaDir, { recursive: true });
   fs.writeFileSync(cpPortFile, String(cpPort), "utf-8");
 
   const out = fs.openSync(cpLogFile, "a");

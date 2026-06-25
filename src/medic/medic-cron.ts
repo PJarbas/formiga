@@ -1,20 +1,20 @@
 /**
  * Medic cron management — install/uninstall the medic's periodic health check.
  *
- * Uses the agent-scheduler module to schedule a tamandua-medic agent
+ * Uses the agent-scheduler module to schedule a formiga-medic agent
  * that polls the medic check every 15 minutes.
  */
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { resolveTamanduaCli } from "../installer/paths.js";
+import { resolveFormigaCli } from "../installer/paths.js";
 import {
   createAgentCronJob,
   removeAgentCrons,
 } from "../installer/agent-scheduler.js";
 
-const MEDIC_CRON_FILE = path.join(os.homedir(), ".tamandua", "medic-cron.json");
-const MEDIC_AGENT_ID = "tamandua-medic";
+const MEDIC_CRON_FILE = path.join(os.homedir(), ".formiga", "medic-cron.json");
+const MEDIC_AGENT_ID = "formiga-medic";
 const MEDIC_INTERVAL_MINUTES = 15;
 
 interface MedicCronConfig {
@@ -52,11 +52,11 @@ function removeMedicCronConfig(): void {
 
 /**
  * Build the medic agent prompt that instructs the agent
- * to run the medic check via the tamandua CLI.
+ * to run the medic check via the formiga CLI.
  */
 export function buildMedicPrompt(): string {
-  const cli = resolveTamanduaCli();
-  return `You are the Tamandua Medic — a health watchdog for workflow runs.
+  const cli = resolveFormigaCli();
+  return `You are the Formiga Medic — a health watchdog for workflow runs.
 
 Run the medic check:
 \`\`\`
@@ -74,7 +74,7 @@ Do NOT attempt to fix issues yourself beyond what the medic check already handle
 /**
  * Install the medic watchdog cron.
  *
- * Writes the medic cron config, ensures the tamandua-medic agent
+ * Writes the medic cron config, ensures the formiga-medic agent
  * is registered in agents.json, and schedules it via agent-scheduler
  * to run every 15 minutes.
  */
@@ -100,9 +100,9 @@ export async function installMedicCron(): Promise<{ ok: boolean; error?: string 
     };
   }
 
-  // Ensure the tamandua-medic agent entry exists in agents.json
+  // Ensure the formiga-medic agent entry exists in agents.json
   try {
-    const agentsPath = path.join(os.homedir(), ".tamandua", "agents.json");
+    const agentsPath = path.join(os.homedir(), ".formiga", "agents.json");
     const agentsDir = path.dirname(agentsPath);
     fs.mkdirSync(agentsDir, { recursive: true });
 
@@ -120,13 +120,13 @@ export async function installMedicCron(): Promise<{ ok: boolean; error?: string 
     if (!agents.some((a) => a.id === MEDIC_AGENT_ID)) {
       agents.push({
         id: MEDIC_AGENT_ID,
-        name: "Tamandua Medic",
+        name: "Formiga Medic",
         model: "default",
-        workspace: path.join(os.homedir(), ".tamandua", "workspaces", MEDIC_AGENT_ID),
-        agentDir: path.join(os.homedir(), ".tamandua", "agents", MEDIC_AGENT_ID),
+        workspace: path.join(os.homedir(), ".formiga", "workspaces", MEDIC_AGENT_ID),
+        agentDir: path.join(os.homedir(), ".formiga", "agents", MEDIC_AGENT_ID),
         config: {
           role: "analysis",
-          description: "Health watchdog for tamandua workflow runs",
+          description: "Health watchdog for formiga workflow runs",
           timeoutSeconds: 120,
         },
       });
@@ -141,7 +141,7 @@ export async function installMedicCron(): Promise<{ ok: boolean; error?: string 
   // and the previous polling-round wiring was effectively a no-op anyway
   // (the standard polling prompt would peek for steps that medic never
   // claims). The medic config + agent provisioning above is preserved
-  // so `tamandua medic run` and dashboard checks keep working; a future
+  // so `formiga medic run` and dashboard checks keep working; a future
   // commit can attach the medic to its own non-run-scoped scheduler.
   void createAgentCronJob;
   void MEDIC_INTERVAL_MINUTES;
@@ -160,7 +160,7 @@ export async function uninstallMedicCron(): Promise<{ ok: boolean; error?: strin
 
   // Remove medic agent from agents.json
   try {
-    const agentsPath = path.join(os.homedir(), ".tamandua", "agents.json");
+    const agentsPath = path.join(os.homedir(), ".formiga", "agents.json");
     if (fs.existsSync(agentsPath)) {
       const raw = fs.readFileSync(agentsPath, "utf-8");
       let agents = JSON.parse(raw);
@@ -177,7 +177,7 @@ export async function uninstallMedicCron(): Promise<{ ok: boolean; error?: strin
 
   // Remove medic cron job via agent-scheduler
   try {
-    await removeAgentCrons("tamandua-medic");
+    await removeAgentCrons("formiga-medic");
   } catch (err) {
     console.warn("Failed to remove medic cron via agent-scheduler:", (err as Error).message);
   }

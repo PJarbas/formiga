@@ -1,7 +1,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { parsePiOutputStream } from "../installer/pi-stream-parser.js";
+// Minimal inline replacement for previously-imported parsePiOutputStream.
+// The richer Pi stream parsing logic was removed (orphan code); autoresearch
+// now treats the child's stdout as plain assistant text.
+async function parsePiOutputStream(lines: string[]): Promise<{ assistantText: string; textFallback?: string }> {
+  return { assistantText: lines.join("\n") };
+}
 
 export type AutoresearchDirection = "lower" | "higher";
 export type AutoresearchDecision = "baseline" | "keep" | "discard" | "crash" | "checks_failed";
@@ -291,7 +296,7 @@ export function findAutoresearchSessionCwd(cwd = process.cwd(), options: { maxDe
 export function readSessionConfig(cwd = process.cwd()): AutoresearchSessionConfig {
   const paths = getAutoresearchPaths(cwd);
   if (!fs.existsSync(paths.configFile)) {
-    throw new Error(`No autoresearch session found at ${paths.configFile}. Run: tamandua autoresearch init`);
+    throw new Error(`No autoresearch session found at ${paths.configFile}. Run: formiga autoresearch init`);
   }
   const raw = JSON.parse(fs.readFileSync(paths.configFile, "utf-8")) as Partial<AutoresearchSessionConfig>;
   if (!raw.goal || !raw.metricName || !raw.direction || !raw.command) {
@@ -370,8 +375,8 @@ export function initExperiment(options: InitExperimentOptions): AutoresearchSess
     "1. Inspect `autoresearch.jsonl`, the current best result, and the previous learning.",
     "2. Choose one narrow hypothesis for the next experiment.",
     "3. Edit only the files needed for that hypothesis.",
-    "4. Run `tamandua autoresearch run-experiment`.",
-    "5. Run `tamandua autoresearch log-experiment --status auto --description ... --hypothesis ... --learned ... --next-focus ...`.",
+    "4. Run `formiga autoresearch run-experiment`.",
+    "5. Run `formiga autoresearch log-experiment --status auto --description ... --hypothesis ... --learned ... --next-focus ...`.",
     "6. Use the logged keep/discard result to define the next experiment.",
     "",
     "The loop is a ratchet: every iteration must learn from measured evidence before proposing the next experiment.",
@@ -531,7 +536,7 @@ export function summarizeAutoresearch(cwd = process.cwd()): AutoresearchSummary 
       confidence_band: "unknown",
       noise_floor_mad: null,
       confidence_sample_count: 0,
-      nextPrompt: "No AutoResearch session found. Run `tamandua autoresearch init` first.",
+      nextPrompt: "No AutoResearch session found. Run `formiga autoresearch init` first.",
     };
   }
 

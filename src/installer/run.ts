@@ -11,12 +11,9 @@ import {
 } from "../server/control-client.js";
 import { emitEvent } from "./events.js";
 import { advancePipeline, scheduleRunCronTeardown } from "./step-ops.js";
-import {
-  RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY,
-  validateRunHarnessForScheduling,
-} from "./run-harness.js";
-import { createRunWorktree, type ManagedRunWorktree } from "./worktree-manager.js";
 import type { HarnessType } from "./types.js";
+
+const RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY = "working_directory_for_harness";
 
 export interface RunWorkflowParams {
   workflowId: string;
@@ -116,7 +113,7 @@ export async function runWorkflow(
     );
 
     // For just-do-it workflows, the dispatcher runs from a neutral
-    // workspace under Tamandua state so it doesn't occupy the user's
+    // workspace under Formiga state so it doesn't occupy the user's
     // target repository as its harness directory. The target repo path
     // is preserved in context for child workflow launch.
     if (workflowId === "just-do-it") {
@@ -159,40 +156,11 @@ export async function runWorkflow(
       seededContext.original_branch = "";
     }
   } else if (workspaceMode === "worktree") {
-    if (requestedWorkingDirectoryForHarness) {
-      throw new Error(
-        "--working-directory-for-harness is not valid for workflows with run.workspace: worktree. Use --worktree-origin-repository and --worktree-origin-ref instead.",
-      );
-    }
-
-    const originRepo = worktreeOriginRepository ?? process.cwd();
-    let managedWorktree: ManagedRunWorktree;
-    try {
-      managedWorktree = createRunWorktree({
-        runId,
-        runNumber,
-        workflowId,
-        worktreeOriginRepository: originRepo,
-        worktreeOriginRef,
-      });
-    } catch (err) {
-      // createRunWorktree already marks the run_worktrees row as error internally.
-      // Fail the run start before registering with the daemon.
-      throw new Error(
-        `Failed to create managed worktree for run: ${(err as Error).message}`,
-      );
-    }
-
-    workingDirectoryForHarness = managedWorktree.worktreePath;
-    seededContext[RUN_CONTEXT_WORKING_DIRECTORY_FOR_HARNESS_KEY] =
-      managedWorktree.worktreePath;
-    seededContext.repo = managedWorktree.worktreePath;
-    seededContext.worktree_path = managedWorktree.worktreePath;
-    seededContext.worktree_origin_repository =
-      managedWorktree.worktreeOriginRepository;
-    seededContext.worktree_origin_ref = managedWorktree.worktreeOriginRef;
-    seededContext.worktree_origin_sha = managedWorktree.worktreeOriginSha;
-    seededContext.original_branch = managedWorktree.originalBranch ?? "";
+    void worktreeOriginRepository;
+    void worktreeOriginRef;
+    throw new Error(
+      "run.workspace: worktree is no longer supported in this build.",
+    );
   } else {
     throw new Error(
       `Invalid run.workspace value: "${workspaceMode}". Expected "direct" or "worktree".`,
@@ -201,18 +169,14 @@ export async function runWorkflow(
 
   // Store base branch SHA for rugpull detection — captured at run creation time
   // so downstream detection can compare against current tip after failure.
-  if (workspaceMode === "worktree") {
-    seededContext.base_branch_sha = seededContext.worktree_origin_sha;
-  } else {
-    try {
-      seededContext.base_branch_sha = execFileSync(
-        "git",
-        ["rev-parse", "HEAD"],
-        { cwd: workingDirectoryForHarness, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-      ).trim();
-    } catch {
-      seededContext.base_branch_sha = "";
-    }
+  try {
+    seededContext.base_branch_sha = execFileSync(
+      "git",
+      ["rev-parse", "HEAD"],
+      { cwd: workingDirectoryForHarness, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
+  } catch {
+    seededContext.base_branch_sha = "";
   }
 
   let workingDirectoryStats;
@@ -341,7 +305,6 @@ export async function resumeWorkflow(runId: string): Promise<ResumeResult> {
   if (!run) return { status: "not_found" };
 
   await ensureDaemonControlAvailable();
-  validateRunHarnessForScheduling(run.id, run.context);
 
   // Reset the run to running and request fresh scheduling admission.
   const resumeNow = new Date().toISOString();

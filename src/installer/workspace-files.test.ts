@@ -13,7 +13,7 @@ describe("workspace-files", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "tamandua-workspace-files-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "formiga-workspace-files-"));
   });
 
   afterEach(async () => {

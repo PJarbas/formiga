@@ -1,8 +1,8 @@
 /**
- * Tamandua Daemon Control Plane
+ * Formiga Daemon Control Plane
  *
  * Provides idempotent HTTP endpoints for run-scoped scheduling. Bound to a
- * separate localhost port (default 3339; overridable via TAMANDUA_CONTROL_PORT).
+ * separate localhost port (default 3339; overridable via FORMIGA_CONTROL_PORT).
  *
  * Endpoints:
  *   GET  /control/health          – liveness
@@ -14,8 +14,8 @@
  *   POST /control/resume-run      – resume a paused run
  *   POST /control/nudge           – nudge all scheduled agents for running runs
  *
- * Authentication: header `x-tamandua-secret: <token>` matches the token in
- * `~/.tamandua/daemon-secret` (mode 0600). Localhost-only binding is the
+ * Authentication: header `x-formiga-secret: <token>` matches the token in
+ * `~/.formiga/daemon-secret` (mode 0600). Localhost-only binding is the
  * primary defense; the secret is a defense-in-depth measure.
  */
 import http from "node:http";
@@ -26,17 +26,16 @@ import crypto from "node:crypto";
 import { logger } from "../lib/logger.js";
 import { getDb } from "../db.js";
 import { emitEvent } from "../installer/events.js";
-import { validateRunHarnessForScheduling } from "../installer/run-harness.js";
 
 export const DEFAULT_CONTROL_PORT = 3339;
 const DEFAULT_MAX_ACTIVE_TIMERS = 50;
 
 function defaultDaemonSecretFile(): string {
-  return path.join(process.env.HOME?.trim() || os.homedir(), ".tamandua", "daemon-secret");
+  return path.join(process.env.HOME?.trim() || os.homedir(), ".formiga", "daemon-secret");
 }
 
 export function getControlPort(): number {
-  const raw = process.env.TAMANDUA_CONTROL_PORT;
+  const raw = process.env.FORMIGA_CONTROL_PORT;
   if (!raw) return DEFAULT_CONTROL_PORT;
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 1 || n > 65535) return DEFAULT_CONTROL_PORT;
@@ -44,7 +43,7 @@ export function getControlPort(): number {
 }
 
 export function getMaxActiveTimers(): number {
-  const raw = process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+  const raw = process.env.FORMIGA_MAX_ACTIVE_TIMERS;
   if (!raw) return DEFAULT_MAX_ACTIVE_TIMERS;
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 1) return DEFAULT_MAX_ACTIVE_TIMERS;
@@ -155,12 +154,9 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
   const {
     _scheduledJobCount,
     _scheduledJobCountForRun,
-    _runIdForScheduledHarnessWorkdir,
     removeRunCrons,
     setupAgentCrons,
   } = await import("../installer/agent-scheduler.js");
-
-  const harness = validateRunHarnessForScheduling(run.id, run.context);
 
   let isSaveTokensMode = false;
   try {
@@ -168,16 +164,6 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
     isSaveTokensMode = contextParsed.no_hurry_save_tokens_mode === 'true';
   } catch {
     // context might be malformed; default to false
-  }
-
-  const duplicateRunId = _runIdForScheduledHarnessWorkdir(
-    harness.workingDirectoryForHarness,
-    run.id,
-  );
-  if (duplicateRunId && process.env.TAMANDUA_ALLOW_SHARED_HARNESS_WORKDIR !== "1") {
-    throw new Error(
-      `Run ${run.id} harness workdir is already scheduled for run ${duplicateRunId}: ${harness.workingDirectoryForHarness}`,
-    );
   }
 
   const existingForRun = _scheduledJobCountForRun(run.id);
@@ -196,7 +182,7 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
 
   if (requiredTimers > maxActiveTimers) {
     const message =
-      `Run requires ${requiredTimers} scheduler timer(s), but TAMANDUA_MAX_ACTIVE_TIMERS is ${maxActiveTimers}.`;
+      `Run requires ${requiredTimers} scheduler timer(s), but FORMIGA_MAX_ACTIVE_TIMERS is ${maxActiveTimers}.`;
     getDb()
       .prepare(
         "UPDATE runs SET status = 'failed', scheduling_status = NULL, scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
@@ -237,7 +223,6 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
 
   try {
     await setupAgentCrons(workflow, run.id, {
-      workingDirectoryForHarness: harness.workingDirectoryForHarness,
       noHurrySaveTokensMode: isSaveTokensMode,
     });
     const scheduledForRun = _scheduledJobCountForRun(run.id);
@@ -414,21 +399,6 @@ async function handleResumeRun(runId: string): Promise<JsonResponse> {
   if (isTerminal(run.status)) return conflict(`Run is terminal: ${run.status}`);
   if (run.status === "running" && run.scheduling_status === "active") {
     return ok({ state: "active" });
-  }
-  try {
-    validateRunHarnessForScheduling(run.id, run.context);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    try {
-      getDb()
-        .prepare(
-          "UPDATE runs SET scheduling_status = 'error', scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .run(message, runId);
-    } catch {
-      /* best-effort */
-    }
-    return unprocessable(`Cannot resume run: ${message}`);
   }
   try {
     getDb()
@@ -657,7 +627,7 @@ export function createControlServer(options: ControlServerOptions = {}): http.Se
     }
 
     if (expectedSecret) {
-      const provided = req.headers["x-tamandua-secret"];
+      const provided = req.headers["x-formiga-secret"];
       const got = Array.isArray(provided) ? provided[0] : provided;
       if (got !== expectedSecret) {
         respond(401, { error: "Unauthorized" });

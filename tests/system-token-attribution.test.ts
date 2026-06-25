@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 const repoRoot = process.cwd();
 
 function createTempHome() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-system-token-attribution-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-system-token-attribution-"));
   const homeDir = path.join(root, "home");
   fs.mkdirSync(homeDir, { recursive: true });
   return { root, homeDir };
@@ -55,7 +55,7 @@ function runNodeScript(script: string, env: Record<string, string>) {
 }
 
 describe("system token attribution (US-002)", () => {
-  it("records tokens from polling rounds with unresolvable run ID in tamandua_stats.system_tokens_spent", () => {
+  it("records tokens from polling rounds with unresolvable run ID in formiga_stats.system_tokens_spent", () => {
     const temp = createTempHome();
 
     try {
@@ -116,7 +116,7 @@ describe("system token attribution (US-002)", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -211,7 +211,7 @@ describe("system token attribution (US-002)", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -276,7 +276,7 @@ describe("system token attribution (US-002)", () => {
 
           const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
           const systemTokens = getSystemTokenSpend();
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logPath = path.join(process.env.HOME, ".formiga", "formiga.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
 
           console.log(JSON.stringify({
@@ -288,7 +288,7 @@ describe("system token attribution (US-002)", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -355,7 +355,7 @@ describe("system token attribution (US-002)", () => {
 
           await executePollingRound(job, agent);
 
-          const eventsPath = path.join(process.env.HOME, ".tamandua", "events", "system.jsonl");
+          const eventsPath = path.join(process.env.HOME, ".formiga", "events", "system.jsonl");
           const events = fs.existsSync(eventsPath)
             ? fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
             : [];
@@ -370,7 +370,7 @@ describe("system token attribution (US-002)", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 
@@ -433,7 +433,7 @@ describe("system token attribution (US-002)", () => {
           await executePollingRound(job, agent);
           console.log(JSON.stringify({ done: true }));
         `,
-        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+        { HOME: temp.homeDir, FORMIGA_PI_BINARY: fakePi },
       );
 
       // Round 2: 20 tokens (same fake Pi, same unresolvable output)
@@ -452,7 +452,7 @@ describe("system token attribution (US-002)", () => {
 
           // Write a different pi payload with 20 tokens for this round
           const fs = await import("node:fs");
-          const piPath = process.env.TAMANDUA_PI_BINARY;
+          const piPath = process.env.FORMIGA_PI_BINARY;
           fs.writeFileSync(
             piPath,
             "#!/usr/bin/env node\\nprocess.stdout.write(" + JSON.stringify(JSON.stringify({
@@ -489,7 +489,7 @@ describe("system token attribution (US-002)", () => {
 
           console.log(JSON.stringify({ systemTokensSpent: systemTokens }));
         `,
-        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+        { HOME: temp.homeDir, FORMIGA_PI_BINARY: fakePi },
       );
 
       // 30 + 20 = 50
@@ -549,7 +549,7 @@ describe("system token attribution (US-002)", () => {
 
           await executePollingRound(job, agent);
 
-          const logPath = path.join(process.env.HOME, ".tamandua", "tamandua.log");
+          const logPath = path.join(process.env.HOME, ".formiga", "formiga.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
 
           const warnLinePresent = logContent.includes("not attributed to run — run id unresolved");
@@ -562,7 +562,7 @@ describe("system token attribution (US-002)", () => {
         `,
         {
           HOME: temp.homeDir,
-          TAMANDUA_PI_BINARY: fakePi,
+          FORMIGA_PI_BINARY: fakePi,
         },
       );
 

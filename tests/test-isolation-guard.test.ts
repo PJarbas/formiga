@@ -52,10 +52,10 @@ describe("test isolation guard", () => {
     assert.deepEqual(violations, []);
   });
 
-  it("test files that use logger or agent-scheduler must set TAMANDUA_STATE_DIR", () => {
+  it("test files that use logger or agent-scheduler must set FORMIGA_STATE_DIR", () => {
     // Test files that import logger or agent-scheduler functions must isolate
-    // their log output using TAMANDUA_STATE_DIR to avoid polluting the live
-    // ~/.tamandua/tamandua.log. This regression test guards against that.
+    // their log output using FORMIGA_STATE_DIR to avoid polluting the live
+    // ~/.formiga/formiga.log. This regression test guards against that.
     const testFiles = [
       ...collectTestFiles(path.join(process.cwd(), "tests")),
       ...collectTestFiles(path.join(process.cwd(), "e2e-tests")),
@@ -71,8 +71,8 @@ describe("test isolation guard", () => {
       /from\s+["'].*\/installer\/agent-scheduler\.js["'].*\bexecutePollingRound\b/,
     ];
 
-    const logsViaTamanduaDir = /TAMANDUA_STATE_DIR/;
-    // Acceptable alternatives to TAMANDUA_STATE_DIR: monkey-patching logger so it never writes to disk
+    const logsViaFormigaDir = /FORMIGA_STATE_DIR/;
+    // Acceptable alternatives to FORMIGA_STATE_DIR: monkey-patching logger so it never writes to disk
     const hasLoggerPatch = /captureLoggerCalls|mutableLogger\.(?:info|warn|error)\s*=/;
 
     const violations: string[] = [];
@@ -83,9 +83,9 @@ describe("test isolation guard", () => {
       const importsLogger = loggerSensitiveImports.some((p) => p.test(content));
       if (!importsLogger) continue;
 
-      if (!logsViaTamanduaDir.test(content) && !hasLoggerPatch.test(content)) {
+      if (!logsViaFormigaDir.test(content) && !hasLoggerPatch.test(content)) {
         violations.push(
-          `${relative}: imports logger or agent-scheduler without setting TAMANDUA_STATE_DIR or monkey-patching logger`,
+          `${relative}: imports logger or agent-scheduler without setting FORMIGA_STATE_DIR or monkey-patching logger`,
         );
       }
     }

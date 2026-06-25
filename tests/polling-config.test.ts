@@ -70,7 +70,7 @@ describe("polling config", () => {
   let tmpDir: string;
 
   before(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "tamandua-polling-test-"));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "formiga-polling-test-"));
   });
 
   after(async () => {

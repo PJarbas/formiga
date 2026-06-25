@@ -1,5 +1,5 @@
 /**
- * Tamandua Dashboard HTTP Server
+ * Formiga Dashboard HTTP Server
  *
  * Creates an HTTP server that serves the dashboard UI and API endpoints.
  *
@@ -22,12 +22,10 @@ import { fileURLToPath } from "node:url";
 import { getDb, getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession } from "../db.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
-import { getMcpStatus } from "./daemonctl.js";
 import { buildKanbanSnapshot, buildKanbanCardDetail } from "./kanban-data.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 import { runWorkflow } from "../installer/run.js";
 import { stopWorkflow, deleteWorkflow, getWorkflowStatus } from "../installer/status.js";
-import { readVersionStatus } from "../lib/version-check.js";
 import { getBuildVersion } from "../lib/version.js";
 import {
   findAutoresearchSessionCwd,
@@ -874,28 +872,6 @@ function handleVersion(_req: http.IncomingMessage, res: http.ServerResponse): vo
   }
 }
 
-function handleVersionStatus(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const status = readVersionStatus();
-    jsonResponse(res, status);
-  } catch (err) {
-    errorResponse(res, `Failed to read version status: ${(err as Error).message}`);
-  }
-}
-
-function handleMcpStatus(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const status = getMcpStatus();
-    jsonResponse(res, {
-      running: status.running,
-      port: status.port,
-      path: status.endpoint,
-    });
-  } catch (err) {
-    errorResponse(res, `Failed to get MCP status: ${(err as Error).message}`);
-  }
-}
-
 // ── Router ───────────────────────────────────────────────────────────
 
 function route(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -924,8 +900,8 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     } catch {
       htmlResponse(res, `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Tamandua Dashboard</title></head>
-<body><h1>Tamandua Dashboard</h1><p>Dashboard HTML not found. Rebuild tamandua or check dist/server/index.html.</p></body>
+<head><meta charset="UTF-8"><title>Formiga Dashboard</title></head>
+<body><h1>Formiga Dashboard</h1><p>Dashboard HTML not found. Rebuild formiga or check dist/server/index.html.</p></body>
 </html>`, 200);
     }
     return;
@@ -940,8 +916,8 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     } catch {
       htmlResponse(res, `<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Tamandua Kanban</title></head>
-<body><h1>Tamandua Kanban</h1><p>Kanban HTML not found. Rebuild tamandua or check dist/server/kanban.html.</p></body>
+<head><meta charset="UTF-8"><title>Formiga Kanban</title></head>
+<body><h1>Formiga Kanban</h1><p>Kanban HTML not found. Rebuild formiga or check dist/server/kanban.html.</p></body>
 </html>`, 200);
     }
     return;
@@ -1030,18 +1006,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
-  // GET /api/version-status
-  if (method === "GET" && pathname === "/api/version-status") {
-    handleVersionStatus(req, res);
-    return;
-  }
-
-  // GET /api/mcp-status
-  if (method === "GET" && pathname === "/api/mcp-status") {
-    handleMcpStatus(req, res);
-    return;
-  }
-
   // POST /api/runs/:id/pause
   const pauseMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/pause$/);
   if (method === "POST" && pauseMatch) {
@@ -1100,7 +1064,7 @@ export function createDashboardServer(port: number, options: DashboardServerOpti
   });
 
   server.listen(port, () => {
-    console.log(`Tamandua dashboard listening on http://localhost:${port}`);
+    console.log(`Formiga dashboard listening on http://localhost:${port}`);
     // Backfill AutoResearch sessions from recent workflow runs
     backfillAutoresearchSessions();
   });

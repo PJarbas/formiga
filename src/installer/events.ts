@@ -6,7 +6,7 @@ import { logger } from "../lib/logger.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
-export interface TamanduaEvent {
+export interface FormigaEvent {
   ts: string;
   event: string;
   runId: string;
@@ -25,7 +25,7 @@ export type EventCursorSource =
   | { kind: "run"; runId: string };
 
 export interface EventCursorReadResult {
-  events: TamanduaEvent[];
+  events: FormigaEvent[];
   nextOffset: number;
 }
 
@@ -51,14 +51,14 @@ function getEventsFileForSource(source: EventCursorSource): string {
 // ── Event Emission ───────────────────────────────────────────────────
 
 /**
- * Emit a Tamandua event.
+ * Emit a Formiga event.
  *
  * Writes:
- * 1. To the run-specific JSONL file (~/.tamandua/events/<runId>.jsonl)
- * 2. To the global JSONL file (~/.tamandua/events/all.jsonl)
+ * 1. To the run-specific JSONL file (~/.formiga/events/<runId>.jsonl)
+ * 2. To the global JSONL file (~/.formiga/events/all.jsonl)
  * 3. Fires a webhook if a notify URL is configured for the run (fire-and-forget)
  */
-export function emitEvent(evt: TamanduaEvent): void {
+export function emitEvent(evt: FormigaEvent): void {
   const line = JSON.stringify(evt) + "\n";
 
   // Ensure events directory exists
@@ -102,8 +102,8 @@ export function emitEvent(evt: TamanduaEvent): void {
 
 /**
  * Read events appended after a byte offset from either:
- * - ~/.tamandua/events/all.jsonl (global)
- * - ~/.tamandua/events/<runId>.jsonl (per-run)
+ * - ~/.formiga/events/all.jsonl (global)
+ * - ~/.formiga/events/<runId>.jsonl (per-run)
  *
  * Returns only complete newline-terminated records and the next cursor offset.
  * Malformed JSON lines are skipped safely.
@@ -129,7 +129,7 @@ export function readEventsFromCursor(source: EventCursorSource, offset = 0): Eve
 
   const startOffset = safeOffset > fileBuffer.length ? 0 : safeOffset;
   let cursor = startOffset;
-  const events: TamanduaEvent[] = [];
+  const events: FormigaEvent[] = [];
 
   while (cursor < fileBuffer.length) {
     const newlineIndex = fileBuffer.indexOf(0x0A, cursor);
@@ -146,7 +146,7 @@ export function readEventsFromCursor(source: EventCursorSource, offset = 0): Eve
     try {
       const parsed = JSON.parse(line);
       if (parsed && typeof parsed === "object") {
-        events.push(parsed as TamanduaEvent);
+        events.push(parsed as FormigaEvent);
       }
     } catch {
       // Ignore malformed JSONL rows so later valid events still stream.
@@ -159,7 +159,7 @@ export function readEventsFromCursor(source: EventCursorSource, offset = 0): Eve
 /**
  * Read the most recent N events from the global events file.
  */
-export function getRecentEvents(limit = 50): TamanduaEvent[] {
+export function getRecentEvents(limit = 50): FormigaEvent[] {
   const globalFile = getGlobalEventsFile();
   try {
     const content = fs.readFileSync(globalFile, "utf-8");
@@ -167,11 +167,11 @@ export function getRecentEvents(limit = 50): TamanduaEvent[] {
     const recent = lines.slice(-limit);
     return recent.map((line) => {
       try {
-        return JSON.parse(line) as TamanduaEvent;
+        return JSON.parse(line) as FormigaEvent;
       } catch {
         return null;
       }
-    }).filter((e): e is TamanduaEvent => e !== null);
+    }).filter((e): e is FormigaEvent => e !== null);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT") return [];
@@ -183,18 +183,18 @@ export function getRecentEvents(limit = 50): TamanduaEvent[] {
 /**
  * Read all events for a specific run.
  */
-export function getRunEvents(runId: string): TamanduaEvent[] {
+export function getRunEvents(runId: string): FormigaEvent[] {
   const runFile = getEventsFile(runId);
   try {
     const content = fs.readFileSync(runFile, "utf-8");
     const lines = content.trim().split("\n").filter(Boolean);
     return lines.map((line) => {
       try {
-        return JSON.parse(line) as TamanduaEvent;
+        return JSON.parse(line) as FormigaEvent;
       } catch {
         return null;
       }
-    }).filter((e): e is TamanduaEvent => e !== null);
+    }).filter((e): e is FormigaEvent => e !== null);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT") return [];
@@ -217,7 +217,7 @@ export function getEventsPath(): string {
  * Looks up the notify_url from the runs table.
  * Does not throw — webhook failures are logged and swallowed.
  */
-async function fireWebhook(evt: TamanduaEvent): Promise<void> {
+async function fireWebhook(evt: FormigaEvent): Promise<void> {
   // Only notify on significant events to avoid flooding
   const significantEvents = new Set([
     "run.started",

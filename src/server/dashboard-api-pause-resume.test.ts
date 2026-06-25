@@ -164,8 +164,8 @@ describe("dashboard pause/resume API", () => {
   let controlPort: number;
 
   before(async () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-dashboard-pause-"));
-    dbPath = path.join(root, "tamandua.db");
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-pause-"));
+    dbPath = path.join(root, "formiga.db");
 
     // Start mock control plane on a random port
     controlMock = http.createServer((_req, res) => {
@@ -177,11 +177,11 @@ describe("dashboard pause/resume API", () => {
     const addr = controlMock.address();
     assert.ok(addr && typeof addr !== "string");
     controlPort = addr.port;
-    process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
+    process.env.FORMIGA_CONTROL_PORT = String(controlPort);
   });
 
   after(() => {
-    delete process.env.TAMANDUA_CONTROL_PORT;
+    delete process.env.FORMIGA_CONTROL_PORT;
     controlMock.close();
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -191,7 +191,7 @@ describe("dashboard pause/resume API", () => {
     await stopMockControl(controlMock);
     const mock = await startMockControl(controlPort);
 
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-001", workflow_id: "wf-a", task: "test", status: "running" },
     ]);
@@ -210,7 +210,7 @@ describe("dashboard pause/resume API", () => {
       assert.deepEqual(mock.pauseRequests[0].body, { runId: "run-001" });
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
       await stopMockControl(mock.server);
       // Re-bind default control mock for subsequent tests
       controlMock = http.createServer((_req, res) => {
@@ -222,7 +222,7 @@ describe("dashboard pause/resume API", () => {
   });
 
   it("POST /api/runs/:id/pause returns 409 for a terminal run", async () => {
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-002", workflow_id: "wf-a", task: "test", status: "completed" },
     ]);
@@ -238,12 +238,12 @@ describe("dashboard pause/resume API", () => {
       assert.match(body.error, /Cannot pause run in completed state/);
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
   });
 
   it("POST /api/runs/:id/pause returns 404 for nonexistent run", async () => {
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, []);
 
     const { server, baseUrl } = await startDashboardOnPort(0);
@@ -255,7 +255,7 @@ describe("dashboard pause/resume API", () => {
       assert.equal(response.status, 404);
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
   });
 
@@ -263,7 +263,7 @@ describe("dashboard pause/resume API", () => {
     await stopMockControl(controlMock);
     const mock = await startMockControl(controlPort);
 
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-003", workflow_id: "wf-a", task: "test", status: "running" },
     ]);
@@ -279,7 +279,7 @@ describe("dashboard pause/resume API", () => {
       assert.deepEqual(mock.pauseRequests[0].body, { runId: "run-003", drain: true });
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
       await stopMockControl(mock.server);
       controlMock = http.createServer((_req, res) => {
         res.writeHead(500);
@@ -293,7 +293,7 @@ describe("dashboard pause/resume API", () => {
     await stopMockControl(controlMock);
     const mock = await startMockControl(controlPort);
 
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-004", workflow_id: "wf-a", task: "test", status: "paused" },
     ]);
@@ -312,7 +312,7 @@ describe("dashboard pause/resume API", () => {
       assert.equal(mock.resumeRequests[0], "run-004");
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
       await stopMockControl(mock.server);
       controlMock = http.createServer((_req, res) => {
         res.writeHead(500);
@@ -342,7 +342,7 @@ describe("dashboard pause/resume API", () => {
     });
     await new Promise<void>((resolve) => mock202.listen(controlPort, resolve));
 
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-resume-202", workflow_id: "wf-a", task: "test", status: "paused" },
     ]);
@@ -359,7 +359,7 @@ describe("dashboard pause/resume API", () => {
       assert.equal(body.runId, "run-resume-202");
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
       await stopMockControl(mock202);
       // Re-bind default control mock for subsequent tests
       controlMock = http.createServer((_req, res) => {
@@ -371,7 +371,7 @@ describe("dashboard pause/resume API", () => {
   });
 
   it("POST /api/runs/:id/resume returns 409 for a non-paused run", async () => {
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-005", workflow_id: "wf-a", task: "test", status: "running" },
     ]);
@@ -387,12 +387,12 @@ describe("dashboard pause/resume API", () => {
       assert.match(body.error, /Cannot resume run in running state/);
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
   });
 
   it("POST /api/runs/:id/resume returns 409 for a completed run", async () => {
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-006", workflow_id: "wf-a", task: "test", status: "completed" },
     ]);
@@ -406,12 +406,12 @@ describe("dashboard pause/resume API", () => {
       assert.equal(response.status, 409);
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
   });
 
   it("POST /api/runs/:id/resume returns 404 for nonexistent run", async () => {
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, []);
 
     const { server, baseUrl } = await startDashboardOnPort(0);
@@ -423,12 +423,12 @@ describe("dashboard pause/resume API", () => {
       assert.equal(response.status, 404);
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
   });
 
   it("DELETE /api/runs/:id deletes a terminal run", async () => {
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-delete-done", workflow_id: "wf-a", task: "test", status: "completed" },
     ]);
@@ -452,12 +452,12 @@ describe("dashboard pause/resume API", () => {
       }
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
   });
 
   it("DELETE /api/runs/:id returns 409 for active runs without force", async () => {
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-delete-active", workflow_id: "wf-a", task: "test", status: "running" },
     ]);
@@ -473,14 +473,14 @@ describe("dashboard pause/resume API", () => {
       assert.match(body.error, /Use --force/);
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
   });
 
   it("POST /api/runs/:id/pause returns 502 when daemon is unreachable", async () => {
     // Use an unused port to simulate unreachable daemon
-    process.env.TAMANDUA_CONTROL_PORT = "19999";
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_CONTROL_PORT = "19999";
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-007", workflow_id: "wf-a", task: "test", status: "running" },
     ]);
@@ -496,14 +496,14 @@ describe("dashboard pause/resume API", () => {
       assert.match(body.error, /Daemon unreachable/);
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
-      process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
+      delete process.env.FORMIGA_DB_PATH;
+      process.env.FORMIGA_CONTROL_PORT = String(controlPort);
     }
   });
 
   it("POST /api/runs/:id/resume returns 502 when daemon is unreachable", async () => {
-    process.env.TAMANDUA_CONTROL_PORT = "19999";
-    process.env.TAMANDUA_DB_PATH = dbPath;
+    process.env.FORMIGA_CONTROL_PORT = "19999";
+    process.env.FORMIGA_DB_PATH = dbPath;
     initDb(dbPath, [
       { id: "run-008", workflow_id: "wf-a", task: "test", status: "paused" },
     ]);
@@ -519,8 +519,8 @@ describe("dashboard pause/resume API", () => {
       assert.match(body.error, /Daemon unreachable/);
     } finally {
       await stopDashboard(server);
-      delete process.env.TAMANDUA_DB_PATH;
-      process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
+      delete process.env.FORMIGA_DB_PATH;
+      process.env.FORMIGA_CONTROL_PORT = String(controlPort);
     }
   });
 });

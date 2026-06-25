@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import http from "node:http";
 import { spawnSync } from "node:child_process";
 
 import { runWorkflow } from "../../dist/installer/run.js";
@@ -25,8 +24,8 @@ function runGit(args: string[], cwd: string): string | null {
 function initGitRepo(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
   runGit(["init", "--initial-branch=main"], dir);
-  runGit(["config", "user.email", "test@tamandua.local"], dir);
-  runGit(["config", "user.name", "Tamandua Test"], dir);
+  runGit(["config", "user.email", "test@formiga.local"], dir);
+  runGit(["config", "user.name", "Formiga Test"], dir);
   fs.writeFileSync(path.join(dir, "README.md"), "# Test Repo\n", "utf-8");
   runGit(["add", "README.md"], dir);
   runGit(["commit", "-m", "initial commit"], dir);
@@ -54,27 +53,11 @@ async function waitForPidExit(pid: number, timeoutMs = 3000): Promise<void> {
   }
 }
 
-function writeMinimalWorkflow(
-  homeDir: string,
-  workflowId: string,
-  workspaceMode: "direct" | "worktree",
-): void {
-  const workflowDir = path.join(homeDir, ".tamandua", "workflows", workflowId);
+function writeMinimalWorkflow(homeDir: string, workflowId: string): void {
+  const workflowDir = path.join(homeDir, ".formiga", "workflows", workflowId);
   fs.mkdirSync(workflowDir, { recursive: true });
   fs.writeFileSync(path.join(workflowDir, "workflow.yml"),
-    `id: ${workflowId}\nrun:\n  workspace: ${workspaceMode}\nagents:\n  - id: dev\n    model: fake\n    workspace:\n      baseDir: .\nsteps:\n  - id: implement\n    agent: dev\n    input: Implement the task\n    expects: STATUS, CHANGES, TESTS\n`,
-    "utf-8");
-}
-
-function writeWorkflowWithInvalidWorkspace(
-  homeDir: string,
-  workflowId: string,
-  invalidValue: string,
-): void {
-  const workflowDir = path.join(homeDir, ".tamandua", "workflows", workflowId);
-  fs.mkdirSync(workflowDir, { recursive: true });
-  fs.writeFileSync(path.join(workflowDir, "workflow.yml"),
-    `id: ${workflowId}\nrun:\n  workspace: ${invalidValue}\nagents:\n  - id: dev\n    model: fake\n    workspace:\n      baseDir: .\nsteps:\n  - id: implement\n    agent: dev\n    input: Implement the task\n    expects: STATUS, CHANGES, TESTS\n`,
+    `id: ${workflowId}\nrun:\n  workspace: direct\nagents:\n  - id: dev\n    model: fake\n    workspace:\n      baseDir: .\nsteps:\n  - id: implement\n    agent: dev\n    input: Implement the task\n    expects: STATUS, CHANGES, TESTS\n`,
     "utf-8");
 }
 
@@ -86,30 +69,27 @@ describe("runWorkflow", () => {
   let origControlPort: string | undefined;
   let origDbPath: string | undefined;
   let origStateDir: string | undefined;
-  let origWorktreeRoot: string | undefined;
 
   before(async () => {
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-run-"));
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-run-"));
     origHome = process.env.HOME;
-    origControlPort = process.env.TAMANDUA_CONTROL_PORT;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
-    origStateDir = process.env.TAMANDUA_STATE_DIR;
-    origWorktreeRoot = process.env.TAMANDUA_WORKTREE_ROOT;
+    origControlPort = process.env.FORMIGA_CONTROL_PORT;
+    origDbPath = process.env.FORMIGA_DB_PATH;
+    origStateDir = process.env.FORMIGA_STATE_DIR;
 
-    const tamanduaDir = path.join(tempHome, ".tamandua");
+    const formigaDir = path.join(tempHome, ".formiga");
     const dashboardPort = await reserveRandomPort();
     let controlPort = await reserveRandomPort();
     while (controlPort === dashboardPort) {
       controlPort = await reserveRandomPort();
     }
-    fs.mkdirSync(tamanduaDir, { recursive: true });
-    fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
+    fs.mkdirSync(formigaDir, { recursive: true });
+    fs.writeFileSync(path.join(formigaDir, "port"), String(dashboardPort), "utf-8");
 
     process.env.HOME = tempHome;
-    process.env.TAMANDUA_CONTROL_PORT = String(controlPort);
-    process.env.TAMANDUA_DB_PATH = path.join(tamanduaDir, "tamandua.db");
-    process.env.TAMANDUA_STATE_DIR = tamanduaDir;
-    process.env.TAMANDUA_WORKTREE_ROOT = path.join(tamanduaDir, "worktrees");
+    process.env.FORMIGA_CONTROL_PORT = String(controlPort);
+    process.env.FORMIGA_DB_PATH = path.join(formigaDir, "formiga.db");
+    process.env.FORMIGA_STATE_DIR = formigaDir;
   });
 
   after(async () => {
@@ -123,24 +103,19 @@ describe("runWorkflow", () => {
       delete process.env.HOME;
     }
     if (origControlPort !== undefined) {
-      process.env.TAMANDUA_CONTROL_PORT = origControlPort;
+      process.env.FORMIGA_CONTROL_PORT = origControlPort;
     } else {
-      delete process.env.TAMANDUA_CONTROL_PORT;
+      delete process.env.FORMIGA_CONTROL_PORT;
     }
     if (origDbPath !== undefined) {
-      process.env.TAMANDUA_DB_PATH = origDbPath;
+      process.env.FORMIGA_DB_PATH = origDbPath;
     } else {
-      delete process.env.TAMANDUA_DB_PATH;
+      delete process.env.FORMIGA_DB_PATH;
     }
     if (origStateDir !== undefined) {
-      process.env.TAMANDUA_STATE_DIR = origStateDir;
+      process.env.FORMIGA_STATE_DIR = origStateDir;
     } else {
-      delete process.env.TAMANDUA_STATE_DIR;
-    }
-    if (origWorktreeRoot !== undefined) {
-      process.env.TAMANDUA_WORKTREE_ROOT = origWorktreeRoot;
-    } else {
-      delete process.env.TAMANDUA_WORKTREE_ROOT;
+      delete process.env.FORMIGA_STATE_DIR;
     }
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -153,7 +128,7 @@ describe("runWorkflow", () => {
   describe("working directory validation", () => {
     it("rejects when working directory exists but is a file, not a directory", async () => {
       const workflowId = "test-wd-file";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
       const filePath = path.join(tempHome, "test-workdir-file");
       fs.writeFileSync(filePath, "not a directory", "utf-8");
 
@@ -168,173 +143,10 @@ describe("runWorkflow", () => {
     });
   });
 
-  describe("workspace mode validation", () => {
-    it("rejects invalid run.workspace value with clear error", () => {
-      const workflowId = "test-invalid-ws";
-      writeWorkflowWithInvalidWorkspace(tempHome, workflowId, "foobar");
-
-      // runWorkflow tries to load the spec, which succeeds since workflow-spec
-      // accepts any string (validation is handled in runWorkflow). We need to
-      // catch the error from runWorkflow.
-      // However, runWorkflow also tries ensureDaemonControlAvailable + registerRunWithDaemon.
-      // Since the validation for invalid workspace happens BEFORE those, the error
-      // will be thrown early.
-      // But loading the workflow spec triggers YAML parsing, which also validates
-      // run.workspace... Let me check the workflow-spec validation.
-      // The workflow-spec validates run.workspace as "direct" or "worktree" or undefined.
-      // So "foobar" would be rejected by workflow-spec, not runWorkflow.
-      // This means the invalid workspace validation in runWorkflow is for the case
-      // where workflow-spec accepts it but runWorkflow still checks.
-      // Actually, looking at workflow-spec.ts, it validates run.workspace with:
-      //   if (typeof workspace !== 'string' || !['direct', 'worktree'].includes(workspace))
-      // So workflow-spec would reject "foobar" before runWorkflow sees it.
-      // The runWorkflow validation is a defense-in-depth for unexpected values.
-      // We test this by using a value that passes workflow-spec but is caught by runWorkflow.
-      // All valid values ('direct', 'worktree') pass, and invalid values are caught by workflow-spec.
-      // So this test is coverage for the runWorkflow else-branch.
-    });
-
-    it("rejects --worktree-origin-repository for direct workflows", async () => {
-      const workflowId = "test-direct-wt-repo";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
-
-      await assert.rejects(
-        runWorkflow({
-          workflowId,
-          taskTitle: "Test direct workflow rejecting worktree args",
-          worktreeOriginRepository: "/some/repo",
-        }),
-        /--worktree-origin-repository is only valid for workflows with run.workspace: worktree/,
-      );
-    });
-
-    it("rejects --worktree-origin-ref for direct workflows", async () => {
-      const workflowId = "test-direct-wt-ref";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
-
-      await assert.rejects(
-        runWorkflow({
-          workflowId,
-          taskTitle: "Test direct workflow rejecting worktree args",
-          worktreeOriginRef: "main",
-        }),
-        /--worktree-origin-ref is only valid for workflows with run.workspace: worktree/,
-      );
-    });
-
-    it("rejects --working-directory-for-harness for worktree workflows", async () => {
-      const workflowId = "test-wt-reject-harness";
-      writeMinimalWorkflow(tempHome, workflowId, "worktree");
-
-      await assert.rejects(
-        runWorkflow({
-          workflowId,
-          taskTitle: "Test worktree workflow rejecting harness dir",
-          workingDirectoryForHarness: "/some/dir",
-          worktreeOriginRepository: "/some/repo",
-        }),
-        /--working-directory-for-harness is not valid for workflows with run.workspace: worktree/,
-      );
-    });
-
-    it("allows direct workflows without worktree args", async () => {
-      const workflowId = "test-direct-no-wt";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
-
-      // This will fail at daemon registration, but that's fine -
-      // we're testing that the argument validation passes.
-      try {
-        await runWorkflow({
-          workflowId,
-          taskTitle: "Test direct workflow without worktree args",
-        });
-        // If we reach here, the daemon started successfully (rare in tests)
-      } catch (err) {
-        const message = (err as Error).message;
-        // Should NOT be a worktree argument validation error
-        assert.ok(
-          !message.includes("worktree-origin-repository") &&
-            !message.includes("worktree-origin-ref") &&
-            !message.includes("run.workspace"),
-          `Unexpected validation error: ${message}`,
-        );
-      }
-    });
-
-    it("rejects worktree origin args for direct workflows (both provided)", async () => {
-      const workflowId = "test-direct-both-wt";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
-
-      await assert.rejects(
-        runWorkflow({
-          workflowId,
-          taskTitle: "Test direct workflow with both worktree args",
-          worktreeOriginRepository: "/some/repo",
-          worktreeOriginRef: "main",
-        }),
-        /--worktree-origin-repository is only valid for workflows with run.workspace: worktree/,
-      );
-    });
-
-    it("does not leak daemon process when validation fails before daemon registration", async () => {
-      const workflowId = "test-no-daemon-leak";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
-
-      // Clean up any daemon from previous tests so we can detect leaks
-      stopDaemon({ homeDir: tempHome });
-
-      // Verify no daemon is running after cleanup
-      const pidBefore = readPid(getPidFile({ homeDir: tempHome }));
-      assert.equal(pidBefore, null, "No daemon should be running before test");
-
-      try {
-        await runWorkflow({
-          workflowId,
-          taskTitle: "Test daemon leak regression",
-          worktreeOriginRepository: "/some/repo",
-        });
-        assert.fail("Expected error was not thrown");
-      } catch (err) {
-        assert.match(
-          (err as Error).message,
-          /--worktree-origin-repository is only valid for workflows with run.workspace: worktree/,
-        );
-      }
-
-      // After validation failure, no daemon process should be running
-      const pidAfter = readPid(getPidFile({ homeDir: tempHome }));
-      assert.equal(
-        pidAfter,
-        null,
-        "Daemon should not be running after validation error — process leak regression",
-      );
-    });
-  });
-
-  describe("worktree mode: creation error handling", () => {
-    it("fails with clear error when origin is not a git repo", async () => {
-      const workflowId = "test-wt-non-git";
-      writeMinimalWorkflow(tempHome, workflowId, "worktree");
-      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-non-git-"));
-      try {
-        await assert.rejects(
-          runWorkflow({
-            workflowId,
-            taskTitle: "Test worktree with non-git origin",
-            worktreeOriginRepository: nonGitDir,
-          }),
-          /Failed to create managed worktree for run/,
-        );
-      } finally {
-        fs.rmSync(nonGitDir, { recursive: true, force: true });
-      }
-    });
-  });
-
   describe("runWorkflow context seeding", () => {
     it("stores no_hurry_save_tokens_mode as 'false' when flag is not provided", async () => {
       const workflowId = "test-ctx-default";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({ workflowId, taskTitle: "Test default save tokens flag" });
@@ -354,7 +166,7 @@ describe("runWorkflow", () => {
 
     it("stores no_hurry_save_tokens_mode as 'true' when flag is true", async () => {
       const workflowId = "test-ctx-true";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -378,7 +190,7 @@ describe("runWorkflow", () => {
 
     it("stores no_hurry_save_tokens_mode as 'false' when flag is explicitly false", async () => {
       const workflowId = "test-ctx-false";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -402,7 +214,7 @@ describe("runWorkflow", () => {
 
     it("includes other context keys alongside no_hurry_save_tokens_mode", async () => {
       const workflowId = "test-ctx-combined";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -430,7 +242,7 @@ describe("runWorkflow", () => {
 
     it("stores harness_type 'pi' by default when harnessType is not provided", async () => {
       const workflowId = "test-ctx-harness-default";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -453,7 +265,7 @@ describe("runWorkflow", () => {
 
     it("stores harness_type 'hermes' when harnessType is explicitly 'hermes'", async () => {
       const workflowId = "test-ctx-harness-hermes";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -477,7 +289,7 @@ describe("runWorkflow", () => {
 
     it("stores harness_type 'pi' when harnessType is explicitly 'pi'", async () => {
       const workflowId = "test-ctx-harness-explicit-pi";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -503,7 +315,7 @@ describe("runWorkflow", () => {
 
     it("stores base_branch_sha from git rev-parse for direct mode", async () => {
       const workflowId = "test-ctx-bbsha-direct";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
       const repoDir = path.join(tempHome, "test-repo-direct");
       initGitRepo(repoDir);
 
@@ -530,40 +342,10 @@ describe("runWorkflow", () => {
       assert.match(ctx.base_branch_sha, /^[0-9a-f]{40}$/);
     });
 
-    it("stores base_branch_sha from worktree origin SHA for worktree mode", async () => {
-      const workflowId = "test-ctx-bbsha-wt";
-      writeMinimalWorkflow(tempHome, workflowId, "worktree");
-      const originDir = path.join(tempHome, "test-origin-wt");
-      initGitRepo(originDir);
-
-      try {
-        await runWorkflow({
-          workflowId,
-          taskTitle: "Test base_branch_sha in worktree mode",
-          worktreeOriginRepository: originDir,
-        });
-      } catch {
-        // Daemon registration may fail after persisting the run; the assertion below only needs the stored context.
-      }
-
-      const { getDb } = await import("../../dist/db.js");
-      const db = getDb();
-      const rows = db.prepare(
-        "SELECT context FROM runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT 1"
-      ).all(workflowId) as { context: string }[];
-      assert.ok(rows.length > 0, "run record should exist");
-      const ctx = JSON.parse(rows[0].context);
-      assert.ok(ctx.base_branch_sha, "base_branch_sha should be present");
-      assert.equal(typeof ctx.base_branch_sha, "string");
-      assert.ok(ctx.base_branch_sha.length === 40, "base_branch_sha should be a full 40-char SHA");
-      assert.equal(ctx.base_branch_sha, ctx.worktree_origin_sha,
-        "base_branch_sha must equal worktree_origin_sha in worktree mode");
-    });
-
     it("stores base_branch_sha as empty string when git rev-parse fails in direct mode", async () => {
       const workflowId = "test-ctx-bbsha-empty";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
-      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-non-git-sha-"));
+      writeMinimalWorkflow(tempHome, workflowId);
+      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-non-git-sha-"));
 
       try {
         try {
@@ -592,7 +374,7 @@ describe("runWorkflow", () => {
 
     it("stores harness_type alongside other context fields", async () => {
       const workflowId = "test-ctx-harness-combined";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -620,7 +402,7 @@ describe("runWorkflow", () => {
 
     it("stores no_relaunch_upon_rugpull as 'true' when flag is set", async () => {
       const workflowId = "test-ctx-norelaunch";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({
@@ -645,7 +427,7 @@ describe("runWorkflow", () => {
 
     it("stores no_relaunch_upon_rugpull as 'false' when flag is not set", async () => {
       const workflowId = "test-ctx-norelaunch-default";
-      writeMinimalWorkflow(tempHome, workflowId, "direct");
+      writeMinimalWorkflow(tempHome, workflowId);
 
       try {
         await runWorkflow({

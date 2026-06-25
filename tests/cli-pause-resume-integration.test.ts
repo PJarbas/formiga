@@ -10,7 +10,7 @@
  * 6. Non-paused run resume is rejected
  * 7. Step state is preserved across pause/resume
  *
- * Uses temp HOME/TAMANDUA_STATE_DIR for isolation.
+ * Uses temp HOME/FORMIGA_STATE_DIR for isolation.
  */
 
 import { describe, it } from "node:test";
@@ -98,7 +98,7 @@ async function waitForControlUp(port: number, timeoutMs = 5000): Promise<void> {
 }
 
 function readDaemonSecret(homeDir: string): string {
-  const secretPath = path.join(homeDir, ".tamandua", "daemon-secret");
+  const secretPath = path.join(homeDir, ".formiga", "daemon-secret");
   return fs.readFileSync(secretPath, "utf-8").trim();
 }
 
@@ -110,7 +110,7 @@ async function controlFetch(
   secret?: string,
 ): Promise<{ status: number; body: unknown }> {
   const headers: Record<string, string> = {};
-  if (secret) headers["x-tamandua-secret"] = secret;
+  if (secret) headers["x-formiga-secret"] = secret;
   if (body) headers["content-type"] = "application/json";
   const res = await fetch(`http://127.0.0.1:${controlPort}${path}`, {
     method,
@@ -248,30 +248,28 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const dashboardPort = await getAvailablePort();
     const controlPort = await getAvailablePort();
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-integration-test-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-integration-test-"));
     const homeDir = path.join(root, "home");
-    const tamanduaDir = path.join(homeDir, ".tamandua");
-    fs.mkdirSync(tamanduaDir, { recursive: true });
+    const formigaDir = path.join(homeDir, ".formiga");
+    fs.mkdirSync(formigaDir, { recursive: true });
 
     // Copy workflow directory so daemon can load the workflow spec
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+    const dstWorkflowDir = path.join(formigaDir, "workflows", "do-review-do-verify");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
-    const dbPath = path.join(tamanduaDir, "tamandua.db");
+    const dbPath = path.join(formigaDir, "formiga.db");
 
     const runId = crypto.randomUUID();
-    // Create a run with all 6 agent steps from the feature-dev-merge workflow
+    // Create a run with all 4 steps from the do-review-do-verify workflow
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
-      { stepId: "setup", agentId: "feature-dev-merge_setup" },
-      { stepId: "implement", agentId: "feature-dev-merge_developer" },
-      { stepId: "verify", agentId: "feature-dev-merge_verifier" },
-      { stepId: "test", agentId: "feature-dev-merge_tester" },
-      { stepId: "finalize_merge", agentId: "feature-dev-merge_merger" },
+      { stepId: "do", agentId: "do-review-do-verify_doer" },
+      { stepId: "review", agentId: "do-review-do-verify_reviewer" },
+      { stepId: "do-again", agentId: "do-review-do-verify_doer" },
+      { stepId: "verify", agentId: "do-review-do-verify_verifier" },
     ];
-    seedRunAndSteps(dbPath, runId, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -279,7 +277,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Start daemon
       daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
         env: cleanChildEnv({ HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort), }),
+          FORMIGA_CONTROL_PORT: String(controlPort), }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       daemon.stdout?.resume();
@@ -301,7 +299,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Pause the run via CLI
       const pauseResult = await runCli(
         ["workflow", "pause", runId],
-        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+        { HOME: homeDir, FORMIGA_CONTROL_PORT: String(controlPort) },
       );
 
       assert.equal(
@@ -319,7 +317,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // AC 1: Verify status shows paused
       const statusAfterPause = await runCli(
         ["workflow", "status", runId.slice(0, 8)],
-        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+        { HOME: homeDir, FORMIGA_CONTROL_PORT: String(controlPort) },
       );
       assert.ok(
         /Status:\s+paused/i.test(statusAfterPause.stdout),
@@ -329,7 +327,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Resume the run via CLI
       const resumeResult = await runCli(
         ["workflow", "resume", runId],
-        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+        { HOME: homeDir, FORMIGA_CONTROL_PORT: String(controlPort) },
       );
 
       assert.equal(
@@ -347,7 +345,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // AC 2: Verify status shows running after resume
       const statusAfterResume = await runCli(
         ["workflow", "status", runId.slice(0, 8)],
-        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+        { HOME: homeDir, FORMIGA_CONTROL_PORT: String(controlPort) },
       );
       assert.ok(
         /Status:\s+running/i.test(statusAfterResume.stdout),
@@ -356,6 +354,11 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -368,18 +371,18 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       return;
     }
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-integration-test-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-integration-test-"));
     const homeDir = path.join(root, "home");
-    const tamanduaDir = path.join(homeDir, ".tamandua");
-    fs.mkdirSync(tamanduaDir, { recursive: true });
+    const formigaDir = path.join(homeDir, ".formiga");
+    fs.mkdirSync(formigaDir, { recursive: true });
 
-    const dbPath = path.join(tamanduaDir, "tamandua.db");
+    const dbPath = path.join(formigaDir, "formiga.db");
     const completedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, completedRunId, "feature-dev-merge", "completed", null, steps);
+    seedRunAndSteps(dbPath, completedRunId, "do-review-do-verify", "completed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -407,18 +410,18 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       return;
     }
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-integration-test-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-integration-test-"));
     const homeDir = path.join(root, "home");
-    const tamanduaDir = path.join(homeDir, ".tamandua");
-    fs.mkdirSync(tamanduaDir, { recursive: true });
+    const formigaDir = path.join(homeDir, ".formiga");
+    fs.mkdirSync(formigaDir, { recursive: true });
 
-    const dbPath = path.join(tamanduaDir, "tamandua.db");
+    const dbPath = path.join(formigaDir, "formiga.db");
     const failedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, failedRunId, "feature-dev-merge", "failed", null, steps);
+    seedRunAndSteps(dbPath, failedRunId, "do-review-do-verify", "failed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -447,18 +450,18 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       return;
     }
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-integration-test-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-integration-test-"));
     const homeDir = path.join(root, "home");
-    const tamanduaDir = path.join(homeDir, ".tamandua");
-    fs.mkdirSync(tamanduaDir, { recursive: true });
+    const formigaDir = path.join(homeDir, ".formiga");
+    fs.mkdirSync(formigaDir, { recursive: true });
 
-    const dbPath = path.join(tamanduaDir, "tamandua.db");
+    const dbPath = path.join(formigaDir, "formiga.db");
     const runningRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, runningRunId, "feature-dev-merge", "running", null, steps);
+    seedRunAndSteps(dbPath, runningRunId, "do-review-do-verify", "running", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -482,18 +485,18 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       return;
     }
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-integration-test-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-integration-test-"));
     const homeDir = path.join(root, "home");
-    const tamanduaDir = path.join(homeDir, ".tamandua");
-    fs.mkdirSync(tamanduaDir, { recursive: true });
+    const formigaDir = path.join(homeDir, ".formiga");
+    fs.mkdirSync(formigaDir, { recursive: true });
 
-    const dbPath = path.join(tamanduaDir, "tamandua.db");
+    const dbPath = path.join(formigaDir, "formiga.db");
     const completedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, completedRunId, "feature-dev-merge", "completed", null, steps);
+    seedRunAndSteps(dbPath, completedRunId, "do-review-do-verify", "completed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -525,26 +528,26 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const dashboardPort = await getAvailablePort();
     const controlPort = await getAvailablePort();
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-integration-test-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-integration-test-"));
     const homeDir = path.join(root, "home");
-    const tamanduaDir = path.join(homeDir, ".tamandua");
-    fs.mkdirSync(tamanduaDir, { recursive: true });
+    const formigaDir = path.join(homeDir, ".formiga");
+    fs.mkdirSync(formigaDir, { recursive: true });
 
     // Copy workflow directory
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+    const dstWorkflowDir = path.join(formigaDir, "workflows", "do-review-do-verify");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
-    const dbPath = path.join(tamanduaDir, "tamandua.db");
+    const dbPath = path.join(formigaDir, "formiga.db");
 
     const runId = crypto.randomUUID();
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
-      { stepId: "setup", agentId: "feature-dev-merge_setup" },
-      { stepId: "implement", agentId: "feature-dev-merge_developer" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "setup", agentId: "do-review-do-verify_setup" },
+      { stepId: "implement", agentId: "do-review-do-verify_doer" },
     ];
-    seedRunAndSteps(dbPath, runId, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -552,7 +555,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Start daemon
       daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
         env: cleanChildEnv({ HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort), }),
+          FORMIGA_CONTROL_PORT: String(controlPort), }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       daemon.stdout?.resume();
@@ -575,7 +578,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Pause
       const pauseResult = await runCli(
         ["workflow", "pause", runId],
-        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+        { HOME: homeDir, FORMIGA_CONTROL_PORT: String(controlPort) },
       );
       assert.equal(pauseResult.exitCode, 0, `Pause should succeed, got exit ${pauseResult.exitCode}`);
 
@@ -595,7 +598,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Resume
       const resumeResult = await runCli(
         ["workflow", "resume", runId],
-        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+        { HOME: homeDir, FORMIGA_CONTROL_PORT: String(controlPort) },
       );
       assert.equal(resumeResult.exitCode, 0, `Resume should succeed, got exit ${resumeResult.exitCode}`);
 
@@ -612,6 +615,11 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -628,26 +636,26 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const dashboardPort = await getAvailablePort();
     const controlPort = await getAvailablePort();
 
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-integration-orphan-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-integration-orphan-"));
     const homeDir = path.join(root, "home");
-    const tamanduaDir = path.join(homeDir, ".tamandua");
-    fs.mkdirSync(tamanduaDir, { recursive: true });
+    const formigaDir = path.join(homeDir, ".formiga");
+    fs.mkdirSync(formigaDir, { recursive: true });
 
     // Copy workflow directory so daemon can load the workflow spec
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "feature-dev-merge");
-    const dstWorkflowDir = path.join(tamanduaDir, "workflows", "feature-dev-merge");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
+    const dstWorkflowDir = path.join(formigaDir, "workflows", "do-review-do-verify");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
-    const dbPath = path.join(tamanduaDir, "tamandua.db");
+    const dbPath = path.join(formigaDir, "formiga.db");
 
     const runId = crypto.randomUUID();
     // Seed a run with one step set to status='running' to simulate
     // an in-flight agent that was killed by pause-without-drain.
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "feature-dev-merge_planner" },
+      { stepId: "plan", agentId: "do-review-do-verify_planner" },
     ];
-    seedRunAndSteps(dbPath, runId, "feature-dev-merge", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
 
     // Override the first step's status to 'running' (simulating orphaned in-flight step)
     {
@@ -663,7 +671,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Start daemon
       daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
         env: cleanChildEnv({ HOME: homeDir,
-          TAMANDUA_CONTROL_PORT: String(controlPort), }),
+          FORMIGA_CONTROL_PORT: String(controlPort), }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       daemon.stdout?.resume();
@@ -687,7 +695,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Pause the run via CLI
       const pauseResult = await runCli(
         ["workflow", "pause", runId],
-        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+        { HOME: homeDir, FORMIGA_CONTROL_PORT: String(controlPort) },
       );
       assert.equal(
         pauseResult.exitCode, 0,
@@ -701,7 +709,7 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
       // Resume the run via CLI
       const resumeResult = await runCli(
         ["workflow", "resume", runId],
-        { HOME: homeDir, TAMANDUA_CONTROL_PORT: String(controlPort) },
+        { HOME: homeDir, FORMIGA_CONTROL_PORT: String(controlPort) },
       );
       assert.equal(
         resumeResult.exitCode, 0,
@@ -733,6 +741,11 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     } finally {
       if (daemon && daemon.exitCode === null && daemon.pid) {
         try { process.kill(daemon.pid, "SIGTERM"); } catch { /* ignore */ }
+        await new Promise<void>((resolve) => {
+          if (daemon!.exitCode !== null) { resolve(); return; }
+          daemon!.once("exit", () => resolve());
+          setTimeout(() => resolve(), 2000).unref?.();
+        });
       }
       fs.rmSync(root, { recursive: true, force: true });
     }

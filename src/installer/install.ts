@@ -3,11 +3,17 @@ import path from "node:path";
 import { fetchWorkflow } from "./workflow-fetch.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
 import { provisionAgents } from "./agent-provision.js";
-import { readPiConfig, type PiConfig } from "./pi-config.js";
 import { resolvePiStateDir } from "./paths.js";
 import type { AgentRole, WorkflowInstallResult } from "./types.js";
 
-// ── Agent list management (Tamandua stores agents at ~/.tamandua/agents.json) ──
+// pi-config was removed as orphan code. Inline placeholder until install.ts
+// is refactored in Branch 3 (god-object decomposition).
+type PiConfig = Record<string, unknown>;
+async function readPiConfig(): Promise<PiConfig> {
+  return {};
+}
+
+// ── Agent list management (Formiga stores agents at ~/.formiga/agents.json) ──
 
 function resolveAgentsPath(): string {
   return path.join(resolvePiStateDir(), "agents.json");
@@ -184,7 +190,7 @@ function upsertAgent(
   },
 ): void {
   const existing = list.find((entry) => entry.id === agent.id);
-  // Never overwrite the user's default (main) agent — it was configured outside tamandua.
+  // Never overwrite the user's default (main) agent — it was configured outside formiga.
   if (existing?.default === true) return;
   const payload: Record<string, unknown> = {
     id: agent.id,
@@ -242,7 +248,7 @@ export async function installWorkflow(params: {
   // Read pi config for reference (we don't modify pi's config, just read it)
   await readPiConfig();
 
-  // Load and update the tamandua agents list
+  // Load and update the formiga agents list
   const list = await readAgentsList();
   ensureMainAgentInList(list);
 
@@ -256,7 +262,7 @@ export async function installWorkflow(params: {
     }
   }
 
-  // Upsert each provisioned agent into the tamandua agents list
+  // Upsert each provisioned agent into the formiga agents list
   for (const agent of provisioned) {
     // Extract the local agent id (strip the workflow prefix + separator)
     const prefix = workflow.id + "_";

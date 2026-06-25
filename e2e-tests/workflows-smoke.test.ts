@@ -2,9 +2,9 @@
  * Smoke / State-Machine Integration Test
  *
  * This is a FAST test that manually advances workflow steps using
- * `tamandua step claim` / `tamandua step complete` with canned outputs.
+ * `formiga step claim` / `formiga step complete` with canned outputs.
  * It exercises the workflow state machine, pipeline wiring, and step
- * lifecycle — but it does NOT invoke real Tamandua agents, models, or
+ * lifecycle — but it does NOT invoke real Formiga agents, models, or
  * schedulers. It is NOT a real end-to-end workflow test.
  *
  * For the slow real end-to-end test that runs actual agent invocations,
@@ -68,40 +68,40 @@ describe("createTempHome pi auth symlink (regression: auth isolation mismatch)",
     }
   });
 
-  it("baseEnv preserves provider environment variables while keeping Tamandua state isolated", async () => {
-    const previousToken = process.env.TAMANDUA_E2E_TEST_PROVIDER_TOKEN;
+  it("baseEnv preserves provider environment variables while keeping Formiga state isolated", async () => {
+    const previousToken = process.env.FORMIGA_E2E_TEST_PROVIDER_TOKEN;
     const previousNodeTestContext = process.env.NODE_TEST_CONTEXT;
-    const previousStateDir = process.env.TAMANDUA_STATE_DIR;
-    const previousDbPath = process.env.TAMANDUA_DB_PATH;
-    const previousWorktreeRoot = process.env.TAMANDUA_WORKTREE_ROOT;
+    const previousStateDir = process.env.FORMIGA_STATE_DIR;
+    const previousDbPath = process.env.FORMIGA_DB_PATH;
+    const previousWorktreeRoot = process.env.FORMIGA_WORKTREE_ROOT;
 
-    process.env.TAMANDUA_E2E_TEST_PROVIDER_TOKEN = "present";
+    process.env.FORMIGA_E2E_TEST_PROVIDER_TOKEN = "present";
     process.env.NODE_TEST_CONTEXT = "node-test-internal-context";
-    process.env.TAMANDUA_STATE_DIR = "/tmp/should-not-leak-tamandua-state";
-    process.env.TAMANDUA_DB_PATH = "/tmp/should-not-leak-tamandua.db";
-    process.env.TAMANDUA_WORKTREE_ROOT = "/tmp/should-not-leak-worktrees";
+    process.env.FORMIGA_STATE_DIR = "/tmp/should-not-leak-formiga-state";
+    process.env.FORMIGA_DB_PATH = "/tmp/should-not-leak-formiga.db";
+    process.env.FORMIGA_WORKTREE_ROOT = "/tmp/should-not-leak-worktrees";
 
     const env = await createTempHome();
     try {
       const childEnv = baseEnv(env.homeDir, env.controlPort);
-      assert.equal(childEnv.TAMANDUA_E2E_TEST_PROVIDER_TOKEN, "present");
+      assert.equal(childEnv.FORMIGA_E2E_TEST_PROVIDER_TOKEN, "present");
       assert.equal(childEnv.NODE_TEST_CONTEXT, undefined);
       assert.equal(childEnv.HOME, env.homeDir);
-      assert.equal(childEnv.TAMANDUA_CONTROL_PORT, String(env.controlPort));
-      assert.equal(childEnv.TAMANDUA_STATE_DIR, env.tamanduaDir);
+      assert.equal(childEnv.FORMIGA_CONTROL_PORT, String(env.controlPort));
+      assert.equal(childEnv.FORMIGA_STATE_DIR, env.formigaDir);
       assert.equal(
-        childEnv.TAMANDUA_DB_PATH,
-        path.join(env.tamanduaDir, "tamandua.db"),
+        childEnv.FORMIGA_DB_PATH,
+        path.join(env.formigaDir, "formiga.db"),
       );
       assert.equal(
-        childEnv.TAMANDUA_WORKTREE_ROOT,
-        path.join(env.tamanduaDir, "worktrees"),
+        childEnv.FORMIGA_WORKTREE_ROOT,
+        path.join(env.formigaDir, "worktrees"),
       );
     } finally {
       if (previousToken === undefined) {
-        delete process.env.TAMANDUA_E2E_TEST_PROVIDER_TOKEN;
+        delete process.env.FORMIGA_E2E_TEST_PROVIDER_TOKEN;
       } else {
-        process.env.TAMANDUA_E2E_TEST_PROVIDER_TOKEN = previousToken;
+        process.env.FORMIGA_E2E_TEST_PROVIDER_TOKEN = previousToken;
       }
       if (previousNodeTestContext === undefined) {
         delete process.env.NODE_TEST_CONTEXT;
@@ -109,19 +109,19 @@ describe("createTempHome pi auth symlink (regression: auth isolation mismatch)",
         process.env.NODE_TEST_CONTEXT = previousNodeTestContext;
       }
       if (previousStateDir === undefined) {
-        delete process.env.TAMANDUA_STATE_DIR;
+        delete process.env.FORMIGA_STATE_DIR;
       } else {
-        process.env.TAMANDUA_STATE_DIR = previousStateDir;
+        process.env.FORMIGA_STATE_DIR = previousStateDir;
       }
       if (previousDbPath === undefined) {
-        delete process.env.TAMANDUA_DB_PATH;
+        delete process.env.FORMIGA_DB_PATH;
       } else {
-        process.env.TAMANDUA_DB_PATH = previousDbPath;
+        process.env.FORMIGA_DB_PATH = previousDbPath;
       }
       if (previousWorktreeRoot === undefined) {
-        delete process.env.TAMANDUA_WORKTREE_ROOT;
+        delete process.env.FORMIGA_WORKTREE_ROOT;
       } else {
-        process.env.TAMANDUA_WORKTREE_ROOT = previousWorktreeRoot;
+        process.env.FORMIGA_WORKTREE_ROOT = previousWorktreeRoot;
       }
       cleanupTempHome(env);
     }
@@ -160,7 +160,7 @@ describe("workflows smoke (state-machine integration)", { concurrency: 1 }, () =
           ],
           be(),
         );
-        const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
+        const runId = resolveFullRunId(runIdPrefix, env.formigaDir);
 
         // ---- Advance pipeline ----
 
@@ -318,7 +318,7 @@ describe("workflows smoke (state-machine integration)", { concurrency: 1 }, () =
           ],
           be(),
         );
-        const runId = resolveFullRunId(runIdPrefix, env.tamanduaDir);
+        const runId = resolveFullRunId(runIdPrefix, env.formigaDir);
 
         // ---- Advance pipeline ----
 

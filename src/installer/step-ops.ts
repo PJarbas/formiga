@@ -4,15 +4,29 @@ import path from "node:path";
 import os from "node:os";
 import { execSync, execFileSync } from "node:child_process";
 import { getDb } from "../db.js";
-import { resolveWorkflowDir, resolveTamanduaCli } from "./paths.js";
+import { resolveWorkflowDir, resolveFormigaCli } from "./paths.js";
 import { teardownWorkflowCronsIfIdle } from "./agent-scheduler.js";
 import { emitEvent } from "./events.js";
 import { logger } from "../lib/logger.js";
 import { getMaxRoleTimeoutSeconds } from "./install.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
-import { isFrontendChange } from "../lib/frontend-detect.js";
 import type { LoopConfig, Story, WorkflowStepFailure } from "./types.js";
-import { detectRugpull, relaunchRunAfterRugpull } from "./rugpull.js";
+
+// frontend-detect was removed as orphan code. Inline stub preserves the
+// computeHasFrontendChanges call site until step-ops is refactored in Branch 3.
+function isFrontendChange(files: string[]): boolean {
+  const FRONTEND_PATTERNS = [/\.tsx?$/, /\.jsx?$/, /\.css$/, /\.scss$/, /\.html$/, /\.vue$/, /\.svelte$/];
+  return files.some((f) => FRONTEND_PATTERNS.some((pat) => pat.test(f)));
+}
+// rugpull detection/relaunch was removed as orphan code (was Pi/Hermes-
+// specific base-branch race recovery). Stubs preserve the call sites until
+// step-ops is refactored in Branch 3.
+function detectRugpull(_runId: string): { isRugpull: boolean; reason?: string } {
+  return { isRugpull: false };
+}
+async function relaunchRunAfterRugpull(_runId: string): Promise<{ relaunched: boolean }> {
+  return { relaunched: false };
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // Key-Value Parsing
@@ -192,12 +206,12 @@ function emitRunTerminalEvent(params: {
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Get the workspace path for a Tamandua agent by its id.
- * Reads from ~/.tamandua/agents.json (a JSON array of agent configs with workspace paths).
+ * Get the workspace path for a Formiga agent by its id.
+ * Reads from ~/.formiga/agents.json (a JSON array of agent configs with workspace paths).
  */
 export function getAgentWorkspacePath(agentId: string): string | null {
   try {
-    const configPath = path.join(os.homedir(), ".tamandua", "agents.json");
+    const configPath = path.join(os.homedir(), ".formiga", "agents.json");
     const raw = fs.readFileSync(configPath, "utf-8");
     const config = JSON.parse(raw);
     const agents: Array<{ id: string; workspace?: string }> = Array.isArray(config) ? config : [];

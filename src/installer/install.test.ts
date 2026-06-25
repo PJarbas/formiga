@@ -56,7 +56,7 @@ describe("install exports", () => {
     });
 
     it("returns 'analysis' for prioritizer agent", () => {
-      assert.equal(inferRole("feature-dev-merge_prioritizer"), "analysis");
+      assert.equal(inferRole("merge_prioritizer"), "analysis");
     });
 
     it("returns 'analysis' for reviewer agent", () => {
@@ -68,7 +68,7 @@ describe("install exports", () => {
     });
 
     it("returns 'analysis' for triager agent", () => {
-      assert.equal(inferRole("bug-fix_triager"), "analysis");
+      assert.equal(inferRole("triager"), "analysis");
     });
 
     it("returns 'verification' for verifier agent", () => {
@@ -122,10 +122,10 @@ describe("installWorkflow", () => {
 
   beforeEach(() => {
     originalHome = process.env.HOME;
-    originalStateDir = process.env.TAMANDUA_STATE_DIR;
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-install-"));
+    originalStateDir = process.env.FORMIGA_STATE_DIR;
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-install-"));
     process.env.HOME = tempHome;
-    delete process.env.TAMANDUA_STATE_DIR;
+    delete process.env.FORMIGA_STATE_DIR;
 
     // Create minimal pi config so readPiConfig doesn't fail on ENOENT
     const piAgentDir = path.join(tempHome, ".pi", "agent");
@@ -140,16 +140,16 @@ describe("installWorkflow", () => {
   afterEach(() => {
     if (originalHome) process.env.HOME = originalHome;
     else delete process.env.HOME;
-    if (originalStateDir) process.env.TAMANDUA_STATE_DIR = originalStateDir;
-    else delete process.env.TAMANDUA_STATE_DIR;
+    if (originalStateDir) process.env.FORMIGA_STATE_DIR = originalStateDir;
+    else delete process.env.FORMIGA_STATE_DIR;
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it("installs bug-fix workflow successfully", async () => {
-    const result = await installWorkflow({ workflowId: "bug-fix" });
+  it("installs do-now workflow successfully", async () => {
+    const result = await installWorkflow({ workflowId: "do-now" });
 
-    assert.equal(result.workflowId, "bug-fix");
-    assert.ok(result.workflowDir.includes("bug-fix"), "workflowDir should contain bug-fix");
+    assert.equal(result.workflowId, "do-now");
+    assert.ok(result.workflowDir.includes("do-now"), "workflowDir should contain do-now");
 
     // Verify workflow directory exists
     assert.ok(fs.existsSync(result.workflowDir), "workflow dir should exist");
@@ -162,11 +162,11 @@ describe("installWorkflow", () => {
     const metadataPath = path.join(result.workflowDir, "metadata.json");
     assert.ok(fs.existsSync(metadataPath), "metadata.json should exist");
     const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8"));
-    assert.equal(metadata.workflowId, "bug-fix");
+    assert.equal(metadata.workflowId, "do-now");
     assert.ok(metadata.installedAt, "should have installedAt timestamp");
 
     // Verify agents.json was created with the workflow agents
-    const agentsPath = path.join(tempHome, ".tamandua", "agents.json");
+    const agentsPath = path.join(tempHome, ".formiga", "agents.json");
     assert.ok(fs.existsSync(agentsPath), "agents.json should exist");
     const agentsList = JSON.parse(fs.readFileSync(agentsPath, "utf-8"));
     assert.ok(Array.isArray(agentsList), "agents list should be an array");
@@ -181,7 +181,7 @@ describe("installWorkflow", () => {
 
     // Workflow agents should have workspace and agentDir
     const wfAgents = agentsList.filter((a: Record<string, unknown>) =>
-      typeof a.id === "string" && a.id.startsWith("bug-fix_")
+      typeof a.id === "string" && a.id.startsWith("do-now_")
     );
     assert.ok(wfAgents.length > 0, "should have workflow agents");
     for (const agent of wfAgents) {
@@ -191,24 +191,24 @@ describe("installWorkflow", () => {
     }
   });
 
-  it("installs feature-dev workflow successfully", async () => {
-    const result = await installWorkflow({ workflowId: "feature-dev" });
-    assert.equal(result.workflowId, "feature-dev");
+  it("installs do-review-do-verify workflow successfully", async () => {
+    const result = await installWorkflow({ workflowId: "do-review-do-verify" });
+    assert.equal(result.workflowId, "do-review-do-verify");
 
-    const agentsPath = path.join(tempHome, ".tamandua", "agents.json");
+    const agentsPath = path.join(tempHome, ".formiga", "agents.json");
     const agentsList = JSON.parse(fs.readFileSync(agentsPath, "utf-8"));
 
     const wfAgents = agentsList.filter((a: Record<string, unknown>) =>
-      typeof a.id === "string" && a.id.startsWith("feature-dev_")
+      typeof a.id === "string" && a.id.startsWith("do-review-do-verify_")
     );
-    assert.ok(wfAgents.length > 0, "feature-dev should have agents");
+    assert.ok(wfAgents.length > 0, "do-review-do-verify should have agents");
   });
 
   it("idempotent: reinstalling same workflow does not crash", async () => {
-    const result1 = await installWorkflow({ workflowId: "bug-fix" });
+    await installWorkflow({ workflowId: "do-now" });
     // Second install of the same workflow should work (overwrite)
-    const result2 = await installWorkflow({ workflowId: "bug-fix" });
-    assert.equal(result2.workflowId, "bug-fix");
+    const result2 = await installWorkflow({ workflowId: "do-now" });
+    assert.equal(result2.workflowId, "do-now");
 
     // The workflow directory should still exist and have metadata
     const metadataPath = path.join(result2.workflowDir, "metadata.json");

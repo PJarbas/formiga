@@ -1,16 +1,16 @@
 /**
- * Status formatting for the `tamandua status` command.
+ * Status formatting for the `formiga status` command.
  *
- * Formats dashboard, MCP, control-plane, and tamandua installation info
+ * Formats dashboard, MCP, control-plane, and formiga installation info
  * into human-readable string sections.
  *
  * Accepts optional dependency injection for unit testing.
  */
 import { execSync } from "node:child_process";
-import { getDaemonStatus, getMcpStatus, getControlPlaneStatus, isRunning } from "../server/daemonctl.js";
+import { getDaemonStatus, getControlPlaneStatus, isRunning } from "../server/daemonctl.js";
 
 /**
- * Platform-aware process-listing helper for `tamandua status`.
+ * Platform-aware process-listing helper for `formiga status`.
  *
  * Branches on process.platform:
  * - darwin (macOS/BSD): uses `ps -ax -o pid,etime,command`, strips the column header.
@@ -42,16 +42,13 @@ export function listProcessesForStatus(
   return exSync("ps -eo pid,etime,args --no-headers", options).toString();
 }
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
-import { readVersionStatus, type VersionStatus } from "../lib/version-check.js";
 import { listRuns as defaultListRuns, type RunInfo } from "../installer/status.js";
 
 export function formatServiceStatus(opts?: {
   getDaemonStatus?: typeof getDaemonStatus;
-  getMcpStatus?: typeof getMcpStatus;
   getControlPlaneStatus?: typeof getControlPlaneStatus;
 }): string {
   const dashboard = (opts?.getDaemonStatus ?? getDaemonStatus)();
-  const mcp = (opts?.getMcpStatus ?? getMcpStatus)();
   const controlPlane = (opts?.getControlPlaneStatus ?? getControlPlaneStatus)();
 
   const lines: string[] = [];
@@ -65,13 +62,6 @@ export function formatServiceStatus(opts?: {
     lines.push(`Dashboard:      DOWN (port ${dashboard.port})`);
   }
 
-  // MCP
-  if (mcp.running) {
-    lines.push(`MCP:            UP   (pid ${mcp.pid}, port ${mcp.port}, http://localhost:${mcp.port}${mcp.endpoint})`);
-  } else {
-    lines.push(`MCP:            DOWN (port ${mcp.port}, endpoint ${mcp.endpoint})`);
-  }
-
   // Control-plane
   if (controlPlane.running) {
     lines.push(`Control-plane:  UP   (pid ${controlPlane.pid}, port ${controlPlane.port}, http://localhost:${controlPlane.port}${controlPlane.endpoint})`);
@@ -82,18 +72,16 @@ export function formatServiceStatus(opts?: {
   return lines.join("\n");
 }
 
-export function formatTamanduaInfo(opts?: {
+export function formatFormigaInfo(opts?: {
   getVersion?: () => string;
   resolveSourcePath?: () => string;
   resolveSkillPath?: () => string;
-  getReadVersionStatus?: () => VersionStatus;
   execSync?: (cmd: string) => string;
 }): string {
   const version = (opts?.getVersion ?? (() => "unknown"))();
   const exSync = opts?.execSync ?? execSync;
   const srcPath = (opts?.resolveSourcePath ?? resolveSourcePath)();
   const skillPath = (opts?.resolveSkillPath ?? resolveSkillPath)();
-  const versionStatus = (opts?.getReadVersionStatus ?? readVersionStatus)();
 
   // Compute source tree SHA256
   let treeSha = "unavailable";
@@ -109,14 +97,11 @@ export function formatTamanduaInfo(opts?: {
   }
 
   const lines: string[] = [];
-  lines.push("Tamandua Info");
+  lines.push("Formiga Info");
   lines.push("-------------");
   lines.push(`Source-path:    ${srcPath}`);
   lines.push(`Skill-path:     ${skillPath}`);
   lines.push(`Version:        ${version}`);
-  if (versionStatus.updateAvailable) {
-    lines.push(`Update:         available (run 'tamandua update')`);
-  }
   lines.push(`Source tree:    ${treeSha}`);
 
   return lines.join("\n");
@@ -214,10 +199,10 @@ export function formatProcessList(opts?: {
     }> = [];
 
     for (const line of processLines) {
-      // Match on tamandua-related patterns
+      // Match on formiga-related patterns
       const lowers = line.toLowerCase();
       if (
-        !lowers.includes("tamandua") &&
+        !lowers.includes("formiga") &&
         !lowers.includes("pi ") &&
         !lowers.includes("hermes")
       ) {
@@ -234,10 +219,10 @@ export function formatProcessList(opts?: {
         harness = "pi";
       } else if (command.includes("hermes")) {
         harness = "hermes";
-      } else if (command.includes("tamandua step")) {
+      } else if (command.includes("formiga step")) {
         harness = "pi";
-      } else if (command.includes("tamandua")) {
-        harness = "tamandua";
+      } else if (command.includes("formiga")) {
+        harness = "formiga";
       }
 
       // Build a short summary of the command

@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 
-import type { TamanduaEvent } from "../../dist/installer/events.js";
+import type { FormigaEvent } from "../../dist/installer/events.js";
 import {
   buildKanbanSnapshot,
   buildKanbanCardDetail,
@@ -280,7 +280,7 @@ function makeEvent(
   ts: string,
   event: string,
   opts: { runId?: string; stepId?: string; storyId?: string; detail?: string; tokenDelta?: number; tokensSpent?: number } = {},
-): TamanduaEvent {
+): FormigaEvent {
   return {
     ts,
     event,
@@ -318,7 +318,7 @@ describe("kanban-data: buildKanbanCardDetail", () => {
       output: "STATUS: done\nCHANGES: Added login",
     });
 
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("2025-01-01T10:00:00Z", "story.started", { runId: "r1", stepId: "implement", storyId: "US-001" }),
       makeEvent("2025-01-01T10:05:00Z", "story.done", { runId: "r1", stepId: "implement", storyId: "US-001" }),
     ];
@@ -348,7 +348,7 @@ describe("kanban-data: buildKanbanCardDetail", () => {
       output: "STATUS: done\nREPO: /home/repo",
     });
 
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("2025-01-02T09:00:00Z", "step.running", { runId: "r2", stepId: "plan" }),
       makeEvent("2025-01-02T09:30:00Z", "step.done", { runId: "r2", stepId: "plan" }),
     ];
@@ -372,7 +372,7 @@ describe("kanban-data: buildKanbanCardDetail", () => {
       input_template: "Verify the changes",
     });
 
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("2025-01-03T10:00:00Z", "step.running", { runId: "r3", stepId: "verify" }),
       makeEvent("2025-01-03T10:02:00Z", "step.failed", { runId: "r3", stepId: "verify", detail: "Agent terminated without completing step; retries exhausted" }),
     ];
@@ -391,7 +391,7 @@ describe("kanban-data: buildKanbanCardDetail", () => {
     });
     insertStory(db, "r4", "US-001", 0, "Broken story", "failed");
 
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("2025-01-04T10:00:00Z", "story.started", { runId: "r4", stepId: "implement", storyId: "US-001" }),
       makeEvent("2025-01-04T10:01:00Z", "story.failed", { runId: "r4", stepId: "implement", storyId: "US-001", detail: "Abandoned — retries exhausted" }),
       makeEvent("2025-01-04T10:01:01Z", "step.failed", { runId: "r4", stepId: "implement", detail: "Loop step failed" }),
@@ -410,7 +410,7 @@ describe("kanban-data: buildKanbanCardDetail", () => {
       input_template: "Plan it",
     });
 
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("2025-01-05T10:00:00Z", "step.running", { runId: "r5", stepId: "plan" }),
       makeEvent("2025-01-05T10:01:00Z", "run.tokens.updated", { runId: "r5", stepId: "plan", tokenDelta: 1500, tokensSpent: 1500 }),
       makeEvent("2025-01-05T10:02:00Z", "run.tokens.updated", { runId: "r5", stepId: "plan", tokenDelta: 800, tokensSpent: 2300 }),
@@ -430,7 +430,7 @@ describe("kanban-data: buildKanbanCardDetail", () => {
     insertRun(db, "r6", "running");
     insertStep(db, "r6", "plan", "planner", 0, "done", { input_template: "Plan" });
 
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("2025-01-06T10:00:00Z", "step.running", { runId: "r6", stepId: "plan" }),
       makeEvent("2025-01-06T10:01:00Z", "step.done", { runId: "r6", stepId: "plan" }),
     ];
@@ -502,7 +502,7 @@ describe("kanban-data: buildKanbanCardDetail", () => {
     insertStep(db, "r11", "plan", "planner", 0, "done", { input_template: "Plan" });
     insertStep(db, "r11", "verify", "verifier", 1, "done", { input_template: "Verify" });
 
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("2025-01-07T10:00:00Z", "step.running", { runId: "r11", stepId: "plan" }),
       makeEvent("2025-01-07T10:01:00Z", "step.done", { runId: "r11", stepId: "plan" }),
       makeEvent("2025-01-07T10:02:00Z", "step.running", { runId: "r11", stepId: "verify" }),
@@ -525,7 +525,7 @@ describe("kanban-data: buildKanbanCardDetail", () => {
     insertStory(db, "r12", "US-001", 0, "Story A", "done");
     insertStory(db, "r12", "US-002", 1, "Story B", "pending");
 
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("2025-01-08T10:00:00Z", "story.started", { runId: "r12", stepId: "implement", storyId: "US-001" }),
       makeEvent("2025-01-08T10:01:00Z", "run.tokens.updated", { runId: "r12", stepId: "implement", tokenDelta: 500, tokensSpent: 500 }),
       makeEvent("2025-01-08T10:02:00Z", "story.done", { runId: "r12", stepId: "implement", storyId: "US-001" }),

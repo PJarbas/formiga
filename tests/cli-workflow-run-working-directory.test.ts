@@ -14,16 +14,16 @@ const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
 
 async function createTempEnv() {
   const [controlPort, dashboardPort] = await reserveDistinctRandomPorts(2);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cli-run-cwd-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-cli-run-cwd-"));
   const homeDir = path.join(root, "home");
-  const tamanduaDir = path.join(homeDir, ".tamandua");
-  fs.mkdirSync(tamanduaDir, { recursive: true });
-  fs.writeFileSync(path.join(tamanduaDir, "port"), String(dashboardPort), "utf-8");
-  return { root, homeDir, tamanduaDir, controlPort, dashboardPort };
+  const formigaDir = path.join(homeDir, ".formiga");
+  fs.mkdirSync(formigaDir, { recursive: true });
+  fs.writeFileSync(path.join(formigaDir, "port"), String(dashboardPort), "utf-8");
+  return { root, homeDir, formigaDir, controlPort, dashboardPort };
 }
 
 function writeMinimalWorkflow(homeDir: string, workflowId: string): void {
-  const workflowDir = path.join(homeDir, ".tamandua", "workflows", workflowId);
+  const workflowDir = path.join(homeDir, ".formiga", "workflows", workflowId);
   fs.mkdirSync(workflowDir, { recursive: true });
   fs.writeFileSync(
     path.join(workflowDir, "workflow.yml"),
@@ -144,7 +144,7 @@ describe("CLI workflow run working-directory-for-harness", () => {
           "--working-directory-for-harness",
           harnessDir,
         ],
-        { HOME: env.homeDir, TAMANDUA_CONTROL_PORT: String(env.controlPort) },
+        { HOME: env.homeDir, FORMIGA_CONTROL_PORT: String(env.controlPort) },
         /Harness CWD:/,
       );
 
@@ -158,7 +158,7 @@ describe("CLI workflow run working-directory-for-harness", () => {
       assert.match(stdout, /Run: [0-9a-f]{8}/i);
       assert.match(stdout, new RegExp(`Harness CWD: ${path.resolve(harnessDir).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
 
-      const dbPath = path.join(env.tamanduaDir, "tamandua.db");
+      const dbPath = path.join(env.formigaDir, "formiga.db");
       const db = new DatabaseSync(dbPath);
       const row = db
         .prepare(
@@ -180,7 +180,7 @@ describe("CLI workflow run working-directory-for-harness", () => {
     } finally {
       await runCliToExit(["dashboard", "stop"], {
         HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
+        FORMIGA_CONTROL_PORT: String(env.controlPort),
       }).catch(() => ({ stdout: "", stderr: "", code: null }));
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch { /* cleanup */ }
     }
@@ -203,7 +203,7 @@ describe("CLI workflow run working-directory-for-harness", () => {
           "--working-directory-for-harness",
           missingDir,
         ],
-        { HOME: env.homeDir, TAMANDUA_CONTROL_PORT: String(env.controlPort) },
+        { HOME: env.homeDir, FORMIGA_CONTROL_PORT: String(env.controlPort) },
       );
 
       assert.equal(result.code, 1, `expected exit code 1, got ${result.code}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
@@ -212,7 +212,7 @@ describe("CLI workflow run working-directory-for-harness", () => {
     } finally {
       await runCliToExit(["dashboard", "stop"], {
         HOME: env.homeDir,
-        TAMANDUA_CONTROL_PORT: String(env.controlPort),
+        FORMIGA_CONTROL_PORT: String(env.controlPort),
       }).catch(() => ({ stdout: "", stderr: "", code: null }));
       try { fs.rmSync(env.root, { recursive: true, force: true }); } catch { /* cleanup */ }
     }

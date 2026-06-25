@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and run the FAST Tamandua end-to-end SMOKE test suite.
+# Build and run the FAST Formiga end-to-end SMOKE test suite.
 #
 # This script runs the smoke / state-machine integration test by default.
 # This is the FAST test that manually advances workflow steps using step
@@ -19,7 +19,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-LOG="${TAMANDUA_E2E_TEST_LOG:-e2e-test-output.log}"
+LOG="${FORMIGA_E2E_TEST_LOG:-e2e-test-output.log}"
 
 npm run build
 node --test e2e-tests/workflows-smoke.test.ts 2>&1 | tee "$LOG"

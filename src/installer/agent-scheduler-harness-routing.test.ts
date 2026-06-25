@@ -22,7 +22,7 @@ import type { WorkflowAgent, WorkflowSpec } from "../../dist/installer/types.js"
  *   - buildPollingRoundContext includes harnessType
  *   - executePollingRound dispatches to runPi when harnessType="pi" or missing
  *   - executePollingRound dispatches to runHermes when harnessType="hermes"
- *   - runHermes receives TAMANDUA_HERMES_BINARY in child env
+ *   - runHermes receives FORMIGA_HERMES_BINARY in child env
  *   - Polling round context logs include harnessType
  */
 
@@ -119,15 +119,15 @@ describe("executePollingRound harness dispatch", () => {
   let savedHermesBinary: string | undefined;
 
   beforeEach(() => {
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-test-routing-"));
-    savedPiBinary = process.env.TAMANDUA_PI_BINARY;
-    savedHermesBinary = process.env.TAMANDUA_HERMES_BINARY;
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-test-routing-"));
+    savedPiBinary = process.env.FORMIGA_PI_BINARY;
+    savedHermesBinary = process.env.FORMIGA_HERMES_BINARY;
 
     const homeDir = path.join(tempHome, "home");
-    const stateDir = path.join(homeDir, ".tamandua");
+    const stateDir = path.join(homeDir, ".formiga");
     fs.mkdirSync(stateDir, { recursive: true });
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    process.env.FORMIGA_STATE_DIR = stateDir;
 
     // Initialize the DB so createAgentCronJob() can read harness_type from runs.context
 
@@ -135,14 +135,14 @@ describe("executePollingRound harness dispatch", () => {
     const piPath = path.join(tempHome, "pi-mock");
     const piLog = path.join(tempHome, "pi-args.log");
     makeMockBinary(piPath, `echo "$@" >> "${piLog}"; echo "HEARTBEAT_OK"`);
-    process.env.TAMANDUA_PI_BINARY = piPath;
+    process.env.FORMIGA_PI_BINARY = piPath;
   });
 
   afterEach(() => {
-    if (savedPiBinary === undefined) delete process.env.TAMANDUA_PI_BINARY;
-    else process.env.TAMANDUA_PI_BINARY = savedPiBinary;
-    if (savedHermesBinary === undefined) delete process.env.TAMANDUA_HERMES_BINARY;
-    else process.env.TAMANDUA_HERMES_BINARY = savedHermesBinary;
+    if (savedPiBinary === undefined) delete process.env.FORMIGA_PI_BINARY;
+    else process.env.FORMIGA_PI_BINARY = savedPiBinary;
+    if (savedHermesBinary === undefined) delete process.env.FORMIGA_HERMES_BINARY;
+    else process.env.FORMIGA_HERMES_BINARY = savedHermesBinary;
     shutdownAllCrons();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -173,7 +173,7 @@ describe("executePollingRound harness dispatch", () => {
 
     assert.ok(result.ok);
 
-    // executePollingRound should use pi binary (TAMANDUA_PI_BINARY mock)
+    // executePollingRound should use pi binary (FORMIGA_PI_BINARY mock)
     const piLog = path.join(tempHome, "pi-args.log");
     const piDispatchJob = { id: result.id!, workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "pi" as const, workingDirectoryForHarness: workdir, createdAt: "" };
     await executePollingRound(piDispatchJob, makeAgent(), workflow);
@@ -194,7 +194,7 @@ describe("executePollingRound harness dispatch", () => {
     const hermesPath = path.join(tempHome, "hermes-mock");
     const hermesLog = path.join(tempHome, "hermes-args.log");
     makeMockBinary(hermesPath, `echo "$@" >> "${hermesLog}"; echo "HEARTBEAT_OK"`);
-    process.env.TAMANDUA_HERMES_BINARY = hermesPath;
+    process.env.FORMIGA_HERMES_BINARY = hermesPath;
 
     const runId = "run-hermes-dispatch";
     const db = getDb();
@@ -269,15 +269,15 @@ describe("executePollingRound harness dispatch", () => {
     await removeRunCrons(runId);
   });
 
-  it("passes TAMANDUA_HERMES_BINARY to child env when dispatching to runHermes", async () => {
+  it("passes FORMIGA_HERMES_BINARY to child env when dispatching to runHermes", async () => {
     const workdir = path.join(tempHome, "work");
     fs.mkdirSync(workdir, { recursive: true });
 
     // Create a mock hermes that dumps its environment
     const hermesPath = path.join(tempHome, "hermes-mock");
     const envLog = path.join(tempHome, "hermes-env.log");
-    makeMockBinary(hermesPath, `env | grep TAMANDUA >> "${envLog}"; echo "HEARTBEAT_OK"`);
-    process.env.TAMANDUA_HERMES_BINARY = hermesPath;
+    makeMockBinary(hermesPath, `env | grep FORMIGA >> "${envLog}"; echo "HEARTBEAT_OK"`);
+    process.env.FORMIGA_HERMES_BINARY = hermesPath;
 
     const runId = "run-hermes-env";
     const db = getDb();
@@ -303,11 +303,11 @@ describe("executePollingRound harness dispatch", () => {
     const hermesEnvDispatchJob = { id: result.id!, workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "hermes" as const, workingDirectoryForHarness: workdir, createdAt: "" };
     await executePollingRound(hermesEnvDispatchJob, makeAgent(), workflow);
 
-    // Verify TAMANDUA_HERMES_BINARY was passed to child env
+    // Verify FORMIGA_HERMES_BINARY was passed to child env
     const envOutput = fs.readFileSync(envLog, "utf-8");
     assert.ok(
-      envOutput.includes("TAMANDUA_HERMES_BINARY"),
-      "child env should contain TAMANDUA_HERMES_BINARY",
+      envOutput.includes("FORMIGA_HERMES_BINARY"),
+      "child env should contain FORMIGA_HERMES_BINARY",
     );
 
     await removeRunCrons(runId);
@@ -319,24 +319,24 @@ describe("createAgentCronJob harnessType from run context", () => {
   let savedPiBinary: string | undefined;
 
   beforeEach(() => {
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-test-cron-harness-"));
-    savedPiBinary = process.env.TAMANDUA_PI_BINARY;
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-test-cron-harness-"));
+    savedPiBinary = process.env.FORMIGA_PI_BINARY;
 
     const homeDir = path.join(tempHome, "home");
-    const stateDir = path.join(homeDir, ".tamandua");
+    const stateDir = path.join(homeDir, ".formiga");
     fs.mkdirSync(stateDir, { recursive: true });
     process.env.HOME = homeDir;
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    process.env.FORMIGA_STATE_DIR = stateDir;
 
     // Create mock pi binary
     const piPath = path.join(tempHome, "pi-mock");
     makeMockBinary(piPath, `echo "HEARTBEAT_OK"`);
-    process.env.TAMANDUA_PI_BINARY = piPath;
+    process.env.FORMIGA_PI_BINARY = piPath;
   });
 
   afterEach(() => {
-    if (savedPiBinary === undefined) delete process.env.TAMANDUA_PI_BINARY;
-    else process.env.TAMANDUA_PI_BINARY = savedPiBinary;
+    if (savedPiBinary === undefined) delete process.env.FORMIGA_PI_BINARY;
+    else process.env.FORMIGA_PI_BINARY = savedPiBinary;
     shutdownAllCrons();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });

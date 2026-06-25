@@ -1,15 +1,15 @@
 /**
- * Tests for tamandua control-plane CLI commands (US-004).
+ * Tests for formiga control-plane CLI commands (US-004).
  *
  * Validates:
- * 1. tamandua control-plane start prints PID and endpoint URL
- * 2. tamandua control-plane start --port <random> starts control plane on a random port
- * 3. tamandua control-plane start <random> (positional) starts on custom port
- * 4. tamandua control-plane start when already running shows existing status without restarting
- * 5. tamandua control-plane status shows running state, PID, port, and endpoint when up
- * 6. tamandua control-plane status shows not running when down
- * 7. tamandua control-plane stop kills control plane process and prints confirmation
- * 8. tamandua control-plane stop when not running prints not running message
+ * 1. formiga control-plane start prints PID and endpoint URL
+ * 2. formiga control-plane start --port <random> starts control plane on a random port
+ * 3. formiga control-plane start <random> (positional) starts on custom port
+ * 4. formiga control-plane start when already running shows existing status without restarting
+ * 5. formiga control-plane status shows running state, PID, port, and endpoint when up
+ * 6. formiga control-plane status shows not running when down
+ * 7. formiga control-plane stop kills control plane process and prints confirmation
+ * 8. formiga control-plane stop when not running prints not running message
  *
  * All tests use isolated temp HOME directories so they do not share
  * PID/port files with parallel tests (US-004 isolation).
@@ -146,15 +146,15 @@ function cleanStderr(stderr: string): string {
 // ═══════════════════════════════════════════════════════════════════
 
 function createTempHome(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-cp-cli-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "formiga-cp-cli-"));
 }
 
 function getIsolatedControlPlanePidFile(homeDir: string): string {
-  return path.join(homeDir, ".tamandua", "control-plane.pid");
+  return path.join(homeDir, ".formiga", "control-plane.pid");
 }
 
 function getIsolatedControlPlanePortFile(homeDir: string): string {
-  return path.join(homeDir, ".tamandua", "control-plane-port");
+  return path.join(homeDir, ".formiga", "control-plane-port");
 }
 
 function readIsolatedControlPlanePort(homeDir: string): number {
@@ -201,8 +201,8 @@ function cleanupIsolatedControlPlaneFiles(homeDir: string): void {
 // Tests
 // ═══════════════════════════════════════════════════════════════════
 
-describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
-  // AC 6 (partial): tamandua control-plane status shows not running when down
+describe("formiga control-plane CLI", { concurrency: 1 }, () => {
+  // AC 6 (partial): formiga control-plane status shows not running when down
   it("control-plane status shows not running when down", async () => {
     const tempHome = createTempHome();
     try {
@@ -219,7 +219,7 @@ describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
     }
   });
 
-  // AC 1: tamandua control-plane start prints PID and endpoint URL
+  // AC 1: formiga control-plane start prints PID and endpoint URL
   it("control-plane start prints PID and endpoint URL", async (t) => {
     if (!fs.existsSync(CLI_SCRIPT)) {
       t.skip("CLI script not built — run npm run build first");
@@ -258,7 +258,7 @@ describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
     }
   });
 
-  // AC 2: tamandua control-plane start --port <random> starts on a custom port
+  // AC 2: formiga control-plane start --port <random> starts on a custom port
   it("control-plane start --port <random> starts on a custom port", async (t) => {
     if (!fs.existsSync(CLI_SCRIPT)) {
       t.skip("CLI script not built — run npm run build first");
@@ -293,7 +293,7 @@ describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
     }
   });
 
-  // AC 3: tamandua control-plane start <random> (positional) starts on custom port
+  // AC 3: formiga control-plane start <random> (positional) starts on custom port
   it("control-plane start <random> (positional) starts on a custom port", async (t) => {
     if (!fs.existsSync(CLI_SCRIPT)) {
       t.skip("CLI script not built — run npm run build first");
@@ -326,7 +326,7 @@ describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
     }
   });
 
-  // AC 4: tamandua control-plane start when already running shows existing status
+  // AC 4: formiga control-plane start when already running shows existing status
   it("control-plane start when already running shows existing status", async (t) => {
     if (!fs.existsSync(CLI_SCRIPT)) {
       t.skip("CLI script not built — run npm run build first");
@@ -407,7 +407,7 @@ describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
     }
   });
 
-  // AC 5: tamandua control-plane status reports running state with PID, port, endpoint
+  // AC 5: formiga control-plane status reports running state with PID, port, endpoint
   it("control-plane status shows running state when up", async (t) => {
     if (!fs.existsSync(CLI_SCRIPT)) {
       t.skip("CLI script not built — run npm run build first");
@@ -450,7 +450,7 @@ describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
     }
   });
 
-  // AC 6: tamandua control-plane stop kills process and prints confirmation
+  // AC 6: formiga control-plane stop kills process and prints confirmation
   it("control-plane stop kills process and prints confirmation", async (t) => {
     if (!fs.existsSync(CLI_SCRIPT)) {
       t.skip("CLI script not built — run npm run build first");
@@ -497,7 +497,7 @@ describe("tamandua control-plane CLI", { concurrency: 1 }, () => {
     }
   });
 
-  // AC 7: tamandua control-plane stop when not running prints not running message
+  // AC 7: formiga control-plane stop when not running prints not running message
   it("control-plane stop when not running prints not running", async () => {
     const tempHome = createTempHome();
     try {

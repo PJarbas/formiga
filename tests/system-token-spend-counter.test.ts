@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 const repoRoot = process.cwd();
 
 function createTempHome() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-system-token-counter-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-system-token-counter-"));
   const homeDir = path.join(root, "home");
   fs.mkdirSync(homeDir, { recursive: true });
   return { root, homeDir };
@@ -149,7 +149,7 @@ describe("system token spend counter — e2e integration", () => {
             systemTokensSpent: systemTokens,
           }));
         `,
-        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+        { HOME: temp.homeDir, FORMIGA_PI_BINARY: fakePi },
       );
 
       assert.equal(result.runTokensSpent, 41, "run tokens_spent must not change for unresolvable run ID");
@@ -205,7 +205,7 @@ describe("system token spend counter — e2e integration", () => {
           const now = new Date().toISOString();
 
           // Pre-seed system tokens to verify they do NOT change
-          db.prepare("UPDATE tamandua_stats SET system_tokens_spent = 50 WHERE id = 1").run();
+          db.prepare("UPDATE formiga_stats SET system_tokens_spent = 50 WHERE id = 1").run();
 
           db.prepare(
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 5, ?, ?)"
@@ -242,7 +242,7 @@ describe("system token spend counter — e2e integration", () => {
             systemTokensSpent: systemTokens,
           }));
         `,
-        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+        { HOME: temp.homeDir, FORMIGA_PI_BINARY: fakePi },
       );
 
       // 150 (120 input + 30 output) added to existing 5
@@ -441,7 +441,7 @@ describe("system token spend counter — e2e integration", () => {
             systemTokensSpent: systemTokens,
           }));
         `,
-        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+        { HOME: temp.homeDir, FORMIGA_PI_BINARY: fakePi },
       );
 
       assert.equal(result.runTokensSpent, 9, "heartbeat must not change run tokens");
@@ -537,7 +537,7 @@ describe("system token spend counter — e2e integration", () => {
             await new Promise((resolve) => server.close(() => resolve()));
           }
         `,
-        { HOME: temp.homeDir, TAMANDUA_PI_BINARY: fakePi },
+        { HOME: temp.homeDir, FORMIGA_PI_BINARY: fakePi },
       );
 
       assert.equal(result.status, 200);

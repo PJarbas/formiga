@@ -5,9 +5,9 @@ import {
   formatLogsTailLine,
   formatLogsTailLines,
 } from "../../dist/installer/logs-tail-format.js";
-import type { TamanduaEvent } from "../../dist/installer/events.js";
+import type { FormigaEvent } from "../../dist/installer/events.js";
 
-function makeEvent(event: string, overrides: Partial<TamanduaEvent> = {}): TamanduaEvent {
+function makeEvent(event: string, overrides: Partial<FormigaEvent> = {}): FormigaEvent {
   return {
     ts: new Date().toISOString(),
     event,
@@ -72,7 +72,7 @@ describe("formatLogsTailLine", () => {
 
 describe("formatLogsTailLines", () => {
   it("formats multiple nudge events correctly", () => {
-    const events: TamanduaEvent[] = [
+    const events: FormigaEvent[] = [
       makeEvent("run.nudged", { runId: "r1" }),
       makeEvent("agent.nudged", { agentId: "wf_agent1" }),
       makeEvent("agent.nudge.skipped", { agentId: "wf_agent2", detail: "in-flight" }),

@@ -2,7 +2,6 @@ import { getDb } from "../db.js";
 import { scheduleRunCronTeardown } from "./step-ops.js";
 import { removeRunCrons } from "./agent-scheduler.js";
 import { terminateRunWithDaemon } from "../server/control-client.js";
-import { getRunWorktree, removeRunWorktree } from "./worktree-manager.js";
 import { emitEvent } from "./events.js";
 
 export interface RunInfo {
@@ -166,16 +165,6 @@ export async function deleteWorkflow(
       terminateRunWithDaemon(runId),
     ]);
     scheduleRunCronTeardown(runId);
-  }
-
-  // Remove managed worktree if present
-  const wt = getRunWorktree(runId);
-  if (wt && wt.status !== "removed") {
-    try {
-      removeRunWorktree({ runId, force: true });
-    } catch {
-      // Best-effort worktree removal — proceed with DB cleanup
-    }
   }
 
   // Delete associated records in dependency order

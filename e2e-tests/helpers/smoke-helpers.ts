@@ -23,14 +23,14 @@ const cliPath = path.resolve(repoRoot, "dist", "cli", "cli.js");
 export async function createTempHome() {
   const [controlPort, dashboardPort] = await reserveDistinctRandomPorts(2);
   const root = fs.mkdtempSync(
-    path.join(os.tmpdir(), "tamandua-e2e-workflows-"),
+    path.join(os.tmpdir(), "formiga-e2e-workflows-"),
   );
   const homeDir = path.join(root, "home");
-  const tamanduaDir = path.join(homeDir, ".tamandua");
-  fs.mkdirSync(tamanduaDir, { recursive: true });
+  const formigaDir = path.join(homeDir, ".formiga");
+  fs.mkdirSync(formigaDir, { recursive: true });
   fs.mkdirSync(homeDir, { recursive: true });
   fs.writeFileSync(
-    path.join(tamanduaDir, "port"),
+    path.join(formigaDir, "port"),
     String(dashboardPort),
     "utf-8",
   );
@@ -47,7 +47,7 @@ export async function createTempHome() {
     `Real ~/.pi directory must exist at ${realPiDir} for e2e tests to reuse pi auth configuration.`,
   );
   fs.symlinkSync(realPiDir, isolatedPiLink, "dir");
-  return { root, homeDir, tamanduaDir, controlPort, dashboardPort };
+  return { root, homeDir, formigaDir, controlPort, dashboardPort };
 }
 
 export function inheritedProcessEnv(): Record<string, string> {
@@ -60,14 +60,14 @@ export function inheritedProcessEnv(): Record<string, string> {
 }
 
 export function baseEnv(homeDir: string, controlPort: number) {
-  const tamanduaDir = path.join(homeDir, ".tamandua");
+  const formigaDir = path.join(homeDir, ".formiga");
   return {
     ...inheritedProcessEnv(),
     HOME: homeDir,
-    TAMANDUA_CONTROL_PORT: String(controlPort),
-    TAMANDUA_STATE_DIR: tamanduaDir,
-    TAMANDUA_DB_PATH: path.join(tamanduaDir, "tamandua.db"),
-    TAMANDUA_WORKTREE_ROOT: path.join(tamanduaDir, "worktrees"),
+    FORMIGA_CONTROL_PORT: String(controlPort),
+    FORMIGA_STATE_DIR: formigaDir,
+    FORMIGA_DB_PATH: path.join(formigaDir, "formiga.db"),
+    FORMIGA_WORKTREE_ROOT: path.join(formigaDir, "worktrees"),
   };
 }
 
@@ -127,7 +127,7 @@ export function stepComplete(
 }
 
 /**
- * Spawn `tamandua workflow run` and capture the 8-char run-ID prefix from stdout.
+ * Spawn `formiga workflow run` and capture the 8-char run-ID prefix from stdout.
  * Kills the child process once the output is captured.
  */
 export function spawnWorkflowRun(
@@ -215,16 +215,16 @@ export function prepareGitRepo(fixtureDir: string, targetDir: string) {
   }
 
   git(["init"]);
-  git(["config", "user.email", "test@tamandua.local"]);
-  git(["config", "user.name", "Tamandua E2E Test"]);
+  git(["config", "user.email", "test@formiga.local"]);
+  git(["config", "user.name", "Formiga E2E Test"]);
   git(["add", "-A"]);
   git(["commit", "-m", "initial commit with sample project"]);
   return targetDir;
 }
 
 /** Resolve full run ID from the 8-char prefix using the temp home DB */
-export function resolveFullRunId(prefix: string, tamanduaDir: string): string {
-  const dbPath = path.join(tamanduaDir, "tamandua.db");
+export function resolveFullRunId(prefix: string, formigaDir: string): string {
+  const dbPath = path.join(formigaDir, "formiga.db");
   const db = new DatabaseSync(dbPath);
   try {
     const rows = db

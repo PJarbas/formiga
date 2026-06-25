@@ -1,18 +1,15 @@
 /**
- * Tamandua Dashboard Daemon
+ * Formiga Dashboard Daemon
  *
- * Runs the dashboard server, optionally alongside the MCP server.
+ * Runs the dashboard server.
  *
- * - Reads dashboard port from ~/.tamandua/port
+ * - Reads dashboard port from ~/.formiga/port
  * - Dashboard listens on configured port (default fallback 3333)
- * - MCP is only started when --with-mcp is passed (default port 3338)
- * - Writes PID file on start (~/.tamandua/tamandua.pid)
+ * - Writes PID file on start (~/.formiga/formiga.pid)
  * - Cleans up PID file on exit
  *
  * CLI flags:
- *   [port]          Dashboard port (positional, overridden by ~/.tamandua/port)
- *   --with-mcp      Start MCP server alongside the dashboard
- *   --mcp-port N    Custom MCP port (only meaningful with --with-mcp)
+ *   [port]          Dashboard port (positional, overridden by ~/.formiga/port)
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -20,53 +17,27 @@ import path from "node:path";
 import os from "node:os";
 import { createDashboardServer } from "./dashboard.js";
 import {
-  DEFAULT_MCP_PORT,
-  startTamanduaMcpServer,
-  stopTamanduaMcpServer,
-  type TamanduaMcpServer,
-} from "./mcp-server.js";
-import {
   ensureDaemonSecret,
   getControlPort,
   startControlServer,
   startReconciler,
 } from "./control-server.js";
 import { shutdownAllCrons } from "../installer/agent-scheduler.js";
-import { runVersionCheck } from "../lib/version-check.js";
 
-const PID_FILE = path.join(os.homedir(), ".tamandua", "tamandua.pid");
-const PORT_FILE = path.join(os.homedir(), ".tamandua", "port");
+const PID_FILE = path.join(os.homedir(), ".formiga", "formiga.pid");
+const PORT_FILE = path.join(os.homedir(), ".formiga", "port");
 
 interface DaemonArgs {
-  withMcp: boolean;
-  mcpPort: number;
   dashboardPort: number;
 }
 
 function parseArgs(): DaemonArgs {
   const argv = process.argv.slice(2);
-  let withMcp = false;
-  let mcpPort = DEFAULT_MCP_PORT;
   let dashboardPort = 0; // 0 means not set via CLI
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--with-mcp") {
-      withMcp = true;
-    } else if (arg === "--mcp-port") {
-      const portStr = argv[i + 1];
-      if (!portStr) {
-        console.error("--mcp-port requires a port number");
-        process.exit(1);
-      }
-      const port = parseInt(portStr, 10);
-      if (isNaN(port) || port < 1 || port > 65535) {
-        console.error(`Invalid MCP port: ${portStr}`);
-        process.exit(1);
-      }
-      mcpPort = port;
-      i++; // consume next arg
-    } else if (!arg.startsWith("--")) {
+    if (!arg.startsWith("--")) {
       const port = parseInt(arg, 10);
       if (!isNaN(port) && port > 0 && port < 65536) {
         dashboardPort = port;
@@ -74,7 +45,7 @@ function parseArgs(): DaemonArgs {
     }
   }
 
-  return { withMcp, mcpPort, dashboardPort };
+  return { dashboardPort };
 }
 
 function readPort(cliPort: number): number {
@@ -117,26 +88,13 @@ function closeDashboardServer(server: http.Server): Promise<void> {
   });
 }
 
-function formatMcpBindError(port: number, err: unknown): string {
-  const nodeErr = err as NodeJS.ErrnoException;
-  if (nodeErr?.code === "EADDRINUSE") {
-    return `Failed to start MCP server on port ${port}: port is already in use. Stop the conflicting process and retry.`;
-  }
-
-  return `Failed to start MCP server on port ${port}: ${
-    err instanceof Error ? err.message : String(err)
-  }`;
-}
-
 const args = parseArgs();
 const dashboardPort = readPort(args.dashboardPort);
 
 let dashboardServer: http.Server | undefined;
-let mcpServer: TamanduaMcpServer | undefined;
 let controlServer: http.Server | undefined;
 let reconciler: { stop: () => void } | undefined;
 let isShuttingDown = false;
-let versionCheckInterval: ReturnType<typeof setInterval> | undefined;
 
 async function stopListeners(): Promise<void> {
   const stops: Promise<unknown>[] = [];
@@ -147,22 +105,10 @@ async function stopListeners(): Promise<void> {
     reconciler = undefined;
   }
 
-  // Tear down all in-flight pi process groups + active timers.
-  if (versionCheckInterval !== undefined) {
-    clearInterval(versionCheckInterval);
-    versionCheckInterval = undefined;
-  }
-
   try {
     shutdownAllCrons();
   } catch (err) {
     console.error("Error during scheduler shutdown:", err);
-  }
-
-  if (mcpServer) {
-    const currentMcpServer = mcpServer;
-    mcpServer = undefined;
-    stops.push(stopTamanduaMcpServer(currentMcpServer));
   }
 
   if (dashboardServer) {
@@ -186,19 +132,12 @@ async function shutdown(signal: string, exitCode: number): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  console.log(`Tamandua daemon received ${signal}, shutting down...`);
+  console.log(`Formiga daemon received ${signal}, shutting down...`);
 
   await stopListeners();
   cleanupPidFile();
 
   process.exit(exitCode);
-}
-
-async function failStartup(err: unknown): Promise<void> {
-  console.error(formatMcpBindError(args.mcpPort, err));
-  await stopListeners();
-  cleanupPidFile();
-  process.exit(1);
 }
 
 process.on("SIGTERM", () => {
@@ -243,7 +182,7 @@ async function bootstrap(): Promise<void> {
     controlServer = await startControlServer({ port: controlPort, secret });
     reconciler = startReconciler();
     console.log(
-      `Tamandua control plane listening on http://127.0.0.1:${controlPort} (pid ${process.pid})`,
+      `Formiga control plane listening on http://127.0.0.1:${controlPort} (pid ${process.pid})`,
     );
   } catch (err) {
     console.error(
@@ -255,30 +194,9 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  if (args.withMcp) {
-    try {
-      mcpServer = await startTamanduaMcpServer(args.mcpPort);
-    } catch (err) {
-      await failStartup(err);
-      return;
-    }
-
-    console.log(
-      `Tamandua dashboard daemon started on port ${dashboardPort} and MCP port ${args.mcpPort} (pid ${process.pid})`,
-    );
-  } else {
-    console.log(
-      `Tamandua dashboard daemon started on port ${dashboardPort} (pid ${process.pid})`,
-    );
-  }
-
-  // Fire-and-forget version check — do not block daemon startup.
-  runVersionCheck().catch(() => {});
-
-  // Periodic version check every 8 hours.
-  versionCheckInterval = setInterval(() => {
-    runVersionCheck().catch(() => {});
-  }, 8 * 60 * 60 * 1000);
+  console.log(
+    `Formiga dashboard daemon started on port ${dashboardPort} (pid ${process.pid})`,
+  );
 }
 
 void bootstrap();

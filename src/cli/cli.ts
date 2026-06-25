@@ -4,7 +4,7 @@
 try {
   await import("node:sqlite");
 } catch {
-  console.error("Error: node:sqlite is not available.\n\nTamandua requires Node.js >= 22 with native SQLite support.");
+  console.error("Error: node:sqlite is not available.\n\nFormiga requires Node.js >= 22 with native SQLite support.");
   process.exit(1);
 }
 
@@ -15,30 +15,20 @@ import { runWorkflow, resumeWorkflow, type RunWorkflowResult } from "../installe
 import { listBundledWorkflows, getWorkflowShortDescription } from "../installer/workflow-fetch.js";
 import { loadWorkflowSpec } from "../installer/workflow-spec.js";
 import { resolveBundledWorkflowDir } from "../installer/paths.js";
-import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource, type TamanduaEvent } from "../installer/events.js";
+import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource, type FormigaEvent } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { parseLogsSelector, lookupRunIdByNumber } from "./logs-selector.js";
-import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startMcp, stopMcp, getMcpStatus, isMcpRunning, startControlPlane, stopControlPlane, getControlPlaneStatus, isControlPlaneRunning } from "../server/daemonctl.js";
-import { DEFAULT_MCP_PORT, MCP_ENDPOINT_PATH } from "../server/mcp-server.js";
+import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startControlPlane, stopControlPlane, getControlPlaneStatus, isControlPlaneRunning } from "../server/daemonctl.js";
 import { DEFAULT_CONTROL_PORT } from "../server/control-server.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon, nudgeWithDaemon } from "../server/control-client.js";
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
-import { ensureCliSymlink } from "../installer/symlink.js";
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
-import { formatServiceStatus, formatTamanduaInfo, formatRunsSummary, formatProcessList } from "./status-format.js";
-import {
-  listRunWorktrees,
-  getRunWorktree,
-  removeRunWorktree,
-  type ManagedRunWorktree,
-} from "../installer/worktree-manager.js";
+import { formatServiceStatus, formatFormigaInfo, formatRunsSummary, formatProcessList } from "./status-format.js";
 import { getWorkflowStatus as getWorkflowStatusFn } from "../installer/status.js";
-import { runUpdate } from "./update.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { readVersionStatus } from "../lib/version-check.js";
 import { getBuildVersion } from "../lib/version.js";
 import { parseWorkflowRunArgs } from "./workflow-run-args.js";
 import type { HarnessType } from "../installer/types.js";
@@ -74,7 +64,7 @@ function getVersion(): string {
   catch { return "unknown"; }
 }
 
-function printEvents(events: TamanduaEvent[]): void {
+function printEvents(events: FormigaEvent[]): void {
   if (events.length === 0) { console.log("No events yet."); return; }
   for (const line of formatLogsTailLines(events)) {
     console.log(line);
@@ -104,19 +94,8 @@ function parseDuration(input: string): number {
   }
 }
 
-function formatWorktreeStatus(wt: ManagedRunWorktree): string {
-  const idShort = wt.runId.substring(0, 8);
-  const repoShort =
-    wt.worktreeOriginRepository.split("/").slice(-2).join("/") ||
-    wt.worktreeOriginRepository;
-  return [
-    `  [${wt.status.padEnd(9)}] ${idShort}  ${wt.cleanupPolicy.padEnd(20)} ${wt.worktreePath}`,
-    `           origin: ${repoShort}${wt.worktreeOriginRef ? ` @ ${wt.worktreeOriginRef}` : ""}`,
-  ].join("\n");
-}
-
 function getLogsTailPollIntervalMs(): number {
-  const raw = parseInt(process.env.TAMANDUA_LOGS_TAIL_POLL_MS ?? "1000", 10);
+  const raw = parseInt(process.env.FORMIGA_LOGS_TAIL_POLL_MS ?? "1000", 10);
   if (Number.isNaN(raw)) return 1000;
   return Math.max(10, raw);
 }
@@ -254,7 +233,7 @@ function resolveAutoresearchCwdForRun(runIdOrPrefix: string): { runId: string; c
 
   return {
     runId: detail.id,
-    cwd: readString("working_directory_for_harness") ?? readString("worktree_path") ?? readString("cwd"),
+    cwd: readString("working_directory_for_harness") ?? readString("cwd"),
   };
 }
 
@@ -303,135 +282,79 @@ function printWorkflowAutoresearch(runIdOrPrefix: string): void {
   }
 }
 
-function getTamanduaHelp(): string {
-  return `tamandua — ASCII art easter egg
-
-Usage: tamandua tamandua
-
-Prints a large ASCII art representation of a tamandua (anteater) along with
-a randomly selected tamandua-themed quote. This is a fun easter egg with no
-functional purpose beyond entertainment.
-
-Examples:
-  tamandua tamandua          # Print the tamandua ASCII art and a random quote`;
-}
-
 function getVersionHelp(): string {
-  return `tamandua version — Display build version
+  return `formiga version — Display build version
 
-Usage: tamandua version
-   or: tamandua --version
-   or: tamandua -v
+Usage: formiga version
+   or: formiga --version
+   or: formiga -v
 
-Prints the build version of Tamandua in ISO8601_refhash format.
+Prints the build version of Formiga in ISO8601_refhash format.
 The version is composed of the UTC timestamp of the HEAD commit
 and its full 40-character SHA1 hash, separated by an underscore.
 This string is computed at build time and embedded in the dist
 output.
 
 Examples:
-  tamandua version           # Prints e.g. "20260526T140530Z_4ad4844ff86d37cd04eaf736e8cc43ad467b0338"
-  tamandua --version         # Same output
-  tamandua -v                # Same output`;
+  formiga version           # Prints e.g. "20260526T140530Z_4ad4844ff86d37cd04eaf736e8cc43ad467b0338"
+  formiga --version         # Same output
+  formiga -v                # Same output`;
 }
 
 function getSkillPathHelp(): string {
-  return `tamandua skill-path — Print path to bundled tamandua-agents skill
+  return `formiga skill-path — Print path to bundled formiga-agents skill
 
-Usage: tamandua skill-path
+Usage: formiga skill-path
 
-Prints the absolute filesystem path to the bundled tamandua-agents skill
+Prints the absolute filesystem path to the bundled formiga-agents skill
 directory. This is the directory containing the AGENTS.md, IDENTITY.md,
 and SOUL.md files that are provisioned to workflow agents.
 
 Examples:
-  tamandua skill-path        # Prints the skill directory path`;
+  formiga skill-path        # Prints the skill directory path`;
 }
 
 function getSourcePathHelp(): string {
-  return `tamandua source-path — Print Tamandua source checkout path
+  return `formiga source-path — Print Formiga source checkout path
 
-Usage: tamandua source-path
+Usage: formiga source-path
 
-Prints the absolute filesystem path to the resolved Tamandua source checkout.
+Prints the absolute filesystem path to the resolved Formiga source checkout.
 This is the directory containing the built dist/, package.json, and
 build-and-install script.
 
 Examples:
-  tamandua source-path       # Prints the source checkout path`;
-}
-
-function getUpdateHelp(): string {
-  return `tamandua update — Pull latest source, rebuild, and reinstall
-
-Usage: tamandua update [--force]
-
-tamandua update is local source maintenance, not a package-manager update.
-
-In order, it does this:
-
-  1. Resolves the installed Tamandua source checkout and verifies it has
-     package.json and build-and-install.
-  2. Reads current git HEAD.
-  3. Runs git pull in that checkout, using the checkout's current
-     branch/remote config.
-  4. Reads git HEAD again.
-  5. If HEAD did not change and --force is not set, it stops there: no
-     build, no workflow install, no service restart. With --force, it
-     continues to rebuild even without source changes.
-  6. If HEAD changed, it runs ./build-and-install.
-  7. Takes a snapshot of currently running Tamandua services: dashboard
-     daemon, standalone MCP, and control plane.
-  8. Checks for active runs with status running or paused.
-  9. If active runs exist and --force is not set, it exits with code 1
-     and leaves services/workflows unchanged.
-  10. Otherwise, it stops the services that were running before the
-      update.
-  11. Installs every bundled workflow.
-  12. Restarts only the services that were running before, on their
-      previous ports.
-
-Options:
-  --force    Continue update despite active runs (step 9). Also forces
-             rebuild/reinstall even without source changes (step 5).
-
-Examples:
-  tamandua update             # Pull, rebuild, reinstall (blocks if active runs exist)
-  tamandua update --force     # Force update even with active runs`;
+  formiga source-path       # Prints the source checkout path`;
 }
 
 function getGetReadyHelp(): string {
-  return `tamandua get-ready — Install all bundled workflows from the source checkout
+  return `formiga get-ready — Install all bundled workflows from the source checkout
 
-Usage: tamandua get-ready
+Usage: formiga get-ready
 
-tamandua get-ready sets up Tamandua by installing every bundled workflow and
-establishing the CLI symlink so tamandua is available on your PATH.
+formiga get-ready sets up Formiga by installing every bundled workflow.
 
 In order, it does this:
 
   1. Lists all bundled workflows available in the source checkout.
   2. Installs each workflow: fetches workflow files, loads the YAML spec,
      provisions agent workspaces (AGENTS.md, IDENTITY.md, SOUL.md), and
-     registers agents in ~/.tamandua/agents.json.
-  3. Creates the CLI symlink at ~/.local/bin/tamandua (or updates it if
-     it already exists).
-  4. Reports whether the dashboard daemon is already running.
-  5. If the dashboard is not running, starts it on the default port
+     registers agents in ~/.formiga/agents.json.
+  3. Reports whether the dashboard daemon is already running.
+  4. If the dashboard is not running, starts it on the default port
      (3334) so you can monitor workflow runs.
-  6. Reports whether the MCP server is running.
 
 Examples:
-  tamandua get-ready            # Install all bundled workflows and start dashboard
-  tamandua workflow install <name>  # Install a single workflow by name`;
+  formiga get-ready            # Install all bundled workflows and start dashboard
+  formiga workflow install <name>  # Install a single workflow by name`;
 }
 
 function getUninstallHelp(): string {
-  return `tamandua uninstall — Fully remove Tamandua workflows, agents, and services
+  return `formiga uninstall — Fully remove Formiga workflows, agents, and services
 
-Usage: tamandua uninstall [--force]
+Usage: formiga uninstall [--force]
 
-tamandua uninstall stops all Tamandua services and removes every installed
+formiga uninstall stops all Formiga services and removes every installed
 workflow, including agent workspaces, agent registrations, and cron jobs.
 
 In order, it does this:
@@ -440,43 +363,41 @@ In order, it does this:
   2. If active runs exist and --force is not set, lists them and exits
      with code 1.
   3. Stops the dashboard daemon if it is running.
-  4. Stops the standalone MCP server if it is running.
-  5. Uninstalls every workflow: removes workflow directories, agent
-     workspaces, agent entries from ~/.tamandua/agents.json, and cron
-     jobs. Stops and removes any managed git worktrees associated with
-     completed runs.
+  4. Uninstalls every workflow: removes workflow directories, agent
+     workspaces, agent entries from ~/.formiga/agents.json, and cron
+     jobs.
 
 Options:
   --force    Skip the active-runs check and uninstall anyway.
 
 Examples:
-  tamandua uninstall          # Full uninstall (refuses if active runs exist)
-  tamandua uninstall --force  # Force uninstall despite active runs
-  tamandua workflow uninstall <name>  # Uninstall a single workflow by name
-  tamandua workflow uninstall --all   # Uninstall all workflows only (no service stops)`;
+  formiga uninstall          # Full uninstall (refuses if active runs exist)
+  formiga uninstall --force  # Force uninstall despite active runs
+  formiga workflow uninstall <name>  # Uninstall a single workflow by name
+  formiga workflow uninstall --all   # Uninstall all workflows only (no service stops)`;
 }
 
 function getStatusHelp(): string {
-  return `tamandua status — Show detailed Tamandua system status
+  return `formiga status — Show detailed Formiga system status
 
-Usage: tamandua status
+Usage: formiga status
 
-Displays a comprehensive status overview of the Tamandua system, including:
+Displays a comprehensive status overview of the Formiga system, including:
 
-  Services — Dashboard, MCP, and control-plane status (up/down, PID, port)
-  Tamandua Info — Source path, skill path, version, and source tree SHA256
+  Services — Dashboard and control-plane status (up/down, PID, port)
+  Formiga Info — Source path, skill path, version, and source tree SHA256
   Workflow Runs — Summary of all runs (running, paused, done, failed)
-  Running Processes — Active pi/hermes harness processes spawned by tamandua
+  Running Processes — Active pi/hermes harness processes spawned by formiga
 
 Examples:
-  tamandua status             # Full system status overview
-  tamandua status --help      # This help text`;
+  formiga status             # Full system status overview
+  formiga status --help      # This help text`;
 }
 
 function getStepPeekHelp(): string {
-  return `tamandua step peek — Check for pending work for an agent
+  return `formiga step peek — Check for pending work for an agent
 
-Usage: tamandua step peek <agent-id> --run-id <run-id>
+Usage: formiga step peek <agent-id> --run-id <run-id>
 
 step peek checks whether an agent has pending (waiting or pending) work in the
 specified run. It is used by the agent scheduler polling loop to decide whether
@@ -490,13 +411,13 @@ The --run-id flag is required so concurrent runs of the same workflow/agent
 cannot cross-claim each other's steps.
 
 Examples:
-  tamandua step peek feature-dev-merge_developer --run-id abc12345`;
+  formiga step peek feature-dev-merge_developer --run-id abc12345`;
 }
 
 function getStepClaimHelp(): string {
-  return `tamandua step claim — Atomically claim a pending step
+  return `formiga step claim — Atomically claim a pending step
 
-Usage: tamandua step claim <agent-id> --run-id <run-id>
+Usage: formiga step claim <agent-id> --run-id <run-id>
 
 step claim claims the next pending step for the given agent within a run.
 The claim is atomic — if two agents claim simultaneously, only one will
@@ -510,16 +431,16 @@ The --run-id flag is required so concurrent runs of the same workflow/agent
 cannot cross-claim each other's steps.
 
 Examples:
-  tamandua step claim feature-dev-merge_developer --run-id abc12345`;
+  formiga step claim feature-dev-merge_developer --run-id abc12345`;
 }
 
 function getStepCompleteHelp(): string {
-  return `tamandua step complete — Mark a step as done
+  return `formiga step complete — Mark a step as done
 
-Usage: tamandua step complete <step-id>
+Usage: formiga step complete <step-id>
    or: echo "STATUS: done
   CHANGES: what changed
-  TESTS: what was tested" | tamandua step complete <step-id>
+  TESTS: what was tested" | formiga step complete <step-id>
 
 step complete marks a claimed step as completed. It reads the agent's output
 from either stdin or positional arguments.
@@ -536,17 +457,17 @@ When using positional arguments, the entire output is passed as a single
 string. When using stdin, the output is read until EOF.
 
 Examples:
-  tamandua step complete 123e4567-e89b-12d3-a456-426614174000
+  formiga step complete 123e4567-e89b-12d3-a456-426614174000
   echo "STATUS: done\nCHANGES: Added feature X\nTESTS: Wrote unit tests" | \\
-    tamandua step complete 123e4567-e89b-12d3-a456-426614174000`;
+    formiga step complete 123e4567-e89b-12d3-a456-426614174000`;
 }
 
 function getStepFailHelp(): string {
-  return `tamandua step fail — Mark a step as failed
+  return `formiga step fail — Mark a step as failed
 
-Usage: tamandua step fail <step-id> [<error message>]
+Usage: formiga step fail <step-id> [<error message>]
 
-step fail marks a step as failed with a reason. When a step fails, Tamandua
+step fail marks a step as failed with a reason. When a step fails, Formiga
 automatically triggers retry logic — the step is reset to pending and will
 be re-claimed by the agent on the next polling cycle. The error message
 is logged for diagnostics.
@@ -557,14 +478,14 @@ Retry behavior: Steps that exceed the maximum retry count (configured in
 the workflow spec) are escalated rather than retried.
 
 Examples:
-  tamandua step fail 123e4567-e89b-12d3-a456-426614174000
-  tamandua step fail 123e4567-e89b-12d3-a456-426614174000 "Network timeout"`;
+  formiga step fail 123e4567-e89b-12d3-a456-426614174000
+  formiga step fail 123e4567-e89b-12d3-a456-426614174000 "Network timeout"`;
 }
 
 function getStepStoriesHelp(): string {
-  return `tamandua step stories — List all stories and their status for a run
+  return `formiga step stories — List all stories and their status for a run
 
-Usage: tamandua step stories <run-id>
+Usage: formiga step stories <run-id>
 
 step stories displays every story in the current story plan for a run,
 showing their status (pending, running, done, failed), title, and any
@@ -576,120 +497,41 @@ Output format:
   US-003   [pending] Upcoming story (retry 1)
 
 Examples:
-  tamandua step stories abc12345`;
-}
-
-function getMcpHelp(): string {
-  return `tamandua mcp — Manage the standalone MCP HTTP server
-
-Usage: tamandua mcp <start|stop|status>
-
-The MCP (Model Context Protocol) server provides a remote MCP endpoint for
-agent tool access. It runs as a standalone HTTP server, independent of the
-dashboard daemon.
-
-Default port: 3338
-Default endpoint: http://localhost:3338/mcp
-
-Subcommands:
-  start  [--port N]   Start the MCP server on the given port
-  stop                Stop the MCP server
-  status              Show whether the MCP server is running (PID, port, endpoint)
-
-Start will refuse if the MCP server is already running, printing its current
-status instead.
-
-Examples:
-  tamandua mcp start                   # Start on default port 3338
-  tamandua mcp start --port 5555       # Start on a custom port
-  tamandua mcp stop                    # Stop the MCP server
-  tamandua mcp status                  # Check if the MCP server is running`;
-}
-
-function getMcpStartHelp(): string {
-  return `tamandua mcp start — Start the standalone MCP HTTP server
-
-Usage: tamandua mcp start [--port N]
-
-Starts the MCP server on the specified port (default: 3338). The server
-provides a remote MCP endpoint at http://localhost:<port>/mcp.
-
-If the MCP server is already running, the command prints the current
-PID, port, and endpoint instead of starting a duplicate.
-
-Options:
-  --port N    Port to listen on (default: 3338)
-
-Examples:
-  tamandua mcp start                   # Start on default port 3338
-  tamandua mcp start --port 5555       # Start on port 5555`;
-}
-
-function getMcpStopHelp(): string {
-  return `tamandua mcp stop — Stop the standalone MCP HTTP server
-
-Usage: tamandua mcp stop
-
-Stops the MCP server if it is running. If the server is not running, the
-command prints a message and exits successfully — it is safe to run even
-when no MCP server is active.
-
-Examples:
-  tamandua mcp stop`;
-}
-
-function getMcpStatusHelp(): string {
-  return `tamandua mcp status — Show MCP server status
-
-Usage: tamandua mcp status
-
-Reports whether the MCP server is running. When running, it prints the
-PID, port, and full endpoint URL. When not running, it prints the default
-endpoint that would be used on start.
-
-Examples:
-  tamandua mcp status`;
+  formiga step stories abc12345`;
 }
 
 function getDashboardHelp(): string {
-  return `tamandua dashboard — Manage the web dashboard daemon
+  return `formiga dashboard — Manage the web dashboard daemon
 
-Usage: tamandua dashboard <start|stop|status>
+Usage: formiga dashboard <start|stop|status>
 
-The dashboard daemon runs the Tamandua web dashboard, a local HTTP server
-for monitoring workflow runs, logs, and agent activity. It also shows the
-status of the standalone MCP server.
+The dashboard daemon runs the Formiga web dashboard, a local HTTP server
+for monitoring workflow runs, logs, and agent activity.
 
 Default port: 3334
 
 Subcommands:
   start  [--port N]   Start the dashboard daemon on the given port
   stop                Stop the dashboard daemon
-  status              Show dashboard status and MCP server status
-
-Dashboard status output includes both dashboard and MCP server information
-(PID, port, endpoint for each).
+  status              Show dashboard status
 
 Start will refuse if the dashboard is already running.
 
 Examples:
-  tamandua dashboard start             # Start on default port 3334
-  tamandua dashboard start --port 8080 # Start on port 8080
-  tamandua dashboard stop              # Stop the dashboard
-  tamandua dashboard status            # Check dashboard and MCP status`;
+  formiga dashboard start             # Start on default port 3334
+  formiga dashboard start --port 8080 # Start on port 8080
+  formiga dashboard stop              # Stop the dashboard
+  formiga dashboard status            # Check dashboard status`;
 }
 
 function getDashboardStartHelp(): string {
-  return `tamandua dashboard start — Start the web dashboard daemon
+  return `formiga dashboard start — Start the web dashboard daemon
 
-Usage: tamandua dashboard start [--port N]
+Usage: formiga dashboard start [--port N]
 
 Starts the dashboard daemon on the specified port (default: 3334). The
 dashboard provides an HTTP interface at http://localhost:<port> for
 monitoring workflow runs, logs, and agent activity.
-
-The daemon also co-manages the standalone MCP server; the dashboard
-status command will report both services.
 
 If the dashboard is already running, the command prints the current
 status instead of starting a duplicate.
@@ -698,40 +540,38 @@ Options:
   --port N    Port to listen on (default: 3334)
 
 Examples:
-  tamandua dashboard start             # Start on default port 3334
-  tamandua dashboard start --port 8080 # Start on port 8080`;
+  formiga dashboard start             # Start on default port 3334
+  formiga dashboard start --port 8080 # Start on port 8080`;
 }
 
 function getDashboardStopHelp(): string {
-  return `tamandua dashboard stop — Stop the web dashboard daemon
+  return `formiga dashboard stop — Stop the web dashboard daemon
 
-Usage: tamandua dashboard stop
+Usage: formiga dashboard stop
 
 Stops the dashboard daemon if it is running. If the daemon is not running,
 the command prints a message and exits successfully.
 
 Examples:
-  tamandua dashboard stop`;
+  formiga dashboard stop`;
 }
 
 function getDashboardStatusHelp(): string {
-  return `tamandua dashboard status — Show dashboard and MCP server status
+  return `formiga dashboard status — Show dashboard status
 
-Usage: tamandua dashboard status
+Usage: formiga dashboard status
 
-Reports whether the dashboard daemon is running (PID, port) and also
-shows the status of the MCP server. When either service is running, it
-prints PID, port, and endpoint URL. When not running, it prints the
-default endpoint that would be used on start.
+Reports whether the dashboard daemon is running (PID, port, endpoint URL).
+When not running, it prints the default endpoint that would be used on start.
 
 Examples:
-  tamandua dashboard status`;
+  formiga dashboard status`;
 }
 
 function getControlPlaneHelp(): string {
-  return `tamandua control-plane — Manage the control plane server
+  return `formiga control-plane — Manage the control plane server
 
-Usage: tamandua control-plane <start|stop|status>
+Usage: formiga control-plane <start|stop|status>
 
 The control plane server provides a scheduling API for run-scoped agent
 polling. The dashboard daemon communicates with the control plane to manage
@@ -748,16 +588,16 @@ Start will refuse if the control plane is already running, printing its
 current status instead.
 
 Examples:
-  tamandua control-plane start               # Start on default port 3339
-  tamandua control-plane start --port 4444   # Start on port 4444
-  tamandua control-plane stop                # Stop the control plane
-  tamandua control-plane status              # Check control plane status`;
+  formiga control-plane start               # Start on default port 3339
+  formiga control-plane start --port 4444   # Start on port 4444
+  formiga control-plane stop                # Stop the control plane
+  formiga control-plane status              # Check control plane status`;
 }
 
 function getControlPlaneStartHelp(): string {
-  return `tamandua control-plane start — Start the control plane server
+  return `formiga control-plane start — Start the control plane server
 
-Usage: tamandua control-plane start [--port N]
+Usage: formiga control-plane start [--port N]
 
 Starts the control plane server on the specified port (default: 3339).
 The control plane provides run-scoped scheduling endpoints that the
@@ -770,28 +610,28 @@ Options:
   --port N    Port to listen on (default: 3339)
 
 Examples:
-  tamandua control-plane start              # Start on default port 3339
-  tamandua control-plane start --port 4444  # Start on port 4444`;
+  formiga control-plane start              # Start on default port 3339
+  formiga control-plane start --port 4444  # Start on port 4444`;
 }
 
 function getControlPlaneStopHelp(): string {
-  return `tamandua control-plane stop — Stop the control plane server
+  return `formiga control-plane stop — Stop the control plane server
 
-Usage: tamandua control-plane stop
+Usage: formiga control-plane stop
 
 Stops the control plane server if it is running. If the server is not
 running, the command prints a message and exits successfully.
 
 Examples:
-  tamandua control-plane stop`;
+  formiga control-plane stop`;
 }
 
 function getLogsHelp(): string {
-  return `tamandua logs — Show recent activity events
+  return `formiga logs — Show recent activity events
 
-Usage: tamandua logs [<selector>]
+Usage: formiga logs [<selector>]
 
-Shows the most recent Tamandua activity events (runs, steps, agent activity).
+Shows the most recent Formiga activity events (runs, steps, agent activity).
 The optional selector determines which events to show.
 
 Selector syntax:
@@ -805,156 +645,70 @@ disk (events can be written before the run row is committed), the logs output
 will still show those events.
 
 Examples:
-  tamandua logs                   # Show last 50 global events
-  tamandua logs 20                # Show last 20 global events
-  tamandua logs abc123            # Show events for run starting with abc123
-  tamandua logs #3                # Show events for run #3`;
+  formiga logs                   # Show last 50 global events
+  formiga logs 20                # Show last 20 global events
+  formiga logs abc123            # Show events for run starting with abc123
+  formiga logs #3                # Show events for run #3`;
 }
 
 function getLogsTailHelp(): string {
-  return `tamandua logs-tail — Follow activity events in real-time
+  return `formiga logs-tail — Follow activity events in real-time
 
-Usage: tamandua logs-tail [<selector>]
+Usage: formiga logs-tail [<selector>]
 
-Follows Tamandua activity events in real-time, polling for new events and
+Follows Formiga activity events in real-time, polling for new events and
 printing them as they arrive. Press Ctrl-C (SIGINT) to stop following.
 
-The selector uses the same syntax as tamandua logs:
+The selector uses the same syntax as formiga logs:
   <run-id>      Follow events for a specific run (prefix match supported)
   #<N>          Follow events for run number N
   <N>           Follow global events, showing the last N first
   (no arg)      Follow global events, showing the last 50 first
 
 The polling interval defaults to 1000ms and can be configured via the
-TAMANDUA_LOGS_TAIL_POLL_MS environment variable (minimum 10ms).
+FORMIGA_LOGS_TAIL_POLL_MS environment variable (minimum 10ms).
 
 Examples:
-  tamandua logs-tail              # Follow global events in real-time
-  tamandua logs-tail 20           # Follow global events, starting with last 20
-  tamandua logs-tail abc123       # Follow events for run starting with abc123
-  tamandua logs-tail #3           # Follow events for run #3`;
+  formiga logs-tail              # Follow global events in real-time
+  formiga logs-tail 20           # Follow global events, starting with last 20
+  formiga logs-tail abc123       # Follow events for run starting with abc123
+  formiga logs-tail #3           # Follow events for run #3`;
 }
 
 function getControlPlaneStatusHelp(): string {
-  return `tamandua control-plane status — Show control plane server status
+  return `formiga control-plane status — Show control plane server status
 
-Usage: tamandua control-plane status
+Usage: formiga control-plane status
 
 Reports whether the control plane server is running. When running, it
 prints the PID, port, and full endpoint URL. When not running, it prints
 the default endpoint that would be used on start.
 
 Examples:
-  tamandua control-plane status`;
-}
-
-function getWorktreeListHelp(): string {
-  return `tamandua worktree list — List all managed worktrees
-
-Usage: tamandua worktree list
-
-Lists every managed git worktree created by Tamandua workflow runs.
-Each entry shows the run ID, status, cleanup policy, and filesystem path.
-
-Output columns:
-  Status    Worktree status (ready, removed, etc.)
-  Run ID    8-char run identifier prefix
-  Cleanup   When the worktree will be cleaned up (e.g. on-completion)
-  Path      Absolute filesystem path to the worktree
-  Origin    Source repository and ref (below the main line)
-
-Examples:
-  tamandua worktree list`;
-}
-
-function getWorktreeStatusHelp(): string {
-  return `tamandua worktree status — Show detailed worktree info for a run
-
-Usage: tamandua worktree status <run-id>
-
-Shows detailed information about the managed git worktree associated with
-a specific workflow run. Accepts a run-id prefix.
-
-Output includes:
-  Run          Run ID prefix
-  Status       Worktree status (ready, removed, etc.)
-  Origin repo  Source repository the worktree was cloned from
-  Origin ref   Git ref used to create the worktree (branch, tag, SHA)
-  Origin SHA   Full commit SHA the worktree is at
-  Orig branch  Original branch the run was started from
-  Worktree     Absolute filesystem path to the worktree
-  Cleanup      When the worktree will be cleaned up
-
-Examples:
-  tamandua worktree status abc12345`;
-}
-
-function getWorktreeRemoveHelp(): string {
-  return `tamandua worktree remove — Remove a managed worktree
-
-Usage: tamandua worktree remove <run-id> [--force]
-
-Removes a managed git worktree and its associated tracking entry.
-Accepts a run-id prefix to identify the worktree.
-
-By default, removal is only allowed for worktrees with a non-ready status
-(e.g. removed or after cleanup). To remove a worktree that is still active
-or in ready status, use --force.
-
-Options:
-  --force    Allow removal of worktrees in any status (not just non-ready).
-
-Examples:
-  tamandua worktree remove abc12345
-  tamandua worktree remove abc12345 --force`;
-}
-
-function getWorktreePruneHelp(): string {
-  return `tamandua worktree prune — Remove old completed worktrees
-
-Usage: tamandua worktree prune --completed --older-than <duration>
-
-Prunes (removes) managed git worktrees that are associated with completed
-or canceled workflow runs and are older than the specified duration.
-This is a cleanup command that helps reclaim disk space from old worktrees.
-
-Options (both required):
-  --completed        Only prune worktrees for completed or canceled runs.
-  --older-than <d>   Only prune worktrees older than the given duration.
-
-Duration format:
-  Duration is specified as a number followed by a unit letter:
-    d — days   (e.g. 7d  = 7 days)
-    h — hours  (e.g. 24h = 24 hours)
-    m — minutes(e.g. 30m = 30 minutes)
-
-Examples:
-  tamandua worktree prune --completed --older-than 7d
-  tamandua worktree prune --completed --older-than 24h
-  tamandua worktree prune --completed --older-than 30m`;
+  formiga control-plane status`;
 }
 
 function getWorkflowListHelp(): string {
-  return `tamandua workflow list — List available bundled workflows with descriptions
+  return `formiga workflow list — List available bundled workflows with descriptions
 
-Usage: tamandua workflow list [--json]
+Usage: formiga workflow list [--json]
 
 Lists all bundled workflows that are available for installation from the
 source checkout, showing a one-line description for each. These are the
-workflows defined in the workflows/ directory of the Tamandua source tree.
+workflows defined in the workflows/ directory of the Formiga source tree.
 
 Options:
   --json    Output a JSON array of {id, name, description} for programmatic consumption
 
 Examples:
-  tamandua workflow list
-  tamandua workflow list --json`;
+  formiga workflow list
+  formiga workflow list --json`;
 }
 
 function getWorkflowRunsHelp(): string {
-  return `tamandua workflow runs — List all workflow runs
+  return `formiga workflow runs — List all workflow runs
 
-Usage: tamandua workflow runs
+Usage: formiga workflow runs
 
 Lists every workflow run in the database with status, workflow ID, token
 usage, and a preview of the task description.
@@ -967,30 +721,30 @@ Output columns:
   Task      Task description preview (truncated at 50 characters)
 
 Examples:
-  tamandua workflow runs`;
+  formiga workflow runs`;
 }
 
 function getWorkflowInstallHelp(): string {
-  return `tamandua workflow install — Install a specific workflow by name
+  return `formiga workflow install — Install a specific workflow by name
 
-Usage: tamandua workflow install <name>
+Usage: formiga workflow install <name>
 
 Installs a single bundled workflow by its directory name. This fetches
 the workflow YAML spec, provisions agent workspaces (AGENTS.md, IDENTITY.md,
 SOUL.md, and any bundled skills), and registers agents in the agent config.
 
 After installation, the workflow is ready to run with:
-  tamandua workflow run <name> "task description"
+  formiga workflow run <name> "task description"
 
 Examples:
-  tamandua workflow install feature-dev-merge`;
+  formiga workflow install feature-dev-merge`;
 }
 
 function getWorkflowUninstallHelp(): string {
-  return `tamandua workflow uninstall — Uninstall one or all workflows
+  return `formiga workflow uninstall — Uninstall one or all workflows
 
-Usage: tamandua workflow uninstall <name> [--force]
-       tamandua workflow uninstall --all [--force]
+Usage: formiga workflow uninstall <name> [--force]
+       formiga workflow uninstall --all [--force]
 
 Uninstalls a workflow by name, or all workflows when --all is used.
 
@@ -1002,16 +756,16 @@ Options:
   --force    Skip the active-runs check and uninstall anyway
 
 Examples:
-  tamandua workflow uninstall feature-dev-merge
-  tamandua workflow uninstall feature-dev-merge --force
-  tamandua workflow uninstall --all
-  tamandua workflow uninstall --all --force`;
+  formiga workflow uninstall feature-dev-merge
+  formiga workflow uninstall feature-dev-merge --force
+  formiga workflow uninstall --all
+  formiga workflow uninstall --all --force`;
 }
 
 function getWorkflowRunHelp(): string {
-  return `tamandua workflow run — Start a new workflow run
+  return `formiga workflow run — Start a new workflow run
 
-Usage: tamandua workflow run <name> <task> [options]
+Usage: formiga workflow run <name> <task> [options]
 
 Starts a new run of the given workflow with the specified task description.
 The task is passed to the workflow's agents as their objective.
@@ -1023,12 +777,6 @@ Options:
   --working-directory-for-harness <dir>
       Set the working directory for the agent harness during this run.
       Agents will operate within this directory.
-  --worktree-origin-repository <dir>
-      Repository to clone when creating a worktree for this run.
-      Defaults to the current repository.
-  --worktree-origin-ref <ref>
-      Git ref (branch, tag, or SHA) to check out in the worktree.
-      Defaults to the current branch.
   --pi-as-harness
       Use pi as the agent harness (this is the default).
       Mutually exclusive with --hermes-as-harness.
@@ -1037,26 +785,24 @@ Options:
       Mutually exclusive with --pi-as-harness.
   --no-relaunch-upon-rugpull
       Disable automatic replacement-run after a rugpull (base branch move)
-      is detected on a failed merge/merge-worktree run.
+      is detected on a failed merge run.
 
 Examples:
-  tamandua workflow run feature-dev-merge "Add dark mode toggle"
-  tamandua workflow run feature-dev-merge "Refactor DB layer" \\
+  formiga workflow run feature-dev-merge "Add dark mode toggle"
+  formiga workflow run feature-dev-merge "Refactor DB layer" \\
       --no-hurry-please-save-tokens-mode
-  tamandua workflow run feature-dev-merge "Build login page" \\
-      --working-directory-for-harness /path/to/project
-  tamandua workflow run feature-dev-merge "Fix bug #42" \\
-      --worktree-origin-repository /repos/myapp --worktree-origin-ref develop`;
+  formiga workflow run feature-dev-merge "Build login page" \\
+      --working-directory-for-harness /path/to/project`;
 }
 
 function getWorkflowStatusHelp(): string {
-  return `tamandua workflow status — Show detailed run status with step listing
+  return `formiga workflow status — Show detailed run status with step listing
 
-Usage: tamandua workflow status <query>
+Usage: formiga workflow status <query>
 
 Shows detailed information about a workflow run, including status, token
-usage, workspace mode (for worktree runs), and a list of every step with
-its current status and assigned agent role.
+usage, and a list of every step with its current status and assigned agent
+role.
 
 The query accepts a run-id prefix for matching.
 
@@ -1066,7 +812,6 @@ Output includes:
   Task         Full task description
   Status       Current run status
   Tokens       Total tokens spent
-  Workspace    Workspace mode (only shown for worktree runs)
   Steps        Per-step listing with step ID, status icon, and agent role
 
 Step status indicators:
@@ -1076,29 +821,29 @@ Step status indicators:
   [pending]    Step waiting to be claimed
 
 Examples:
-  tamandua workflow status abc12345`;
+  formiga workflow status abc12345`;
 }
 
 function getWorkflowAutoresearchHelp(): string {
-  return `tamandua workflow autoresearch — Show AutoResearch progress for a workflow run
+  return `formiga workflow autoresearch — Show AutoResearch progress for a workflow run
 
-Usage: tamandua workflow autoresearch <run-id>
+Usage: formiga workflow autoresearch <run-id>
 
 Resolves the run's harness working directory, reads its project-local
 autoresearch.config.json and autoresearch.jsonl files, then prints the
 current metric summary and recent experiment timeline.
 
 Examples:
-  tamandua workflow autoresearch abc12345`;
+  formiga workflow autoresearch abc12345`;
 }
 
 function getWorkflowDeleteHelp(): string {
-  return `tamandua workflow delete — Permanently delete a workflow run
+  return `formiga workflow delete — Permanently delete a workflow run
 
-Usage: tamandua workflow delete <run-id> [--force]
+Usage: formiga workflow delete <run-id> [--force]
 
-Permanently deletes a workflow run and all associated data, including steps,
-stories, and managed worktrees. The run-id accepts prefix matching.
+Permanently deletes a workflow run and all associated data, including steps
+and stories. The run-id accepts prefix matching.
 
 By default, active runs (running or paused) cannot be deleted — they must
 be canceled first. Use --force to cancel and delete an active run in one step.
@@ -1107,14 +852,14 @@ Options:
   --force    Cancel and delete even if the run is currently running or paused.
 
 Examples:
-  tamandua workflow delete abc12345
-  tamandua workflow delete abc12345 --force`;
+  formiga workflow delete abc12345
+  formiga workflow delete abc12345 --force`;
 }
 
 function getWorkflowStopHelp(): string {
-  return `tamandua workflow stop — Cancel a running workflow
+  return `formiga workflow stop — Cancel a running workflow
 
-Usage: tamandua workflow stop <run-id>
+Usage: formiga workflow stop <run-id>
 
 Cancels a running workflow by setting its status to canceled. The run-id
 accepts prefix matching.
@@ -1123,34 +868,34 @@ Active agents associated with the run will see the cancellation on their
 next polling cycle.
 
 Examples:
-  tamandua workflow stop abc12345`;
+  formiga workflow stop abc12345`;
 }
 
 function getWorkflowPauseHelp(): string {
-  return `tamandua workflow pause — Pause a running workflow
+  return `formiga workflow pause — Pause a running workflow
 
-Usage: tamandua workflow pause <run-id> [--drain]
+Usage: formiga workflow pause <run-id> [--drain]
 
 Pauses a running workflow via the dashboard daemon. Only runs with status
 "running" can be paused. The daemon must be running for this command to work
-(start it with \`tamandua dashboard start\`).
+(start it with \`formiga dashboard start\`).
 
 When paused, agents stop polling and active work sessions are interrupted.
-Paused runs can be resumed later with \`tamandua workflow resume\`.
+Paused runs can be resumed later with \`formiga workflow resume\`.
 
 Options:
   --drain    Let in-flight agent sessions complete before pausing, rather
              than interrupting them immediately.
 
 Examples:
-  tamandua workflow pause abc12345
-  tamandua workflow pause abc12345 --drain`;
+  formiga workflow pause abc12345
+  formiga workflow pause abc12345 --drain`;
 }
 
 function getWorkflowResumeHelp(): string {
-  return `tamandua workflow resume — Resume a paused or failed workflow run
+  return `formiga workflow resume — Resume a paused or failed workflow run
 
-Usage: tamandua workflow resume <run-id>
+Usage: formiga workflow resume <run-id>
 
 Resumes a workflow run that is paused or has failed. The run-id accepts
 prefix matching.
@@ -1165,14 +910,14 @@ Behavior by status:
             need to be resumed.
 
 Examples:
-  tamandua workflow resume abc12345       # Resume a paused run
-  tamandua workflow resume abc12345       # Re-start a failed run`;
+  formiga workflow resume abc12345       # Resume a paused run
+  formiga workflow resume abc12345       # Re-start a failed run`;
 }
 
 function getWorkflowPauseAllHelp(): string {
-  return `tamandua workflow pause-all — Pause all running workflows
+  return `formiga workflow pause-all — Pause all running workflows
 
-Usage: tamandua workflow pause-all [--drain]
+Usage: formiga workflow pause-all [--drain]
 
 Pauses every workflow run currently in "running" status. Uses the dashboard
 daemon to pause each run. If the daemon is unreachable for a specific run,
@@ -1183,32 +928,32 @@ Options:
              than interrupting them immediately. Applies to all runs.
 
 Examples:
-  tamandua workflow pause-all
-  tamandua workflow pause-all --drain`;
+  formiga workflow pause-all
+  formiga workflow pause-all --drain`;
 }
 
 function getWorkflowResumeAllHelp(): string {
-  return `tamandua workflow resume-all — Resume all paused workflows
+  return `formiga workflow resume-all — Resume all paused workflows
 
-Usage: tamandua workflow resume-all
+Usage: formiga workflow resume-all
 
 Resumes every workflow run currently in "paused" status. Uses the dashboard
 daemon to resume agent polling for each run. If the daemon is unreachable
 for a specific run, a warning is printed and that run is skipped.
 
 Only paused runs are resumed; failed runs are not resumed by this command
-(use \`tamandua workflow resume <run-id>\` for individual failed runs).
+(use \`formiga workflow resume <run-id>\` for individual failed runs).
 
 Examples:
-  tamandua workflow resume-all`;
+  formiga workflow resume-all`;
 }
 
 function getWorkflowGroupHelp(): string {
-  return `tamandua workflow — Manage workflows and runs
+  return `formiga workflow — Manage workflows and runs
 
-Usage: tamandua workflow <list|runs|install|uninstall|run|status|autoresearch|stop|delete|pause|resume|pause-all|resume-all>
+Usage: formiga workflow <list|runs|install|uninstall|run|status|autoresearch|stop|delete|pause|resume|pause-all|resume-all>
 
-Commands for managing Tamandua workflows and their runs.
+Commands for managing Formiga workflows and their runs.
 
 Subcommands:
   list        List available bundled workflows
@@ -1228,54 +973,32 @@ Subcommands:
   resume-all  Resume all paused workflows
 
 Examples:
-  tamandua workflow list
-  tamandua workflow runs
-  tamandua workflow install feature-dev-merge
-  tamandua workflow run feature-dev-merge "Add a new feature"
-  tamandua workflow status abc12345
-  tamandua workflow autoresearch abc12345
-  tamandua workflow pause abc12345 --drain`;
+  formiga workflow list
+  formiga workflow runs
+  formiga workflow install feature-dev-merge
+  formiga workflow run feature-dev-merge "Add a new feature"
+  formiga workflow status abc12345
+  formiga workflow autoresearch abc12345
+  formiga workflow pause abc12345 --drain`;
 }
 
 function getNudgeHelp(): string {
-  return `tamandua nudge — Wake all scheduled agents for running runs
+  return `formiga nudge — Wake all scheduled agents for running runs
 
-Usage: tamandua nudge
+Usage: formiga nudge
 
 Wakes all scheduled agents for all currently running runs, causing them to
 poll once immediately without waiting for their normal timers. Does not
 resume paused runs or interrupt in-flight agents.
 
 Examples:
-  tamandua nudge            # Nudge all scheduled agents for active runs`;
-}
-
-function getWorktreeGroupHelp(): string {
-  return `tamandua worktree — Manage git worktrees for workflow runs
-
-Usage: tamandua worktree <list|status|remove|prune>
-
-Commands for managing git worktrees that Tamandua creates for workflow
-runs. Worktrees provide isolated working directories so concurrent runs
-never interfere with each other.
-
-Subcommands:
-  list      List all managed worktrees with status, cleanup policy, and paths
-  status    Show detailed info for a specific run's worktree
-  remove    Remove a managed worktree (--force for non-ready statuses)
-  prune     Remove old completed worktrees (requires --completed and --older-than)
-
-Examples:
-  tamandua worktree list
-  tamandua worktree status abc12345
-  tamandua worktree remove abc12345 --force
-  tamandua worktree prune --completed --older-than 7d`;
+  formiga nudge            # Nudge all scheduled agents for active runs`;
 }
 
 function getAutoresearchHelp(): string {
-  return `tamandua autoresearch — Run durable optimization experiment loops
+  return `formiga autoresearch — Run durable optimization experiment loops
 
-Usage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|prune>
+Usage: formiga autoresearch <init|run-experiment|log-experiment|status|next|loop|prune>
 
 AutoResearch stores a project-local session in:
   autoresearch.config.json   Session configuration
@@ -1298,16 +1021,16 @@ Subcommands:
                   an AutoResearch command sequence
 
 Examples:
-  tamandua autoresearch init --goal "reduce validation loss" --metric val_bpb --direction lower --command "uv run train.py"
-  tamandua autoresearch run-experiment
-  tamandua autoresearch log-experiment --status auto --description "try smaller LR" --learned "stable but slower" --next-focus "test warmup"
-  tamandua autoresearch prune --older-than 30d`;
+  formiga autoresearch init --goal "reduce validation loss" --metric val_bpb --direction lower --command "uv run train.py"
+  formiga autoresearch run-experiment
+  formiga autoresearch log-experiment --status auto --description "try smaller LR" --learned "stable but slower" --next-focus "test warmup"
+  formiga autoresearch prune --older-than 30d`;
 }
 
 function getAutoresearchInitHelp(): string {
-  return `tamandua autoresearch init — Create an AutoResearch session
+  return `formiga autoresearch init — Create an AutoResearch session
 
-Usage: tamandua autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd> [options]
+Usage: formiga autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd> [options]
 
 Options:
   --unit <unit>             Metric unit, such as seconds, bpb, auc, or ms
@@ -1317,13 +1040,13 @@ Options:
   --overwrite               Replace existing autoresearch files
 
 Examples:
-  tamandua autoresearch init --goal "speed up tests" --metric total_ms --unit ms --direction lower --command "pnpm test --run"`;
+  formiga autoresearch init --goal "speed up tests" --metric total_ms --unit ms --direction lower --command "pnpm test --run"`;
 }
 
 function getAutoresearchRunExperimentHelp(): string {
-  return `tamandua autoresearch run-experiment — Execute the current experiment
+  return `formiga autoresearch run-experiment — Execute the current experiment
 
-Usage: tamandua autoresearch run-experiment [options]
+Usage: formiga autoresearch run-experiment [options]
 
 Runs the configured command, captures stdout/stderr tails, parses the metric,
 runs optional checks, and appends a run_result entry to autoresearch.jsonl.
@@ -1336,14 +1059,14 @@ Options:
   --timeout-seconds <n>     Command timeout (default: 1800)
 
 Examples:
-  tamandua autoresearch run-experiment
-  tamandua autoresearch run-experiment --metric-regex "val_bpb=([0-9.]+)"`;
+  formiga autoresearch run-experiment
+  formiga autoresearch run-experiment --metric-regex "val_bpb=([0-9.]+)"`;
 }
 
 function getAutoresearchLogExperimentHelp(): string {
-  return `tamandua autoresearch log-experiment — Record experiment learning and decision
+  return `formiga autoresearch log-experiment — Record experiment learning and decision
 
-Usage: tamandua autoresearch log-experiment --description <text> [options]
+Usage: formiga autoresearch log-experiment --description <text> [options]
 
 By default --status auto classifies the latest measured result as baseline,
 keep, discard, crash, or checks_failed by comparing it with prior accepted
@@ -1361,37 +1084,37 @@ Options:
   --revert-discard          Revert non-autoresearch tracked files on discard
 
 Examples:
-  tamandua autoresearch log-experiment --status auto --description "cache parser" --learned "faster but flaky" --next-focus "fix invalidation"`;
+  formiga autoresearch log-experiment --status auto --description "cache parser" --learned "faster but flaky" --next-focus "fix invalidation"`;
 }
 
 function getAutoresearchStatusHelp(): string {
-  return `tamandua autoresearch status — Summarize the experiment loop
+  return `formiga autoresearch status — Summarize the experiment loop
 
-Usage: tamandua autoresearch status [--cwd <dir>]
+Usage: formiga autoresearch status [--cwd <dir>]
 
 Shows baseline, best result, keep/discard counts, failure counts, and the
 ratchet prompt for the next experiment.
 
 Examples:
-  tamandua autoresearch status`;
+  formiga autoresearch status`;
 }
 
 function getAutoresearchNextHelp(): string {
-  return `tamandua autoresearch next — Print the next experiment prompt
+  return `formiga autoresearch next — Print the next experiment prompt
 
-Usage: tamandua autoresearch next [--cwd <dir>]
+Usage: formiga autoresearch next [--cwd <dir>]
 
 Prints the evidence-driven prompt that agents should read before proposing
 the next experiment. This is the ratchet: use prior results before editing.
 
 Examples:
-  tamandua autoresearch next`;
+  formiga autoresearch next`;
 }
 
 function getAutoresearchLoopHelp(): string {
-  return `tamandua autoresearch loop — Run a bounded experiment loop
+  return `formiga autoresearch loop — Run a bounded experiment loop
 
-Usage: tamandua autoresearch loop [options]
+Usage: formiga autoresearch loop [options]
 
 Runs a bounded AutoResearch experiment loop. An action mode is REQUIRED —
 the loop will fail without one.
@@ -1429,16 +1152,16 @@ Cancellation (Ctrl-C / SIGINT) prints the last completed iteration info
 and leaves autoresearch.jsonl in a consistent state.
 
 Examples:
-  tamandua autoresearch loop --measure-only --max-iterations 10
-  tamandua autoresearch loop --prompt --target-metric 0.5 --max-iterations 30
-  tamandua autoresearch loop --prompt --max-consecutive-failures 5
-  tamandua autoresearch loop --prompt --timeout 10m --max-iterations 10`;
+  formiga autoresearch loop --measure-only --max-iterations 10
+  formiga autoresearch loop --prompt --target-metric 0.5 --max-iterations 30
+  formiga autoresearch loop --prompt --max-consecutive-failures 5
+  formiga autoresearch loop --prompt --timeout 10m --max-iterations 10`;
 }
 
 function getAutoresearchRunLoopIterationHelp(): string {
-  return `tamandua autoresearch run-loop-iteration — Run a transactional experiment iteration
+  return `formiga autoresearch run-loop-iteration — Run a transactional experiment iteration
 
-Usage: tamandua autoresearch run-loop-iteration [options]
+Usage: formiga autoresearch run-loop-iteration [options]
 
 Runs a single transactional AutoResearch experiment iteration. The iteration
 follows this lifecycle:
@@ -1465,15 +1188,15 @@ Output:
   committed/reverted flags, and the full log entry.
 
 Examples:
-  tamandua autoresearch run-loop-iteration --prompt "try smaller LR" --iteration 1
-  tamandua autoresearch run-loop-iteration --command "uv run train.py" --iteration 5
-  tamandua autoresearch run-loop-iteration --prompt test --iteration 1`;
+  formiga autoresearch run-loop-iteration --prompt "try smaller LR" --iteration 1
+  formiga autoresearch run-loop-iteration --command "uv run train.py" --iteration 5
+  formiga autoresearch run-loop-iteration --prompt test --iteration 1`;
 }
 
 function getAutoresearchPruneHelp(): string {
-  return `tamandua autoresearch prune — Remove stale AutoResearch registry rows
+  return `formiga autoresearch prune — Remove stale AutoResearch registry rows
 
-Usage: tamandua autoresearch prune --older-than <duration> [--missing] [--dry-run]
+Usage: formiga autoresearch prune --older-than <duration> [--missing] [--dry-run]
 
 Prunes (removes) stale autoresearch_sessions registry rows from the SQLite DB.
 This never touches project-local autoresearch.jsonl or config files — those
@@ -1491,108 +1214,89 @@ Duration format:
     m — minutes(e.g. 30m = 30 minutes)
 
 Examples:
-  tamandua autoresearch prune --older-than 30d
-  tamandua autoresearch prune --older-than 7d --missing
-  tamandua autoresearch prune --older-than 30d --dry-run`;
+  formiga autoresearch prune --older-than 30d
+  formiga autoresearch prune --older-than 7d --missing
+  formiga autoresearch prune --older-than 30d --dry-run`;
 }
 
 function getAutoresearchWizardHelp(): string {
-  return `tamandua autoresearch wizard — Interactive AutoResearch setup wizard
+  return `formiga autoresearch wizard — Interactive AutoResearch setup wizard
 
-Usage: tamandua autoresearch wizard [--cwd <dir>]
+Usage: formiga autoresearch wizard [--cwd <dir>]
 
 Launches an interactive wizard that guides you through setting up an
 AutoResearch session. The wizard asks questions about what you want to
-improve and how to measure success, then generates the exact Tamandua
+improve and how to measure success, then generates the exact Formiga
 command sequence you need.
 
 The wizard does not directly create project files. If initialization is
-needed, it generates and optionally executes the correct tamandua
-autoresearch init command. Then it generates the tamandua autoresearch
+needed, it generates and optionally executes the correct formiga
+autoresearch init command. Then it generates the formiga autoresearch
 loop command to start the optimization loop.
 
 Options:
   --cwd <dir>    Working directory (default: current directory)
 
 Examples:
-  tamandua autoresearch wizard
-  tamandua autoresearch wizard --cwd /path/to/project`;
+  formiga autoresearch wizard
+  formiga autoresearch wizard --cwd /path/to/project`;
 }
 
 function getUsageText(): string {
   return [
-    "Run tamandua <command> --help for detailed command help.",
+    "Run formiga <command> --help for detailed command help.",
     "",
-    "tamandua get-ready                    Install bundled workflows and start dashboard/control plane",
-    "tamandua uninstall [--force]          Full uninstall",
-    "tamandua status                       Show detailed system status (services, paths, runs, processes)",
-    "", "tamandua workflow list                List available workflows",
-    "tamandua workflow install <name|--all>  Install a workflow (or all)",
-    "tamandua workflow run <name> <task> [--no-hurry-please-save-tokens-mode]",
+    "formiga get-ready                    Install bundled workflows and start dashboard/control plane",
+    "formiga uninstall [--force]          Full uninstall",
+    "formiga status                       Show detailed system status (services, paths, runs, processes)",
+    "", "formiga workflow list                List available workflows",
+    "formiga workflow install <name|--all>  Install a workflow (or all)",
+    "formiga workflow run <name> <task> [--no-hurry-please-save-tokens-mode]",
     "                                      [--working-directory-for-harness <dir>]",
-    "                                      [--worktree-origin-repository <dir>]",
-    "                                      [--worktree-origin-ref <ref>]",
     "                                      [--pi-as-harness | --hermes-as-harness]",
     "                                      [--no-relaunch-upon-rugpull]",
     "                                      Start a workflow run",
-    "", "tamandua worktree list                List managed worktrees",
-    "tamandua worktree status <run-id>     Show worktree details for a run",
-    "tamandua worktree remove <run-id>     Remove managed worktree [--force]",
-    "tamandua worktree prune --completed   Remove old completed worktrees",
-    "           --older-than <duration>    (e.g. 7d, 24h, 30m)",
-    "", "tamandua autoresearch init            Create durable experiment-loop state",
-    "tamandua autoresearch run-experiment  Run the configured experiment command",
-    "tamandua autoresearch log-experiment   Log keep/discard learning for the loop",
-    "tamandua autoresearch loop            Run a bounded experiment loop with live progress",
-    "tamandua autoresearch run-loop-iteration Run a single transactional experiment iteration",
-    "tamandua autoresearch status          Summarize AutoResearch state",
-    "tamandua autoresearch next            Print the next experiment prompt",
-    "tamandua autoresearch prune           Remove stale AutoResearch registry rows",
+    "", "formiga autoresearch init            Create durable experiment-loop state",
+    "formiga autoresearch run-experiment  Run the configured experiment command",
+    "formiga autoresearch log-experiment   Log keep/discard learning for the loop",
+    "formiga autoresearch loop            Run a bounded experiment loop with live progress",
+    "formiga autoresearch run-loop-iteration Run a single transactional experiment iteration",
+    "formiga autoresearch status          Summarize AutoResearch state",
+    "formiga autoresearch next            Print the next experiment prompt",
+    "formiga autoresearch prune           Remove stale AutoResearch registry rows",
     "           --older-than <duration>    (e.g. 30d, 7d, 24h)",
-    "tamandua autoresearch wizard          Interactive AutoResearch setup wizard",
-    "tamandua workflow autoresearch <run-id> Show run AutoResearch progress",
-    "tamandua workflow status <query>      Check run status",
-    "tamandua workflow runs                List all workflow runs",
-    "tamandua workflow pause <run-id>      Pause a running workflow",
-    "tamandua workflow pause-all [--drain]  Pause all running workflows",
-    "tamandua workflow resume <run-id>     Resume a paused or failed run",
-    "tamandua workflow resume-all           Resume all paused workflows",
-    "tamandua workflow stop <run-id>       Stop/cancel a running workflow",
-    "tamandua workflow delete <run-id>     Permanently delete a run [--force]",
-    "tamandua mcp start [--port N]         Start MCP server (default: 3338)",
-    "tamandua mcp stop                     Stop MCP server",
-    "tamandua mcp status                   Check MCP server status",
-    "tamandua control-plane start [--port N]Start control plane (default: 3339)",
-    "tamandua control-plane stop            Stop control plane",
-    "tamandua control-plane status          Check control plane status",
-    "", "tamandua dashboard [start] [--port N] Start dashboard (default: 3334)",
-    "tamandua dashboard stop               Stop dashboard",
-    "tamandua dashboard status             Check dashboard status",
-    "", "tamandua step peek <agent-id> --run-id <run-id>     Check for pending work (HAS_WORK or NO_WORK)",
-    "tamandua step claim <agent-id> --run-id <run-id>    Claim pending step (JSON output)",
-    "tamandua step complete <step-id>      Complete step (reads output from stdin)",
-    "tamandua step fail <step-id> <error>  Fail step with retry logic",
-    "tamandua step stories <run-id>        List stories for a run",
-    "", "tamandua logs [<lines>|<run-id>|#<run-number>] Show recent activity",
-    "tamandua logs-tail [<lines>|<run-id>|#<run-number>] Follow recent activity",
-    "", "tamandua version                      Show installed version",
-    "tamandua skill-path                  Print path to the bundled tamandua-agents skill",
-    "tamandua source-path                  Print source checkout path",
-    "tamandua nudge                       Wake all scheduled agents for all running runs",
-    "tamandua update [--force]             Pull latest, rebuild, reinstall",
+    "formiga autoresearch wizard          Interactive AutoResearch setup wizard",
+    "formiga workflow autoresearch <run-id> Show run AutoResearch progress",
+    "formiga workflow status <query>      Check run status",
+    "formiga workflow runs                List all workflow runs",
+    "formiga workflow pause <run-id>      Pause a running workflow",
+    "formiga workflow pause-all [--drain]  Pause all running workflows",
+    "formiga workflow resume <run-id>     Resume a paused or failed run",
+    "formiga workflow resume-all           Resume all paused workflows",
+    "formiga workflow stop <run-id>       Stop/cancel a running workflow",
+    "formiga workflow delete <run-id>     Permanently delete a run [--force]",
+    "formiga control-plane start [--port N]Start control plane (default: 3339)",
+    "formiga control-plane stop            Stop control plane",
+    "formiga control-plane status          Check control plane status",
+    "", "formiga dashboard [start] [--port N] Start dashboard (default: 3334)",
+    "formiga dashboard stop               Stop dashboard",
+    "formiga dashboard status             Check dashboard status",
+    "", "formiga step peek <agent-id> --run-id <run-id>     Check for pending work (HAS_WORK or NO_WORK)",
+    "formiga step claim <agent-id> --run-id <run-id>    Claim pending step (JSON output)",
+    "formiga step complete <step-id>      Complete step (reads output from stdin)",
+    "formiga step fail <step-id> <error>  Fail step with retry logic",
+    "formiga step stories <run-id>        List stories for a run",
+    "", "formiga logs [<lines>|<run-id>|#<run-number>] Show recent activity",
+    "formiga logs-tail [<lines>|<run-id>|#<run-number>] Follow recent activity",
+    "", "formiga version                      Show installed version",
+    "formiga skill-path                  Print path to the bundled formiga-agents skill",
+    "formiga source-path                  Print source checkout path",
+    "formiga nudge                       Wake all scheduled agents for all running runs",
   ].join("\n") + "\n";
 }
 
 function printUsage() {
   process.stdout.write(getUsageText());
-}
-
-function shouldSkipUpdateWarning(group: string, action: string): boolean {
-  if (group === "update") return true;
-  if (group === "version" || group === "--version" || group === "-v") return true;
-  if (group === "step" && (action === "peek" || action === "claim")) return true;
-  if (group === "nudge") return true;
-  return false;
 }
 
 async function main() {
@@ -1602,9 +1306,6 @@ async function main() {
   // Check for --help before anything else: display command-specific help
   // if recognized, otherwise show global usage.
   if (hasHelpFlag(args)) {
-    if (group === "tamandua") {
-      printHelp(getTamanduaHelp());
-    }
     if (group === "version" || group === "--version" || group === "-v") {
       printHelp(getVersionHelp());
     }
@@ -1614,9 +1315,6 @@ async function main() {
     if (group === "source-path") {
       printHelp(getSourcePathHelp());
     }
-    if (group === "update") {
-      printHelp(getUpdateHelp());
-    }
     if (group === "get-ready") {
       printHelp(getGetReadyHelp());
     }
@@ -1625,12 +1323,6 @@ async function main() {
     }
     if (group === "status") {
       printHelp(getStatusHelp());
-    }
-    if (group === "mcp") {
-      if (action === "start") { printHelp(getMcpStartHelp()); }
-      if (action === "stop") { printHelp(getMcpStopHelp()); }
-      if (action === "status") { printHelp(getMcpStatusHelp()); }
-      printHelp(getMcpHelp());
     }
     if (group === "dashboard") {
       if (action === "start") { printHelp(getDashboardStartHelp()); }
@@ -1673,13 +1365,6 @@ async function main() {
       if (action === "resume-all") { printHelp(getWorkflowResumeAllHelp()); }
       printHelp(getWorkflowGroupHelp());
     }
-    if (group === "worktree") {
-      if (action === "list") { printHelp(getWorktreeListHelp()); }
-      if (action === "status") { printHelp(getWorktreeStatusHelp()); }
-      if (action === "remove") { printHelp(getWorktreeRemoveHelp()); }
-      if (action === "prune") { printHelp(getWorktreePruneHelp()); }
-      printHelp(getWorktreeGroupHelp());
-    }
     if (group === "autoresearch") {
       if (action === "init") { printHelp(getAutoresearchInitHelp()); }
       if (action === "run-experiment") { printHelp(getAutoresearchRunExperimentHelp()); }
@@ -1698,21 +1383,8 @@ async function main() {
     printHelp(getUsageText());
   }
 
-  // Display update warning before command output, but suppress for
-  // update/version commands (user is already acting on versions) and
-  // step peek/claim (would break polling agent output parsing).
-  if (!shouldSkipUpdateWarning(group, action)) {
-    const status = readVersionStatus();
-    if (status.updateAvailable) {
-      process.stderr.write("WARNING: A new version of tamandua is available! Run: tamandua update\n");
-    }
-  }
-
   if (group === "version" || group === "--version" || group === "-v") {
     console.log(getVersion()); return;
-  }
-  if (group === "tamandua") {
-    const { printTamandua } = await import("./ant.js"); printTamandua(); return;
   }
   if (group === "skill-path") {
     console.log(resolveSkillPath()); return;
@@ -1720,21 +1392,6 @@ async function main() {
 
   if (group === "source-path") {
     console.log(resolveSourcePath()); return;
-  }
-
-  if (group === "update") {
-    const force = args.includes("--force");
-    const unknownArgs = args.slice(1).filter((arg) => arg !== "--force");
-    if (unknownArgs.length > 0) {
-      process.stderr.write(`Unknown update option: ${unknownArgs[0]}\nUsage: tamandua update [--force]\n`);
-      process.exitCode = 1;
-      return;
-    }
-    const result = await runUpdate({ force });
-    if (result.status === "blocked_active_runs") {
-      process.exitCode = 1;
-    }
-    return;
   }
 
   if (group === "uninstall" && (!args[1] || args[1] === "--force")) {
@@ -1746,9 +1403,8 @@ async function main() {
       process.stderr.write(`\nUse --force to uninstall anyway.\n`); process.exit(1);
     }
     if (isRunning().running) { stopDaemon(); console.log("Dashboard stopped."); }
-    if (isMcpRunning().running) { stopMcp(); console.log("MCP server stopped."); }
     await uninstallAllWorkflows();
-    console.log("Tamandua fully uninstalled."); return;
+    console.log("Formiga fully uninstalled."); return;
   }
 
   if (group === "get-ready" && !args[1]) {
@@ -1756,61 +1412,9 @@ async function main() {
     if (workflows.length === 0) { console.log("No bundled workflows found."); return; }
     console.log(`Installing ${workflows.length} workflow(s)...`);
     for (const wf of workflows) { try { await installWorkflow({ workflowId: wf }); console.log(`  ✓ ${wf}`); } catch (err) { console.log(`  ✗ ${wf}: ${err instanceof Error ? err.message : String(err)}`); } }
-    ensureCliSymlink();
-    console.log(`\nDone. Start with: tamandua workflow run <name> "your task"`);
+    console.log(`\nDone. Start with: formiga workflow run <name> "your task"`);
     if (!isRunning().running) { try { const r = await startDaemon(3334); console.log(`\nDashboard started (PID ${r.pid}): http://localhost:${r.port}`); } catch (err) { console.log(`\nNote: dashboard not started: ${err instanceof Error ? err.message : String(err)}`); } }
     else console.log("\nDashboard already running.");
-    if (!getMcpStatus().running) {
-      console.log("\nMCP server not started. To start it: tamandua mcp start");
-    } else {
-      console.log("\nMCP server already running.");
-    }
-    return;
-  }
-
-  if (group === "mcp") {
-    const sub = args[1];
-    if (sub === "stop") {
-      console.log(stopMcp() ? "MCP server stopped." : "MCP server is not running.");
-      return;
-    }
-    if (sub === "status") {
-      const st = getMcpStatus();
-      if (!st.running) {
-        console.log("MCP server is not running.");
-        console.log(`Default endpoint: http://localhost:${st.port}${st.endpoint}`);
-        return;
-      }
-      console.log(`MCP server running (PID ${st.pid})`);
-      console.log(`Port: ${st.port}`);
-      console.log(`Endpoint: http://localhost:${st.port}${st.endpoint}`);
-      return;
-    }
-    let port = DEFAULT_MCP_PORT;
-    const portIdx = args.indexOf("--port");
-    if (portIdx !== -1 && args[portIdx + 1]) {
-      port = parseInt(args[portIdx + 1], 10) || DEFAULT_MCP_PORT;
-    }
-    // Support positional port as well: tamandua mcp start 5555
-    if (sub && sub !== "start" && !sub.startsWith("-")) {
-      const p = parseInt(sub, 10);
-      if (!Number.isNaN(p)) port = p;
-    }
-    const running = getMcpStatus();
-    if (running.running) {
-      console.log(`MCP server already running (PID ${running.pid})`);
-      console.log(`Port: ${running.port}`);
-      console.log(`Endpoint: http://localhost:${running.port}${running.endpoint}`);
-      return;
-    }
-    try {
-      const result = await startMcp(port);
-      console.log(`MCP server started (PID ${result.pid})`);
-      console.log(`Endpoint: http://localhost:${result.port}${MCP_ENDPOINT_PATH}`);
-    } catch (err) {
-      process.stderr.write(`Failed to start MCP: ${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(1);
-    }
     return;
   }
 
@@ -1819,21 +1423,12 @@ async function main() {
     if (sub === "stop") { console.log(stopDaemon() ? "Dashboard stopped." : "Dashboard is not running."); return; }
     if (sub === "status") {
       const st = getDaemonStatus();
-      const mcp = getMcpStatus();
 
       if (!st.running) {
         console.log("Dashboard is not running.");
       } else {
         console.log(`Dashboard running (PID ${st.pid})`);
         console.log(`Dashboard endpoint: http://localhost:${st.port}`);
-      }
-
-      if (!mcp.running) {
-        console.log("MCP server is not running.");
-        console.log(`Default MCP endpoint: http://localhost:${mcp.port}${mcp.endpoint}`);
-      } else {
-        console.log(`MCP server running (PID ${mcp.pid})`);
-        console.log(`MCP endpoint: http://localhost:${mcp.port}${mcp.endpoint}`);
       }
       return;
     }
@@ -1846,7 +1441,7 @@ async function main() {
 
   if (group === "nudge") {
     if (args.length > 1) {
-      process.stderr.write(`Unknown nudge option: ${args.slice(1).join(" ")}\nUsage: tamandua nudge\n`);
+      process.stderr.write(`Unknown nudge option: ${args.slice(1).join(" ")}\nUsage: formiga nudge\n`);
       process.exit(1);
     }
     let response = await nudgeWithDaemon();
@@ -1862,7 +1457,7 @@ async function main() {
     const body = response.body;
     const runningRuns = typeof body.runningRuns === "number" ? body.runningRuns : 0;
     if (runningRuns === 0) {
-      console.log("No running Tamandua runs to nudge.");
+      console.log("No running Formiga runs to nudge.");
       return;
     }
     const launched = typeof body.launched === "number" ? body.launched : 0;
@@ -1894,7 +1489,7 @@ async function main() {
     if (portIdx !== -1 && args[portIdx + 1]) {
       port = parseInt(args[portIdx + 1], 10) || DEFAULT_CONTROL_PORT;
     }
-    // Support positional port as well: tamandua control-plane start 4444
+    // Support positional port as well: formiga control-plane start 4444
     if (sub && sub !== "start" && !sub.startsWith("-")) {
       const p = parseInt(sub, 10);
       if (!Number.isNaN(p)) port = p;
@@ -1923,7 +1518,7 @@ async function main() {
 
   if (group === "step") {
     if (action === "peek" || action === "claim") {
-      if (!target) { process.stderr.write(`Missing agent-id.\nUsage: tamandua step ${action} <agent-id> --run-id <run-id>\n`); process.exit(1); }
+      if (!target) { process.stderr.write(`Missing agent-id.\nUsage: formiga step ${action} <agent-id> --run-id <run-id>\n`); process.exit(1); }
       // --run-id is required for peek/claim so concurrent runs of the same
       // workflow + agent can't cross-claim. No implicit inference — the
       // caller (typically the polling prompt) must pass it.
@@ -1937,7 +1532,7 @@ async function main() {
       }
       if (!runIdArg) {
         process.stderr.write(
-          `Missing --run-id for step ${action}.\nUsage: tamandua step ${action} <agent-id> --run-id <run-id>\n`,
+          `Missing --run-id for step ${action}.\nUsage: formiga step ${action} <agent-id> --run-id <run-id>\n`,
         );
         process.exit(1);
       }
@@ -1945,9 +1540,9 @@ async function main() {
         console.log(peekStep(target, runIdArg));
         return;
       }
-      const jobId = process.env.TAMANDUA_WORKER_JOB_ID;
-      const pidStr = process.env.TAMANDUA_WORKER_PID;
-      const pgidStr = process.env.TAMANDUA_WORKER_PGID;
+      const jobId = process.env.FORMIGA_WORKER_JOB_ID;
+      const pidStr = process.env.FORMIGA_WORKER_PID;
+      const pgidStr = process.env.FORMIGA_WORKER_PGID;
       const workerOwnership = (jobId && pidStr)
         ? { jobId, pid: Number(pidStr), ...(pgidStr ? { pgid: Number(pgidStr) } : {}) }
         : undefined;
@@ -2038,175 +1633,10 @@ async function main() {
     return;
   }
 
-  if (group === "worktree") {
-    if (action === "list") {
-      const worktrees = listRunWorktrees();
-      if (worktrees.length === 0) {
-        console.log("No managed worktrees found.");
-        return;
-      }
-      console.log("Managed worktrees:");
-      for (const wt of worktrees) {
-        console.log(formatWorktreeStatus(wt));
-      }
-      return;
-    }
-
-    if (action === "status") {
-      if (!target) {
-        process.stderr.write("Missing run-id.\nUsage: tamandua worktree status <run-id>\n");
-        process.exit(1);
-      }
-      // Resolve the run ID prefix to a full run ID via getWorkflowStatus
-      let fullRunId: string;
-      try {
-        fullRunId = getWorkflowStatusFn(target).id;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
-        process.stderr.write(
-          message.startsWith("No run found matching") ? `No run found matching "${target}".\n` : `${message}\n`,
-        );
-        process.exit(1);
-      }
-
-      const wt = getRunWorktree(fullRunId);
-      if (!wt) {
-        console.log(`No managed worktree for run ${fullRunId.slice(0, 8)}.`);
-        return;
-      }
-
-      console.log(`Run:          ${wt.runId.slice(0, 8)}`);
-      console.log(`Status:       ${wt.status}`);
-      console.log(`Origin repo:  ${wt.worktreeOriginRepository}`);
-      console.log(`Origin ref:   ${wt.worktreeOriginRef || "(none)"}`);
-      console.log(`Origin SHA:   ${wt.worktreeOriginSha || "(none)"}`);
-      console.log(`Orig branch:  ${wt.originalBranch || "(none)"}`);
-      console.log(`Worktree:     ${wt.worktreePath}`);
-      console.log(`Cleanup:      ${wt.cleanupPolicy}`);
-      return;
-    }
-
-    if (action === "remove") {
-      if (!target) {
-        process.stderr.write("Missing run-id.\nUsage: tamandua worktree remove <run-id> [--force]\n");
-        process.exit(1);
-      }
-      const force = args.includes("--force");
-      let fullRunId: string;
-      try {
-        fullRunId = getWorkflowStatusFn(target).id;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
-        process.stderr.write(
-          message.startsWith("No run found matching") ? `No run found matching "${target}".\n` : `${message}\n`,
-        );
-        process.exit(1);
-      }
-
-      try {
-        removeRunWorktree({ runId: fullRunId, force });
-        console.log(`Removed managed worktree for run ${fullRunId.slice(0, 8)}.`);
-      } catch (err) {
-        process.stderr.write(
-          `${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        process.exit(1);
-      }
-      return;
-    }
-
-    if (action === "prune") {
-      const completedFlagIdx = args.indexOf("--completed");
-      if (completedFlagIdx === -1) {
-        process.stderr.write(
-          "Missing --completed flag.\nUsage: tamandua worktree prune --completed --older-than <duration>\n",
-        );
-        process.exit(1);
-      }
-
-      const olderThanIdx = args.indexOf("--older-than");
-      if (olderThanIdx === -1 || !args[olderThanIdx + 1]) {
-        process.stderr.write(
-          "Missing --older-than <duration>.\nUsage: tamandua worktree prune --completed --older-than <duration>\n",
-        );
-        process.exit(1);
-      }
-
-      let thresholdMs: number;
-      try {
-        thresholdMs = parseDuration(args[olderThanIdx + 1]);
-      } catch (err) {
-        process.stderr.write(
-          `${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        process.exit(1);
-      }
-
-      const cutoff = Date.now() - thresholdMs;
-      const worktrees = listRunWorktrees();
-      let pruned = 0;
-
-      for (const wt of worktrees) {
-        if (wt.status === "removed") continue;
-
-        // Check if the associated run is completed/canceled
-        let runStatus: string;
-        try {
-          runStatus = getWorkflowStatusFn(wt.runId).status;
-        } catch {
-          // Run not found, skip
-          continue;
-        }
-
-        if (runStatus !== "completed" && runStatus !== "canceled") continue;
-
-        // Check age: we need the worktree created_at from DB
-        // getRunWorktree() doesn't expose created_at, so query DB directly
-        const { getDb } = await import("../db.js");
-        const db = getDb();
-        const row = db
-          .prepare(
-            "SELECT created_at FROM run_worktrees WHERE run_id = ?",
-          )
-          .get(wt.runId) as { created_at: string } | undefined;
-
-        if (!row) continue;
-
-        const createdAt = new Date(row.created_at).getTime();
-        if (createdAt >= cutoff) continue;
-
-        // Remove (force for non-ready status, since it's terminal pruning)
-        try {
-          removeRunWorktree({ runId: wt.runId, force: true });
-          pruned++;
-          console.log(
-            `Pruned worktree for run ${wt.runId.slice(0, 8)} (${runStatus}).`,
-          );
-        } catch (err) {
-          console.warn(
-            `Warning: failed to prune run ${wt.runId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-
-      if (pruned === 0) {
-        console.log("No worktrees to prune.");
-      } else {
-        console.log(`Pruned ${pruned} worktree(s).`);
-      }
-      return;
-    }
-
-    process.stderr.write(
-      `Unknown worktree action: ${action}\nUsage: tamandua worktree <list|status|remove|prune>\n`,
-    );
-    process.exit(1);
-  }
-
   if (group === "autoresearch") {
     const cwd = readOption(args, "--cwd");
     if (action === "init") {
-      const usage = "tamandua autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd>";
+      const usage = "formiga autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd>";
       const entry = initExperiment({
         cwd,
         goal: requireOption(args, "--goal", usage),
@@ -2219,7 +1649,7 @@ async function main() {
         overwrite: args.includes("--overwrite"),
       });
       console.log(`Initialized AutoResearch session for metric ${entry.metric_name} (${entry.direction}).`);
-      console.log("Next: tamandua autoresearch run-experiment");
+      console.log("Next: formiga autoresearch run-experiment");
       upsertAutoresearchSession(cwd ?? process.cwd());
       return;
     }
@@ -2250,7 +1680,7 @@ async function main() {
         process.stderr.write(`Invalid --metric "${metricRaw}".\n`);
         process.exit(1);
       }
-      const usage = "tamandua autoresearch log-experiment --description <text>";
+      const usage = "formiga autoresearch log-experiment --description <text>";
       const entry = await logExperiment({
         cwd,
         metric,
@@ -2336,7 +1766,7 @@ async function main() {
       const olderThanIdx = args.indexOf("--older-than");
       if (olderThanIdx === -1 || !args[olderThanIdx + 1]) {
         process.stderr.write(
-          "Missing --older-than <duration>.\nUsage: tamandua autoresearch prune --older-than <duration> [--missing] [--dry-run]\n",
+          "Missing --older-than <duration>.\nUsage: formiga autoresearch prune --older-than <duration> [--missing] [--dry-run]\n",
         );
         process.exit(1);
       }
@@ -2434,26 +1864,19 @@ async function main() {
       return;
     }
 
-    if (action === "wizard") {
-      const wizardCwd = readOption(args, "--cwd");
-      const { runWizard } = await import("./wizard-orchestrator.js");
-      await runWizard({ cwd: wizardCwd, binaryName: "tamandua" });
-      return;
-    }
-
-    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: tamandua autoresearch <init|run-experiment|log-experiment|status|next|loop|run-loop-iteration|prune|wizard>\n`);
+    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: formiga autoresearch <init|run-experiment|log-experiment|status|next|loop|run-loop-iteration|prune>\n`);
     process.exit(1);
   }
 
   if (group === "status") {
-    console.log("Tamandua Status");
+    console.log("Formiga Status");
     console.log("===============");
     console.log();
     console.log(formatServiceStatus());
     console.log();
     console.log("---");
     console.log();
-    console.log(formatTamanduaInfo({ getVersion }));
+    console.log(formatFormigaInfo({ getVersion }));
     console.log();
     console.log("---");
     console.log();
@@ -2530,7 +1953,7 @@ async function main() {
     }
     const response = await pauseRunWithDaemon(fullId, drain);
     if (response === null) {
-      process.stderr.write("Daemon is unreachable. Is the daemon running? Try: tamandua dashboard start\n");
+      process.stderr.write("Daemon is unreachable. Is the daemon running? Try: formiga dashboard start\n");
       process.exit(1);
     }
     if (response.status !== 200) {
@@ -2557,7 +1980,7 @@ async function main() {
     if (runStatus === "paused") {
       const response = await resumeRunWithDaemon(fullId);
       if (response === null) {
-        process.stderr.write("Daemon is unreachable. Is the daemon running? Try: tamandua dashboard start\n");
+        process.stderr.write("Daemon is unreachable. Is the daemon running? Try: formiga dashboard start\n");
         process.exit(1);
       }
       if (response.status !== 200 && response.status !== 202) {
@@ -2638,11 +2061,11 @@ async function main() {
       if (workflows.length === 0) { console.log("No bundled workflows found."); return; }
       console.log(`Installing ${workflows.length} workflow(s)...`);
       for (const wf of workflows) { try { await installWorkflow({ workflowId: wf }); console.log(`  ✓ ${wf}`); } catch (err) { console.log(`  ✗ ${wf}: ${err instanceof Error ? err.message : String(err)}`); } }
-      console.log(`\nDone. Start with: tamandua workflow run <name> "your task"`);
+      console.log(`\nDone. Start with: formiga workflow run <name> "your task"`);
       return;
     }
     const result = await installWorkflow({ workflowId: target });
-    console.log(`Installed workflow: ${result.workflowId}\nAgent crons will start when a run begins.\n\nStart with: tamandua workflow run ${result.workflowId} "your task"`);
+    console.log(`Installed workflow: ${result.workflowId}\nAgent crons will start when a run begins.\n\nStart with: formiga workflow run ${result.workflowId} "your task"`);
     return;
   }
 
@@ -2691,11 +2114,6 @@ async function main() {
     try {
       const result = getWorkflowStatus(target);
       console.log(`Run: ${result.id.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.task}\nStatus: ${result.status}\nTokens: ${result.tokensSpent.toLocaleString()}`);
-      if (result.workspace_mode === "worktree") {
-        console.log(`Workspace: ${result.workspace_mode}`);
-        if (result.worktree_path) console.log(`Worktree: ${result.worktree_path}`);
-        if (result.worktree_origin_ref) console.log(`Origin ref: ${result.worktree_origin_ref}`);
-      }
       console.log(`Steps:`);
       for (const step of result.steps) {
         const icon = step.status === "done" ? "  [done   ]" : step.status === "running" ? "  [running]" : step.status === "failed" ? "  [failed ]" : step.status === "pending" ? "  [pending]" : `  [${step.status.padEnd(7)}]`;
@@ -2710,7 +2128,7 @@ async function main() {
 
   if (action === "autoresearch") {
     if (!target) {
-      process.stderr.write("Missing run-id.\nUsage: tamandua workflow autoresearch <run-id>\n");
+      process.stderr.write("Missing run-id.\nUsage: formiga workflow autoresearch <run-id>\n");
       process.exit(1);
     }
     printWorkflowAutoresearch(target);
@@ -2718,7 +2136,7 @@ async function main() {
   }
 
   if (action === "delete") {
-    if (!target) { process.stderr.write("Missing run-id.\nUsage: tamandua workflow delete <run-id> [--force]\n"); process.exit(1); }
+    if (!target) { process.stderr.write("Missing run-id.\nUsage: formiga workflow delete <run-id> [--force]\n"); process.exit(1); }
     const force = args.includes("--force");
     try {
       let fullId: string;
@@ -2743,11 +2161,11 @@ async function main() {
   if (action === "ensure-crons") {
     // Polling jobs are now tied to (runId, agentId) and admitted via the
     // daemon control plane. There is no longer a workflow-wide
-    // "ensure-crons" notion — use `tamandua workflow run` instead
+    // "ensure-crons" notion — use `formiga workflow run` instead
     // (which registers the new run with the daemon).
     process.stderr.write(
       "`workflow ensure-crons` is removed. Run-scoped scheduling makes it obsolete \u2014 " +
-      "start a run with `tamandua workflow run <id> '<task>'`.\n",
+      "start a run with `formiga workflow run <id> '<task>'`.\n",
     );
     process.exit(1);
   }

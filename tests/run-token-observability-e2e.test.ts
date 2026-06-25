@@ -9,7 +9,7 @@ import { describe, it } from "node:test";
 const repoRoot = process.cwd();
 
 function createTempHome() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-run-token-observability-e2e-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-run-token-observability-e2e-"));
   const homeDir = path.join(root, "home");
   fs.mkdirSync(homeDir, { recursive: true });
   return { root, homeDir };
@@ -105,7 +105,7 @@ describe("run token observability end-to-end (US-005 integration verification)",
               "utf-8",
             );
             fs.chmodSync(fakePiPath, 0o755);
-            process.env.TAMANDUA_PI_BINARY = fakePiPath;
+            process.env.FORMIGA_PI_BINARY = fakePiPath;
           }
 
           async function runRound(payload) {
@@ -187,7 +187,7 @@ describe("run token observability end-to-end (US-005 integration verification)",
           ].join("\\n"));
 
           const runRows = db.prepare("SELECT id, tokens_spent FROM runs WHERE id IN (?, ?) ORDER BY id ASC").all(runA, runB);
-          const eventsPath = path.join(process.env.HOME, ".tamandua", "events", "all.jsonl");
+          const eventsPath = path.join(process.env.HOME, ".formiga", "events", "all.jsonl");
           const allEvents = fs.existsSync(eventsPath)
             ? fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line))
             : [];
@@ -201,9 +201,9 @@ describe("run token observability end-to-end (US-005 integration verification)",
             "TMPDIR",
             "TEMP",
             "TMP",
-            "TAMANDUA_STATE_DIR",
-            "TAMANDUA_DB_PATH",
-            "TAMANDUA_WORKTREE_ROOT",
+            "FORMIGA_STATE_DIR",
+            "FORMIGA_DB_PATH",
+            "FORMIGA_WORKTREE_ROOT",
           ]) {
             const value = process.env[key];
             if (value !== undefined) childEnv[key] = value;

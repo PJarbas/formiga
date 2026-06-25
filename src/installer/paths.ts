@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Bundled workflows ship with tamandua (in the repo's workflows/ directory)
+// Bundled workflows ship with formiga (in the repo's workflows/ directory)
 export function resolveBundledWorkflowsDir(): string {
   // From dist/installer/paths.js -> ../../workflows
   return path.resolve(__dirname, "..", "..", "workflows");
@@ -22,8 +22,8 @@ export function resolveSourcePath(): string {
 }
 
 export function resolveSkillPath(): string {
-  // From dist/installer/paths.js -> ../../skills/tamandua-agents/SKILL.md
-  const skillPath = path.resolve(__dirname, "..", "..", "skills", "tamandua-agents", "SKILL.md");
+  // From dist/installer/paths.js -> ../../skills/formiga-agents/SKILL.md
+  const skillPath = path.resolve(__dirname, "..", "..", "skills", "formiga-agents", "SKILL.md");
   try {
     return fs.realpathSync(skillPath);
   } catch {
@@ -36,9 +36,9 @@ export function resolveBundledWorkflowDir(workflowId: string): string {
 }
 
 export function resolvePiStateDir(): string {
-  const env = process.env.TAMANDUA_STATE_DIR?.trim();
+  const env = process.env.FORMIGA_STATE_DIR?.trim();
   if (env) return env;
-  return path.join(os.homedir(), ".tamandua");
+  return path.join(os.homedir(), ".formiga");
 }
 
 export function resolvePiConfigPath(): string {
@@ -53,12 +53,12 @@ export function resolvePiAuthPath(): string {
   return path.join(os.homedir(), ".pi", "agent", "auth.json");
 }
 
-export function resolveTamanduaRoot(): string {
+export function resolveFormigaRoot(): string {
   return resolvePiStateDir();
 }
 
 export function resolveWorkflowRoot(): string {
-  return path.join(resolveTamanduaRoot(), "workflows");
+  return path.join(resolveFormigaRoot(), "workflows");
 }
 
 export function resolveWorkflowDir(workflowId: string): string {
@@ -66,7 +66,7 @@ export function resolveWorkflowDir(workflowId: string): string {
 }
 
 export function resolveWorkflowWorkspaceRoot(): string {
-  return path.join(resolveTamanduaRoot(), "workspaces", "workflows");
+  return path.join(resolveFormigaRoot(), "workspaces", "workflows");
 }
 
 export function resolveWorkflowWorkspaceDir(workflowId: string): string {
@@ -74,11 +74,11 @@ export function resolveWorkflowWorkspaceDir(workflowId: string): string {
 }
 
 export function resolveRunRoot(): string {
-  return path.join(resolveTamanduaRoot(), "runs");
+  return path.join(resolveFormigaRoot(), "runs");
 }
 
-export function resolveTamanduaCli(): string {
-  // From dist/installer/paths.js -> ../../bin/tamandua. Use the shell
+export function resolveFormigaCli(): string {
+  // From dist/installer/paths.js -> ../../bin/formiga. Use the shell
   // launcher rather than dist/cli/cli.js so Node runtime flags stay centralized.
-  return path.resolve(__dirname, "..", "..", "bin", "tamandua");
+  return path.resolve(__dirname, "..", "..", "bin", "formiga");
 }

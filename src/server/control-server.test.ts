@@ -41,7 +41,7 @@ async function jsonRequest(
   const headers: Record<string, string> = {
     "content-type": "application/json",
   };
-  if (secret) headers["x-tamandua-secret"] = secret;
+  if (secret) headers["x-formiga-secret"] = secret;
   if (payload) headers["content-length"] = String(Buffer.byteLength(payload));
 
   return await new Promise<JsonResponse>((resolve, reject) => {
@@ -138,16 +138,16 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-control-home-"));
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-control-home-"));
     daemon = spawn("node", [DAEMON_SCRIPT, String(dashboardPort)], {
-      env: cleanChildEnv({ HOME: tempHome, TAMANDUA_CONTROL_PORT: String(controlPort) }),
+      env: cleanChildEnv({ HOME: tempHome, FORMIGA_CONTROL_PORT: String(controlPort) }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     daemon.stdout?.resume();
     daemon.stderr?.resume();
 
     await waitForControlUp();
-    secret = fs.readFileSync(path.join(tempHome, ".tamandua", "daemon-secret"), "utf-8").trim();
+    secret = fs.readFileSync(path.join(tempHome, ".formiga", "daemon-secret"), "utf-8").trim();
     assert.ok(secret && secret.length > 0, "daemon secret should be created on startup");
   });
 
@@ -215,7 +215,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     }
 
     // Insert a run row directly into the DB the daemon is reading.
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     // Use the same DB the daemon is using by inserting via node:sqlite.
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
@@ -271,7 +271,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -294,7 +294,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     assert.equal(r.body.state, "paused");
 
     // Check run-specific events file.
-    const runEventsPath = path.join(tempHome, ".tamandua", "events", `${runId}.jsonl`);
+    const runEventsPath = path.join(tempHome, ".formiga", "events", `${runId}.jsonl`);
     assert.ok(fs.existsSync(runEventsPath), `expected events file at ${runEventsPath}`);
     const runEventsRaw = fs.readFileSync(runEventsPath, "utf-8");
     const runEvents = runEventsRaw.trim().split("\n").filter(Boolean).map((l: string) => JSON.parse(l));
@@ -305,7 +305,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     assert.ok(typeof pauseEvent.ts === "string" && pauseEvent.ts.length > 0);
 
     // Check global events file also received the event.
-    const globalEventsPath = path.join(tempHome, ".tamandua", "events", "all.jsonl");
+    const globalEventsPath = path.join(tempHome, ".formiga", "events", "all.jsonl");
     assert.ok(fs.existsSync(globalEventsPath), "global events file should exist");
     const globalRaw = fs.readFileSync(globalEventsPath, "utf-8");
     const globalEvents = globalRaw.trim().split("\n").filter(Boolean).map((l: string) => JSON.parse(l));
@@ -325,7 +325,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -352,7 +352,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       `expected 200 or 422, got ${r.status}`);
 
     // Check run-specific events file for run.resumed.
-    const runEventsPath = path.join(tempHome, ".tamandua", "events", `${runId}.jsonl`);
+    const runEventsPath = path.join(tempHome, ".formiga", "events", `${runId}.jsonl`);
     assert.ok(fs.existsSync(runEventsPath), `expected events file at ${runEventsPath}`);
     const runEventsRaw = fs.readFileSync(runEventsPath, "utf-8");
     const runEvents = runEventsRaw.trim().split("\n").filter(Boolean).map((l: string) => JSON.parse(l));
@@ -363,7 +363,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     assert.ok(typeof resumeEvent.ts === "string" && resumeEvent.ts.length > 0);
 
     // Check global events file also received the event.
-    const globalEventsPath = path.join(tempHome, ".tamandua", "events", "all.jsonl");
+    const globalEventsPath = path.join(tempHome, ".formiga", "events", "all.jsonl");
     assert.ok(fs.existsSync(globalEventsPath), "global events file should exist");
     const globalRaw = fs.readFileSync(globalEventsPath, "utf-8");
     const globalEvents = globalRaw.trim().split("\n").filter(Boolean).map((l: string) => JSON.parse(l));
@@ -385,7 +385,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -431,7 +431,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -468,7 +468,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -507,7 +507,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -545,13 +545,13 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    // Use TAMANDUA_DB_PATH and TAMANDUA_STATE_DIR to point to the daemon's
+    // Use FORMIGA_DB_PATH and FORMIGA_STATE_DIR to point to the daemon's
     // state so finalizeDrainingPause (which calls getDb() and emitEvent())
     // operates on the same DB and events files as the daemon.
-    const stateDir = path.join(tempHome, ".tamandua");
-    const dbPath = path.join(stateDir, "tamandua.db");
-    process.env.TAMANDUA_DB_PATH = dbPath;
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    const stateDir = path.join(tempHome, ".formiga");
+    const dbPath = path.join(stateDir, "formiga.db");
+    process.env.FORMIGA_DB_PATH = dbPath;
+    process.env.FORMIGA_STATE_DIR = stateDir;
 
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
@@ -594,8 +594,8 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     assert.equal(pauseEvent.workflowId, workflowId);
 
     // Cleanup
-    delete process.env.TAMANDUA_DB_PATH;
-    delete process.env.TAMANDUA_STATE_DIR;
+    delete process.env.FORMIGA_DB_PATH;
+    delete process.env.FORMIGA_STATE_DIR;
     db2.prepare("DELETE FROM steps WHERE id = ?").run(stepId);
     db2.prepare("DELETE FROM runs WHERE id = ?").run(runId);
     db2.close();
@@ -607,10 +607,10 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const stateDir = path.join(tempHome, ".tamandua");
-    const dbPath = path.join(stateDir, "tamandua.db");
-    process.env.TAMANDUA_DB_PATH = dbPath;
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    const stateDir = path.join(tempHome, ".formiga");
+    const dbPath = path.join(stateDir, "formiga.db");
+    process.env.FORMIGA_DB_PATH = dbPath;
+    process.env.FORMIGA_STATE_DIR = stateDir;
 
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
@@ -642,8 +642,8 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     assert.equal(row.scheduling_status, "draining_pause", "scheduling_status should remain draining_pause");
 
     // Cleanup
-    delete process.env.TAMANDUA_DB_PATH;
-    delete process.env.TAMANDUA_STATE_DIR;
+    delete process.env.FORMIGA_DB_PATH;
+    delete process.env.FORMIGA_STATE_DIR;
     db2.prepare("DELETE FROM steps WHERE id = ?").run(stepId);
     db2.prepare("DELETE FROM runs WHERE id = ?").run(runId);
     db2.close();
@@ -655,10 +655,10 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const stateDir = path.join(tempHome, ".tamandua");
-    const dbPath = path.join(stateDir, "tamandua.db");
-    process.env.TAMANDUA_DB_PATH = dbPath;
-    process.env.TAMANDUA_STATE_DIR = stateDir;
+    const stateDir = path.join(tempHome, ".formiga");
+    const dbPath = path.join(stateDir, "formiga.db");
+    process.env.FORMIGA_DB_PATH = dbPath;
+    process.env.FORMIGA_STATE_DIR = stateDir;
 
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
@@ -688,8 +688,8 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     assert.equal(row.status, "paused", "loop placeholder waiting for verifier should not block drain finalization");
     assert.equal(row.scheduling_status, "paused");
 
-    delete process.env.TAMANDUA_DB_PATH;
-    delete process.env.TAMANDUA_STATE_DIR;
+    delete process.env.FORMIGA_DB_PATH;
+    delete process.env.FORMIGA_STATE_DIR;
     db2.prepare("DELETE FROM steps WHERE id IN (?, ?)").run(loopStepId, verifyStepId);
     db2.prepare("DELETE FROM runs WHERE id = ?").run(runId);
     db2.close();
@@ -701,7 +701,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -764,7 +764,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -793,7 +793,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const completedId = crypto.randomUUID();
@@ -829,7 +829,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -861,7 +861,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -893,7 +893,7 @@ describe("daemon control plane", { concurrency: 1 }, () => {
       return;
     }
 
-    const dbPath = path.join(tempHome, ".tamandua", "tamandua.db");
+    const dbPath = path.join(tempHome, ".formiga", "formiga.db");
     const { DatabaseSync } = await import("node:sqlite");
     const db = new DatabaseSync(dbPath);
     const runId = crypto.randomUUID();
@@ -938,59 +938,59 @@ describe("control-server unit exports", () => {
 
   beforeEach(() => {
     originalHome = process.env.HOME;
-    origControlPort = process.env.TAMANDUA_CONTROL_PORT;
-    origMaxTimers = process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+    origControlPort = process.env.FORMIGA_CONTROL_PORT;
+    origMaxTimers = process.env.FORMIGA_MAX_ACTIVE_TIMERS;
   });
 
   afterEach(() => {
     if (originalHome) process.env.HOME = originalHome;
     else delete process.env.HOME;
-    if (origControlPort) process.env.TAMANDUA_CONTROL_PORT = origControlPort;
-    else delete process.env.TAMANDUA_CONTROL_PORT;
-    if (origMaxTimers) process.env.TAMANDUA_MAX_ACTIVE_TIMERS = origMaxTimers;
-    else delete process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+    if (origControlPort) process.env.FORMIGA_CONTROL_PORT = origControlPort;
+    else delete process.env.FORMIGA_CONTROL_PORT;
+    if (origMaxTimers) process.env.FORMIGA_MAX_ACTIVE_TIMERS = origMaxTimers;
+    else delete process.env.FORMIGA_MAX_ACTIVE_TIMERS;
   });
 
   describe("getControlPort", () => {
     it("returns DEFAULT_CONTROL_PORT (3339) by default", () => {
-      delete process.env.TAMANDUA_CONTROL_PORT;
+      delete process.env.FORMIGA_CONTROL_PORT;
       assert.equal(getControlPort(), 3339);
     });
 
     it("returns env var value when set", () => {
-      process.env.TAMANDUA_CONTROL_PORT = "4242";
+      process.env.FORMIGA_CONTROL_PORT = "4242";
       assert.equal(getControlPort(), 4242);
     });
 
     it("returns default for invalid port values", () => {
-      process.env.TAMANDUA_CONTROL_PORT = "notanumber";
+      process.env.FORMIGA_CONTROL_PORT = "notanumber";
       assert.equal(getControlPort(), 3339);
     });
 
     it("returns default for out-of-range port values", () => {
-      process.env.TAMANDUA_CONTROL_PORT = "99999";
+      process.env.FORMIGA_CONTROL_PORT = "99999";
       assert.equal(getControlPort(), 3339);
     });
   });
 
   describe("getMaxActiveTimers", () => {
     it("returns default 50", () => {
-      delete process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+      delete process.env.FORMIGA_MAX_ACTIVE_TIMERS;
       assert.equal(getMaxActiveTimers(), 50);
     });
 
     it("returns env var value when set", () => {
-      process.env.TAMANDUA_MAX_ACTIVE_TIMERS = "25";
+      process.env.FORMIGA_MAX_ACTIVE_TIMERS = "25";
       assert.equal(getMaxActiveTimers(), 25);
     });
 
     it("returns default for invalid values", () => {
-      process.env.TAMANDUA_MAX_ACTIVE_TIMERS = "notanumber";
+      process.env.FORMIGA_MAX_ACTIVE_TIMERS = "notanumber";
       assert.equal(getMaxActiveTimers(), 50);
     });
 
     it("returns default for zero or negative", () => {
-      process.env.TAMANDUA_MAX_ACTIVE_TIMERS = "0";
+      process.env.FORMIGA_MAX_ACTIVE_TIMERS = "0";
       assert.equal(getMaxActiveTimers(), 50);
     });
   });
@@ -999,7 +999,7 @@ describe("control-server unit exports", () => {
     let tempHome: string;
 
     beforeEach(() => {
-      tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-secret-unit-"));
+      tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-secret-unit-"));
       process.env.HOME = tempHome;
     });
 
@@ -1008,7 +1008,7 @@ describe("control-server unit exports", () => {
     });
 
     it("creates a secret file and returns the token", () => {
-      const secretPath = path.join(tempHome, ".tamandua", "daemon-secret");
+      const secretPath = path.join(tempHome, ".formiga", "daemon-secret");
       const token = ensureDaemonSecret(secretPath);
       assert.ok(token.length > 0);
       const saved = readDaemonSecret(secretPath);
@@ -1016,26 +1016,26 @@ describe("control-server unit exports", () => {
     });
 
     it("default secret path honors HOME assigned after module import", () => {
-      const secretPath = path.join(tempHome, ".tamandua", "daemon-secret");
+      const secretPath = path.join(tempHome, ".formiga", "daemon-secret");
       const token = ensureDaemonSecret();
       assert.ok(fs.existsSync(secretPath));
       assert.equal(readDaemonSecret(), token);
     });
 
     it("returns existing secret when called again (idempotent)", () => {
-      const secretPath = path.join(tempHome, ".tamandua", "daemon-secret");
+      const secretPath = path.join(tempHome, ".formiga", "daemon-secret");
       const token1 = ensureDaemonSecret(secretPath);
       const token2 = ensureDaemonSecret(secretPath);
       assert.equal(token1, token2);
     });
 
     it("readDaemonSecret returns null when file does not exist", () => {
-      const secretPath = path.join(tempHome, ".tamandua", "nonexistent.json");
+      const secretPath = path.join(tempHome, ".formiga", "nonexistent.json");
       assert.equal(readDaemonSecret(secretPath), null);
     });
 
     it("readDaemonSecret returns null for empty file", () => {
-      const secretPath = path.join(tempHome, ".tamandua", "daemon-secret");
+      const secretPath = path.join(tempHome, ".formiga", "daemon-secret");
       fs.mkdirSync(path.dirname(secretPath), { recursive: true });
       fs.writeFileSync(secretPath, "", "utf-8");
       assert.equal(readDaemonSecret(secretPath), null);
@@ -1067,19 +1067,19 @@ describe("control-server save-tokens context wiring", () => {
 
   beforeEach(() => {
     origHome = process.env.HOME;
-    origStateDir = process.env.TAMANDUA_STATE_DIR;
-    origDbPath = process.env.TAMANDUA_DB_PATH;
-    origMaxTimers = process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+    origStateDir = process.env.FORMIGA_STATE_DIR;
+    origDbPath = process.env.FORMIGA_DB_PATH;
+    origMaxTimers = process.env.FORMIGA_MAX_ACTIVE_TIMERS;
 
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-save-tokens-"));
-    stateDir = path.join(tempHome, ".tamandua");
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-save-tokens-"));
+    stateDir = path.join(tempHome, ".formiga");
     fs.mkdirSync(stateDir, { recursive: true });
-    dbPath = path.join(stateDir, "tamandua.db");
+    dbPath = path.join(stateDir, "formiga.db");
 
     process.env.HOME = tempHome;
-    process.env.TAMANDUA_STATE_DIR = stateDir;
-    process.env.TAMANDUA_DB_PATH = dbPath;
-    process.env.TAMANDUA_MAX_ACTIVE_TIMERS = "10";
+    process.env.FORMIGA_STATE_DIR = stateDir;
+    process.env.FORMIGA_DB_PATH = dbPath;
+    process.env.FORMIGA_MAX_ACTIVE_TIMERS = "10";
   });
 
   afterEach(() => {
@@ -1087,12 +1087,12 @@ describe("control-server save-tokens context wiring", () => {
 
     if (origHome) process.env.HOME = origHome;
     else delete process.env.HOME;
-    if (origStateDir) process.env.TAMANDUA_STATE_DIR = origStateDir;
-    else delete process.env.TAMANDUA_STATE_DIR;
-    if (origDbPath) process.env.TAMANDUA_DB_PATH = origDbPath;
-    else delete process.env.TAMANDUA_DB_PATH;
-    if (origMaxTimers) process.env.TAMANDUA_MAX_ACTIVE_TIMERS = origMaxTimers;
-    else delete process.env.TAMANDUA_MAX_ACTIVE_TIMERS;
+    if (origStateDir) process.env.FORMIGA_STATE_DIR = origStateDir;
+    else delete process.env.FORMIGA_STATE_DIR;
+    if (origDbPath) process.env.FORMIGA_DB_PATH = origDbPath;
+    else delete process.env.FORMIGA_DB_PATH;
+    if (origMaxTimers) process.env.FORMIGA_MAX_ACTIVE_TIMERS = origMaxTimers;
+    else delete process.env.FORMIGA_MAX_ACTIVE_TIMERS;
 
     fs.rmSync(tempHome, { recursive: true, force: true });
   });

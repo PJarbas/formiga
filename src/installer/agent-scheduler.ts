@@ -2,18 +2,61 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveTamanduaCli, resolveWorkflowDir, resolveWorkflowWorkspaceDir } from "./paths.js";
+import { resolveFormigaCli, resolveWorkflowDir, resolveWorkflowWorkspaceDir } from "./paths.js";
 import type { WorkflowSpec, WorkflowAgent, HarnessType } from "./types.js";
 import { logger } from "../lib/logger.js";
 import { getRoleTimeoutSeconds, inferRole } from "./install.js";
-import { formatPiCommandPreview } from "./pi-command-preview.js";
 import { emitEvent } from "./events.js";
-import { parsePiOutputStream } from "./pi-stream-parser.js";
+import type { Interface as ReadlineInterface } from "node:readline";
+
+// ── Inline stubs for previously-imported orphan helpers ────────────
+// formatPiCommandPreview and parsePiOutputStream were removed as orphan
+// code. Branch 5 (ML agents) replaces the entire pi/hermes execution
+// model, so these stubs only exist to keep the legacy spawn paths
+// type-clean until that branch lands.
+
+interface PiCommandPreview {
+  commandPreview: string;
+  argvPreview: string[];
+  redactedIndices: number[];
+  truncatedIndices: number[];
+  promptElided: boolean;
+  argCount: number;
+}
+
+function formatPiCommandPreview(binPath: string, args: string[]): PiCommandPreview {
+  return {
+    commandPreview: [binPath, ...args].join(" "),
+    argvPreview: args,
+    redactedIndices: [],
+    truncatedIndices: [],
+    promptElided: false,
+    argCount: args.length,
+  };
+}
+
+interface ParsePiResult {
+  assistantText: string;
+  textFallback: string | null;
+  events: unknown[];
+}
+
+async function parsePiOutputStream(rl: ReadlineInterface): Promise<ParsePiResult> {
+  const lines: string[] = [];
+  for await (const line of rl) {
+    lines.push(line);
+  }
+  return {
+    assistantText: lines.join("\n"),
+    textFallback: null,
+    events: [],
+  };
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Run-Scoped Polling
 //
-// Job identity:  tamandua-${workflowId}-${runId}-${agentId}
+// Job identity:  formiga-${workflowId}-${runId}-${agentId}
 // Scope:         every job is tied to ONE (runId, agentId) tuple
 // Ownership:    timers + in-flight pi children are owned by whatever
 //               process invokes the scheduler (daemon in production;
@@ -85,7 +128,7 @@ const inFlightChildren = new Map<string, InFlightChild>();
 const AGENT_PERSONA_FILES = ["AGENTS.md", "IDENTITY.md", "SOUL.md"] as const;
 
 export interface CronJobInfo {
-  /** tamandua-${workflowId}-${runId}-${agentId} */
+  /** formiga-${workflowId}-${runId}-${agentId} */
   id: string;
   workflowId: string;
   runId: string;
@@ -122,13 +165,13 @@ export interface SetupAgentCronsOptions {
 
 export async function findPiBinary(): Promise<string> {
   // Prefer explicit env override
-  const envPi = process.env.TAMANDUA_PI_BINARY?.trim();
+  const envPi = process.env.FORMIGA_PI_BINARY?.trim();
   if (envPi) {
     try {
       fs.accessSync(envPi, fs.constants.X_OK);
       return envPi;
     } catch {
-      throw new Error(`TAMANDUA_PI_BINARY set but not executable: ${envPi}`);
+      throw new Error(`FORMIGA_PI_BINARY set but not executable: ${envPi}`);
     }
   }
 
@@ -145,7 +188,7 @@ export async function findPiBinary(): Promise<string> {
   }
 
   throw new Error(
-    "pi binary not found in PATH. Install pi (https://github.com/anthropics/pi) or set TAMANDUA_PI_BINARY."
+    "pi binary not found in PATH. Install pi (https://github.com/anthropics/pi) or set FORMIGA_PI_BINARY."
   );
 }
 
@@ -153,14 +196,14 @@ export async function findPiBinary(): Promise<string> {
 
 export function findHermesBinary(): string {
   // Prefer explicit env override
-  const envHermes = process.env.TAMANDUA_HERMES_BINARY?.trim();
+  const envHermes = process.env.FORMIGA_HERMES_BINARY?.trim();
   if (envHermes) {
     try {
       fs.accessSync(envHermes, fs.constants.X_OK);
       return envHermes;
     } catch {
       throw new Error(
-        `TAMANDUA_HERMES_BINARY set but not executable: ${envHermes}`
+        `FORMIGA_HERMES_BINARY set but not executable: ${envHermes}`
       );
     }
   }
@@ -178,7 +221,7 @@ export function findHermesBinary(): string {
   }
 
   throw new Error(
-    "hermes binary not found in PATH. Install hermes or set TAMANDUA_HERMES_BINARY."
+    "hermes binary not found in PATH. Install hermes or set FORMIGA_HERMES_BINARY."
   );
 }
 
@@ -608,7 +651,7 @@ async function buildAgentPersonaInstructions(agentId: string): Promise<string> {
   if (sections.length === 0) return "";
 
   return [
-    "The following files are the provisioned Tamandua persona instructions for this workflow agent.",
+    "The following files are the provisioned Formiga persona instructions for this workflow agent.",
     "Follow them when executing claimed work. Repository-level instructions from the harness working directory still apply for repository-specific conventions.",
     "",
     ...sections,
@@ -624,7 +667,7 @@ async function buildAgentPersonaInstructions(agentId: string): Promise<string> {
  *                     via `--run-id` so the CLI only matches steps in this run
  */
 export function buildAgentPrompt(workflowId: string, agentId: string, runId: string): string {
-  const cli = resolveTamanduaCli();
+  const cli = resolveFormigaCli();
 
   return [
     `You are agent "${agentId}" in workflow "${workflowId}" (run ${runId}).`,
@@ -663,7 +706,7 @@ TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
  * Does NOT include step claim — just work execution instructions.
  */
 export function buildWorkPrompt(workflowId: string, agentId: string, runId: string): string {
-  const cli = resolveTamanduaCli();
+  const cli = resolveFormigaCli();
 
   return [
     `You are agent "${agentId}" in workflow "${workflowId}" (run ${runId}).`,
@@ -699,7 +742,7 @@ export function buildPollingPrompt(
   runId: string,
   agentPersonaInstructions = "",
 ): string {
-  const cli = resolveTamanduaCli();
+  const cli = resolveFormigaCli();
 
   const persona = agentPersonaInstructions.trim();
   const prompt = [
@@ -1431,9 +1474,9 @@ export async function executePollingRound(
         timeout,
         workdir: workingDirectoryForHarness,
         env: {
-          TAMANDUA_WORKER_JOB_ID: job.id,
-          TAMANDUA_WORKER_PID: String(process.pid),
-          TAMANDUA_HERMES_BINARY: hermesPath,
+          FORMIGA_WORKER_JOB_ID: job.id,
+          FORMIGA_WORKER_PID: String(process.pid),
+          FORMIGA_HERMES_BINARY: hermesPath,
         },
         onSpawn,
       });
@@ -1444,8 +1487,8 @@ export async function executePollingRound(
           timeout,
           workdir: workingDirectoryForHarness,
           env: {
-            TAMANDUA_WORKER_JOB_ID: job.id,
-            TAMANDUA_WORKER_PID: String(process.pid),
+            FORMIGA_WORKER_JOB_ID: job.id,
+            FORMIGA_WORKER_PID: String(process.pid),
           },
           onSpawn,
         },
@@ -1551,7 +1594,7 @@ function buildJobId(workflowId: string, runId: string, agentId: string): string 
   const shortAgent = agentId.startsWith(`${workflowId}_`)
     ? agentId.slice(workflowId.length + 1)
     : agentId;
-  return `tamandua-${workflowId}-${runId}-${shortAgent}`;
+  return `formiga-${workflowId}-${runId}-${shortAgent}`;
 }
 
 /**

@@ -74,7 +74,7 @@ function seedRunningRun(workflowId: string): { runId: string; cleanup: () => voi
 
 describe("executePollingRound observability", () => {
   it("logs skip/start/complete with bounded output summaries", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-round-success-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-polling-round-success-"));
     const fakePi = path.join(tempDir, "pi");
     const longOutput = `STATUS: done\n${"A".repeat(320)}::TAIL_MARKER::`;
     fs.writeFileSync(
@@ -84,8 +84,8 @@ describe("executePollingRound observability", () => {
     );
     fs.chmodSync(fakePi, 0o755);
 
-    const originalPiBinary = process.env.TAMANDUA_PI_BINARY;
-    process.env.TAMANDUA_PI_BINARY = fakePi;
+    const originalPiBinary = process.env.FORMIGA_PI_BINARY;
+    process.env.FORMIGA_PI_BINARY = fakePi;
 
     const { calls, restore } = captureLoggerCalls();
     const seeded = seedRunningRun("wf-observability-success");
@@ -150,22 +150,22 @@ describe("executePollingRound observability", () => {
       restore();
       seeded.cleanup();
       if (originalPiBinary === undefined) {
-        delete process.env.TAMANDUA_PI_BINARY;
+        delete process.env.FORMIGA_PI_BINARY;
       } else {
-        process.env.TAMANDUA_PI_BINARY = originalPiBinary;
+        process.env.FORMIGA_PI_BINARY = originalPiBinary;
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("classifies heartbeat rounds in completion summary", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-round-heartbeat-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-polling-round-heartbeat-"));
     const fakePi = path.join(tempDir, "pi");
     fs.writeFileSync(fakePi, "#!/usr/bin/env node\nprocess.stdout.write('HEARTBEAT_OK');\n", "utf-8");
     fs.chmodSync(fakePi, 0o755);
 
-    const originalPiBinary = process.env.TAMANDUA_PI_BINARY;
-    process.env.TAMANDUA_PI_BINARY = fakePi;
+    const originalPiBinary = process.env.FORMIGA_PI_BINARY;
+    process.env.FORMIGA_PI_BINARY = fakePi;
 
     const { calls, restore } = captureLoggerCalls();
     const seeded = seedRunningRun("wf-observability-heartbeat");
@@ -202,16 +202,16 @@ describe("executePollingRound observability", () => {
       restore();
       seeded.cleanup();
       if (originalPiBinary === undefined) {
-        delete process.env.TAMANDUA_PI_BINARY;
+        delete process.env.FORMIGA_PI_BINARY;
       } else {
-        process.env.TAMANDUA_PI_BINARY = originalPiBinary;
+        process.env.FORMIGA_PI_BINARY = originalPiBinary;
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("uses harness-agnostic wording in skip log (regression: should not hardcode pi)", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-round-harness-wording-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-polling-round-harness-wording-"));
     const fakePi = path.join(tempDir, "pi");
     const longOutput = `STATUS: done\n${"B".repeat(320)}::TAIL_MARKER::`;
     fs.writeFileSync(
@@ -221,8 +221,8 @@ describe("executePollingRound observability", () => {
     );
     fs.chmodSync(fakePi, 0o755);
 
-    const originalPiBinary = process.env.TAMANDUA_PI_BINARY;
-    process.env.TAMANDUA_PI_BINARY = fakePi;
+    const originalPiBinary = process.env.FORMIGA_PI_BINARY;
+    process.env.FORMIGA_PI_BINARY = fakePi;
 
     const { calls, restore } = captureLoggerCalls();
     const seeded = seedRunningRun("wf-observability-harness-wording");
@@ -261,16 +261,16 @@ describe("executePollingRound observability", () => {
       restore();
       seeded.cleanup();
       if (originalPiBinary === undefined) {
-        delete process.env.TAMANDUA_PI_BINARY;
+        delete process.env.FORMIGA_PI_BINARY;
       } else {
-        process.env.TAMANDUA_PI_BINARY = originalPiBinary;
+        process.env.FORMIGA_PI_BINARY = originalPiBinary;
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("logs fail path with bounded error preview and context", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "tamandua-polling-round-fail-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-polling-round-fail-"));
     const fakePi = path.join(tempDir, "pi");
     const longStderr = `${"E".repeat(400)}::ERR_TAIL_MARKER::`;
     fs.writeFileSync(
@@ -280,8 +280,8 @@ describe("executePollingRound observability", () => {
     );
     fs.chmodSync(fakePi, 0o755);
 
-    const originalPiBinary = process.env.TAMANDUA_PI_BINARY;
-    process.env.TAMANDUA_PI_BINARY = fakePi;
+    const originalPiBinary = process.env.FORMIGA_PI_BINARY;
+    process.env.FORMIGA_PI_BINARY = fakePi;
 
     const { calls, restore } = captureLoggerCalls();
     const seeded = seedRunningRun("wf-observability-fail");
@@ -332,9 +332,9 @@ describe("executePollingRound observability", () => {
       restore();
       seeded.cleanup();
       if (originalPiBinary === undefined) {
-        delete process.env.TAMANDUA_PI_BINARY;
+        delete process.env.FORMIGA_PI_BINARY;
       } else {
-        process.env.TAMANDUA_PI_BINARY = originalPiBinary;
+        process.env.FORMIGA_PI_BINARY = originalPiBinary;
       }
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
