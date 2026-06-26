@@ -63,6 +63,25 @@ export function validateExpects(output: string, expects: string): string | null 
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Post-advance nudge
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Fire-and-forget in-process nudge of the run's scheduled jobs so the
+ * next pending step is claimed within ~1s instead of waiting up to one
+ * cron interval (1-15 min). Safe to call from any process: if the
+ * daemon isn't running in this process, the nudge is a no-op because
+ * jobMetadata is empty.
+ */
+function postAdvanceNudge(runId: string): void {
+  import("../scheduler/cron-manager.js")
+    .then((m) => m.nudgeScheduledRuns([runId]))
+    .catch((err) => {
+      logger.warn("post-advance nudge failed", { runId, error: String(err) });
+    });
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Complete Step
 // ══════════════════════════════════════════════════════════════════════
 
@@ -286,6 +305,9 @@ export function completeStep(stepId: string, output: string): { status: string; 
 
   const pipelineResult = advancePipeline(step.run_id);
   finalizeDrainingPause(step.run_id);
+  if (pipelineResult.advanced) {
+    postAdvanceNudge(step.run_id);
+  }
   return { status: pipelineResult.runCompleted ? "completed" : "advanced" };
 }
 
@@ -414,5 +436,9 @@ function checkLoopContinuation(runId: string, loopStepId: string): { advanced: b
     }
   }
 
-  return advancePipeline(runId);
+  const result = advancePipeline(runId);
+  if (result.advanced) {
+    postAdvanceNudge(runId);
+  }
+  return result;
 }

@@ -14,7 +14,7 @@ import { getWorkflowStatus, listRuns, stopWorkflow, deleteWorkflow, type RunInfo
 import { runWorkflow, resumeWorkflow, type RunWorkflowResult } from "../installer/run.js";
 import { listBundledWorkflows, getWorkflowShortDescription } from "../installer/workflow-fetch.js";
 import { loadWorkflowSpec } from "../installer/workflow-spec.js";
-import { resolveBundledWorkflowDir } from "../installer/paths.js";
+import { resolveBundledWorkflowDir, resolveWorkflowDir } from "../installer/paths.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource, type FormigaEvent } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { parseLogsSelector, lookupRunIdByNumber } from "./logs-selector.js";
@@ -25,7 +25,7 @@ import { claimStep, completeStep, failStep, getStories, peekStep } from "../inst
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
 import { formatServiceStatus, formatFormigaInfo, formatRunsSummary, formatProcessList } from "./status-format.js";
 import { getWorkflowStatus as getWorkflowStatusFn } from "../installer/status.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -2093,6 +2093,22 @@ async function main() {
     let harnessType: HarnessType | undefined;
     if (runArgs.harnessAs !== undefined) {
       harnessType = runArgs.harnessAs as HarnessType;
+    }
+
+    // Auto-install bundled workflow if not yet installed. Lets users run
+    // `formiga workflow run ml-pipeline ...` without first running
+    // `formiga get-ready` or `formiga workflow install ml-pipeline`.
+    if (!existsSync(resolveWorkflowDir(workflowName))) {
+      const bundled = await listBundledWorkflows();
+      if (bundled.includes(workflowName)) {
+        console.log(`Installing bundled workflow "${workflowName}"...`);
+        try {
+          await installWorkflow({ workflowId: workflowName });
+        } catch (err) {
+          process.stderr.write(`Failed to install "${workflowName}": ${err instanceof Error ? err.message : String(err)}\n`);
+          process.exit(1);
+        }
+      }
     }
 
     const result = await runWorkflow({
