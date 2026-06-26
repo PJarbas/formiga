@@ -1215,24 +1215,7 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
       "SELECT val_metric FROM experiments WHERE run_id = ? AND status IN ('SUCCESS','AUDITED') ORDER BY val_metric DESC LIMIT 1",
     ).get(runId) as { val_metric: number } | undefined;
 
-    const entries = rows.map((r) => ({
-      id: String(r.experiment_id),
-      runId: r.run_id as string,
-      roundNumber: Number(r.round_number),
-      agentName: r.agent_name as string,
-      modelId: `model_${r.experiment_id}`,
-      modelType: r.model_type as string,
-      status: r.status as string,
-      cvMean: Number(r.val_metric),
-      cvStd: 0,
-      trainMean: Number(r.train_metric),
-      trainValGap: Number(r.train_metric) - Number(r.val_metric),
-      hyperparameters: safeParseJson(r.hyperparameters as string),
-      featureImportancesTop10: null,
-      trainTimeSeconds: null,
-      inferenceTimeMsPer1k: null,
-      createdAt: r.created_at as string,
-    }));
+    const entries = rows.map(mapExperimentRow);
 
     jsonResponse(res, {
       entries,
@@ -1247,6 +1230,56 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
 
 function safeParseJson(raw: string): Record<string, unknown> {
   try { return JSON.parse(raw) as Record<string, unknown>; } catch { return {}; }
+}
+
+/**
+ * Maps a raw `experiments` row to the LeaderboardEntry shape returned by
+ * GET /api/leaderboard, /api/leaderboard/:id, and /api/leaderboard/compare.
+ * Fields that the schema does not yet persist (feature importances, timings)
+ * surface as `null` until ingestion captures them — the API contract is stable.
+ */
+function mapExperimentRow(r: Record<string, unknown>): {
+  id: string;
+  runId: string;
+  roundNumber: number;
+  agentName: string;
+  modelId: string;
+  modelType: string;
+  status: string;
+  cvMean: number;
+  cvStd: number;
+  trainMean: number;
+  trainValGap: number;
+  hyperparameters: Record<string, unknown>;
+  featureImportancesTop10: Array<[string, number]> | null;
+  trainTimeSeconds: number | null;
+  inferenceTimeMsPer1k: number | null;
+  createdAt: string;
+  promotedAt: string | null;
+  rejectedAt: string | null;
+  rejectReason: string | null;
+} {
+  return {
+    id: String(r.experiment_id),
+    runId: r.run_id as string,
+    roundNumber: Number(r.round_number),
+    agentName: r.agent_name as string,
+    modelId: `model_${r.experiment_id}`,
+    modelType: r.model_type as string,
+    status: r.status as string,
+    cvMean: Number(r.val_metric),
+    cvStd: 0,
+    trainMean: Number(r.train_metric),
+    trainValGap: Number(r.train_metric) - Number(r.val_metric),
+    hyperparameters: safeParseJson(r.hyperparameters as string),
+    featureImportancesTop10: null,
+    trainTimeSeconds: null,
+    inferenceTimeMsPer1k: null,
+    createdAt: r.created_at as string,
+    promotedAt: (r.promoted_at as string | null) ?? null,
+    rejectedAt: (r.rejected_at as string | null) ?? null,
+    rejectReason: (r.reject_reason as string | null) ?? null,
+  };
 }
 
 function handleLeaderboardEntry(
@@ -1268,24 +1301,7 @@ function handleLeaderboardEntry(
       return;
     }
 
-    jsonResponse(res, {
-      id: String(row.experiment_id),
-      runId: row.run_id,
-      roundNumber: Number(row.round_number),
-      agentName: row.agent_name,
-      modelId: `model_${row.experiment_id}`,
-      modelType: row.model_type,
-      status: row.status,
-      cvMean: Number(row.val_metric),
-      cvStd: 0,
-      trainMean: Number(row.train_metric),
-      trainValGap: Number(row.train_metric) - Number(row.val_metric),
-      hyperparameters: safeParseJson(row.hyperparameters as string),
-      featureImportancesTop10: null,
-      trainTimeSeconds: null,
-      inferenceTimeMsPer1k: null,
-      createdAt: row.created_at,
-    });
+    jsonResponse(res, mapExperimentRow(row));
   } catch (err) {
     errorResponse(res, `Failed to get leaderboard entry: ${(err as Error).message}`);
   }
@@ -1307,16 +1323,7 @@ function handleLeaderboardCompare(req: http.IncomingMessage, res: http.ServerRes
       `SELECT * FROM experiments WHERE experiment_id IN (${placeholders})`,
     ).all(...ids.map(Number)) as Array<Record<string, unknown>>;
 
-    const entries = rows.map((r) => ({
-      id: String(r.experiment_id),
-      modelType: r.model_type as string,
-      agentName: r.agent_name as string,
-      cvMean: Number(r.val_metric),
-      trainMean: Number(r.train_metric),
-      trainValGap: Number(r.train_metric) - Number(r.val_metric),
-      roundNumber: Number(r.round_number),
-      status: r.status as string,
-    }));
+    const entries = rows.map(mapExperimentRow);
 
     jsonResponse(res, { entries });
   } catch (err) {
@@ -1421,6 +1428,534 @@ function handleCrossFindings(req: http.IncomingMessage, res: http.ServerResponse
     jsonResponse(res, findings);
   } catch (err) {
     errorResponse(res, `Failed to get cross-findings: ${(err as Error).message}`);
+  }
+}
+
+// ── Front-specs handlers: promote/reject, approvals, checklist, trace ─
+
+async function readJsonBody<T>(req: http.IncomingMessage): Promise<T | null> {
+  const raw = await parseBody(req);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function handleExperimentPromote(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string,
+): void {
+  try {
+    const experimentId = Number(id);
+    if (!Number.isFinite(experimentId)) {
+      errorResponse(res, `Invalid experiment id: ${id}`, 400);
+      return;
+    }
+    const db = getDb();
+    const row = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown> | undefined;
+    if (!row) {
+      errorResponse(res, `Experiment not found: ${id}`, 404);
+      return;
+    }
+    db.prepare(
+      `UPDATE experiments
+         SET promoted_at = datetime('now'),
+             rejected_at = NULL,
+             reject_reason = NULL
+       WHERE experiment_id = ?`,
+    ).run(experimentId);
+
+    const updated = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown>;
+    jsonResponse(res, mapExperimentRow(updated));
+  } catch (err) {
+    errorResponse(res, `Failed to promote experiment: ${(err as Error).message}`);
+  }
+}
+
+async function handleExperimentReject(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string,
+): Promise<void> {
+  try {
+    const experimentId = Number(id);
+    if (!Number.isFinite(experimentId)) {
+      errorResponse(res, `Invalid experiment id: ${id}`, 400);
+      return;
+    }
+    const body = await readJsonBody<{ reason?: string }>(req);
+    const reason = body?.reason?.trim() ?? null;
+
+    const db = getDb();
+    const row = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown> | undefined;
+    if (!row) {
+      errorResponse(res, `Experiment not found: ${id}`, 404);
+      return;
+    }
+    db.prepare(
+      `UPDATE experiments
+         SET rejected_at = datetime('now'),
+             reject_reason = ?,
+             promoted_at = NULL
+       WHERE experiment_id = ?`,
+    ).run(reason, experimentId);
+
+    const updated = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown>;
+    jsonResponse(res, mapExperimentRow(updated));
+  } catch (err) {
+    errorResponse(res, `Failed to reject experiment: ${(err as Error).message}`);
+  }
+}
+
+function parseSpecId(specId: string): { runId: string; phase: string } | null {
+  const idx = specId.indexOf(":");
+  if (idx <= 0 || idx === specId.length - 1) return null;
+  return { runId: specId.slice(0, idx), phase: specId.slice(idx + 1) };
+}
+
+function rowToSpecApproval(row: Record<string, unknown>): {
+  id: string;
+  runId: string;
+  phase: string;
+  status: "pending" | "approved" | "rejected";
+  reason?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedAt?: string;
+  rejectedBy?: string;
+  updatedAt: string;
+} {
+  return {
+    id: row.spec_id as string,
+    runId: row.run_id as string,
+    phase: row.phase as string,
+    status: row.status as "pending" | "approved" | "rejected",
+    reason: (row.reason as string | null) ?? undefined,
+    approvedBy: (row.approved_by as string | null) ?? undefined,
+    approvedAt: (row.approved_at as string | null) ?? undefined,
+    rejectedAt: (row.rejected_at as string | null) ?? undefined,
+    rejectedBy: (row.rejected_by as string | null) ?? undefined,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+async function handleSpecApprove(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  specId: string,
+): Promise<void> {
+  try {
+    const parts = parseSpecId(specId);
+    if (!parts) {
+      errorResponse(res, `Invalid spec id (expected "<runId>:<phase>"): ${specId}`, 400);
+      return;
+    }
+    const body = await readJsonBody<{ approvedBy?: string }>(req);
+    const approvedBy = body?.approvedBy?.trim() ?? null;
+
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO spec_approvals (spec_id, run_id, phase, status, approved_by, approved_at, rejected_at, rejected_by, reason, updated_at)
+         VALUES (?, ?, ?, 'approved', ?, datetime('now'), NULL, NULL, NULL, datetime('now'))
+         ON CONFLICT(spec_id) DO UPDATE SET
+           status='approved',
+           approved_by=excluded.approved_by,
+           approved_at=datetime('now'),
+           rejected_at=NULL,
+           rejected_by=NULL,
+           reason=NULL,
+           updated_at=datetime('now')`,
+    ).run(specId, parts.runId, parts.phase, approvedBy);
+
+    const row = db.prepare("SELECT * FROM spec_approvals WHERE spec_id = ?").get(specId) as Record<string, unknown>;
+    jsonResponse(res, rowToSpecApproval(row));
+  } catch (err) {
+    errorResponse(res, `Failed to approve spec: ${(err as Error).message}`);
+  }
+}
+
+async function handleSpecReject(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  specId: string,
+): Promise<void> {
+  try {
+    const parts = parseSpecId(specId);
+    if (!parts) {
+      errorResponse(res, `Invalid spec id (expected "<runId>:<phase>"): ${specId}`, 400);
+      return;
+    }
+    const body = await readJsonBody<{ reason?: string; rejectedBy?: string }>(req);
+    const reason = body?.reason?.trim() ?? null;
+    const rejectedBy = body?.rejectedBy?.trim() ?? null;
+
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO spec_approvals (spec_id, run_id, phase, status, reason, rejected_by, rejected_at, approved_by, approved_at, updated_at)
+         VALUES (?, ?, ?, 'rejected', ?, ?, datetime('now'), NULL, NULL, datetime('now'))
+         ON CONFLICT(spec_id) DO UPDATE SET
+           status='rejected',
+           reason=excluded.reason,
+           rejected_by=excluded.rejected_by,
+           rejected_at=datetime('now'),
+           approved_by=NULL,
+           approved_at=NULL,
+           updated_at=datetime('now')`,
+    ).run(specId, parts.runId, parts.phase, reason, rejectedBy);
+
+    const row = db.prepare("SELECT * FROM spec_approvals WHERE spec_id = ?").get(specId) as Record<string, unknown>;
+    jsonResponse(res, rowToSpecApproval(row));
+  } catch (err) {
+    errorResponse(res, `Failed to reject spec: ${(err as Error).message}`);
+  }
+}
+
+function handleChecklistGet(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+  phase: string,
+): void {
+  try {
+    const db = getDb();
+    const row = db
+      .prepare("SELECT items_json, updated_at FROM checklist_state WHERE run_id = ? AND phase = ?")
+      .get(runId, phase) as { items_json: string; updated_at: string } | undefined;
+
+    if (!row) {
+      jsonResponse(res, { runId, phase, items: [], updatedAt: new Date().toISOString() });
+      return;
+    }
+
+    let items: unknown = [];
+    try {
+      items = JSON.parse(row.items_json);
+    } catch {
+      items = [];
+    }
+    jsonResponse(res, { runId, phase, items, updatedAt: row.updated_at });
+  } catch (err) {
+    errorResponse(res, `Failed to read checklist: ${(err as Error).message}`);
+  }
+}
+
+async function handleChecklistPut(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+  phase: string,
+): Promise<void> {
+  try {
+    const body = await readJsonBody<{ items?: unknown }>(req);
+    const items = Array.isArray(body?.items) ? body!.items : [];
+    const json = JSON.stringify(items);
+
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO checklist_state (run_id, phase, items_json, updated_at)
+         VALUES (?, ?, ?, datetime('now'))
+         ON CONFLICT(run_id, phase) DO UPDATE SET
+           items_json = excluded.items_json,
+           updated_at = datetime('now')`,
+    ).run(runId, phase, json);
+
+    const row = db
+      .prepare("SELECT updated_at FROM checklist_state WHERE run_id = ? AND phase = ?")
+      .get(runId, phase) as { updated_at: string };
+    jsonResponse(res, { runId, phase, items, updatedAt: row.updated_at });
+  } catch (err) {
+    errorResponse(res, `Failed to update checklist: ${(err as Error).message}`);
+  }
+}
+
+function handleTrace(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  agentName: string,
+  roundNumber: number,
+): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+    if (!runId) {
+      jsonResponse(res, []);
+      return;
+    }
+
+    const db = getDb();
+    // Derive trace entries from experiments table for this agent + round.
+    // Each experiment row becomes one TraceEntry; failures escalate to 'error',
+    // OVERFITTED to 'warn', others 'info'.
+    const rows = db
+      .prepare(
+        `SELECT experiment_id, model_type, status, error_message, created_at
+           FROM experiments
+           WHERE run_id = ? AND agent_name = ? AND round_number = ?
+           ORDER BY created_at ASC, experiment_id ASC`,
+      )
+      .all(runId, agentName, roundNumber) as Array<{
+      experiment_id: number;
+      model_type: string;
+      status: string;
+      error_message: string | null;
+      created_at: string;
+    }>;
+
+    const entries = rows.map((r) => {
+      let level: "info" | "warn" | "error" = "info";
+      if (r.status === "FAILED") level = "error";
+      else if (r.status === "OVERFITTED") level = "warn";
+      return {
+        timestamp: r.created_at,
+        event: `${r.status} · ${r.model_type}`,
+        detail: r.error_message ?? undefined,
+        level,
+      };
+    });
+
+    jsonResponse(res, entries);
+  } catch (err) {
+    errorResponse(res, `Failed to read trace: ${(err as Error).message}`);
+  }
+}
+
+const PIPELINE_PHASE_LABELS: Array<{ id: string; label: string }> = [
+  { id: "data_analysis", label: "EDA" },
+  { id: "feature_engineering", label: "Feat" },
+  { id: "modeling", label: "Model" },
+  { id: "audit", label: "Audit" },
+  { id: "complete", label: "Done" },
+];
+
+function derivePhases(currentPhase: string): Array<{
+  id: string;
+  label: string;
+  status: "done" | "running" | "pending" | "failed";
+  elapsedMs: number;
+  estimatedMs: number;
+}> {
+  const currentIdx = PIPELINE_PHASE_LABELS.findIndex((p) => p.id === currentPhase);
+  return PIPELINE_PHASE_LABELS.map((p, i) => {
+    let status: "done" | "running" | "pending" | "failed" = "pending";
+    if (currentIdx < 0) status = "pending";
+    else if (i < currentIdx) status = "done";
+    else if (i === currentIdx) status = "running";
+    return { id: p.id, label: p.label, status, elapsedMs: 0, estimatedMs: 0 };
+  });
+}
+
+function derivePendingDecisions(runId: string): Array<{
+  id: string;
+  type: "spec_approval" | "model_rejected" | "model_promoted" | "overfitting_warning";
+  title: string;
+  description: string;
+  actions: Array<{ id: string; label: string; primary?: boolean }>;
+  createdAt: string;
+}> {
+  const db = getDb();
+  const decisions: Array<{
+    id: string;
+    type: "spec_approval" | "model_rejected" | "model_promoted" | "overfitting_warning";
+    title: string;
+    description: string;
+    actions: Array<{ id: string; label: string; primary?: boolean }>;
+    createdAt: string;
+  }> = [];
+
+  // Pending spec approvals for this run
+  const pendingSpecs = db
+    .prepare("SELECT spec_id, phase, updated_at FROM spec_approvals WHERE run_id = ? AND status = 'pending'")
+    .all(runId) as Array<{ spec_id: string; phase: string; updated_at: string }>;
+  for (const s of pendingSpecs) {
+    decisions.push({
+      id: `spec:${s.spec_id}`,
+      type: "spec_approval",
+      title: `Spec pending: ${s.phase}`,
+      description: "A spec is awaiting your approval before the pipeline continues.",
+      actions: [
+        { id: "approve", label: "Approve", primary: true },
+        { id: "reject", label: "Reject" },
+      ],
+      createdAt: s.updated_at,
+    });
+  }
+
+  // Overfitted experiments not yet rejected
+  const overfitRows = db
+    .prepare(
+      `SELECT experiment_id, model_type, agent_name, val_metric, train_metric, created_at
+         FROM experiments
+         WHERE run_id = ? AND status = 'OVERFITTED' AND rejected_at IS NULL
+         ORDER BY created_at DESC LIMIT 20`,
+    )
+    .all(runId) as Array<{
+    experiment_id: number;
+    model_type: string;
+    agent_name: string;
+    val_metric: number;
+    train_metric: number;
+    created_at: string;
+  }>;
+  for (const r of overfitRows) {
+    const gap = Number(r.train_metric) - Number(r.val_metric);
+    decisions.push({
+      id: `overfit:${r.experiment_id}`,
+      type: "overfitting_warning",
+      title: `Overfitting: ${r.model_type} (${r.agent_name})`,
+      description: `train_val_gap=${gap.toFixed(4)}. Critic flagged this model.`,
+      actions: [
+        { id: "reject", label: "Reject", primary: true },
+        { id: "details", label: "See reason" },
+      ],
+      createdAt: r.created_at,
+    });
+  }
+
+  return decisions;
+}
+
+function handlePendingDecisions(req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+    if (!runId) {
+      jsonResponse(res, []);
+      return;
+    }
+    jsonResponse(res, derivePendingDecisions(runId));
+  } catch (err) {
+    errorResponse(res, `Failed to derive pending decisions: ${(err as Error).message}`);
+  }
+}
+
+function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const db = getDb();
+    const runId = findActivePipelineRunId();
+    if (!runId) {
+      jsonResponse(res, {
+        run: {
+          runId: null,
+          status: "idle",
+          currentPhase: "idle",
+          currentRound: 0,
+          maxRounds: 5,
+          startedAt: null,
+          updatedAt: null,
+        },
+        phases: derivePhases("idle"),
+        pendingDecisions: [],
+        bestModel: null,
+        bestModelTrend: [],
+        agentStrip: Object.values(AGENT_INFO_REGISTRY).map((info) => ({
+          name: info.name,
+          label: info.label,
+          status: "idle",
+          bestCvMean: null,
+          trials: 0,
+        })),
+        quickStats: { totalExperiments: 0, bestCvMean: null, roundsCompleted: 0, tokensSpent: 0 },
+      });
+      return;
+    }
+
+    const run = db
+      .prepare("SELECT id, status, created_at, updated_at, tokens_spent FROM runs WHERE id = ?")
+      .get(runId) as { id: string; status: string; created_at: string; updated_at: string; tokens_spent: number } | undefined;
+
+    const maxRoundRow = db
+      .prepare("SELECT MAX(round_number) AS max_round FROM experiments WHERE run_id = ?")
+      .get(runId) as { max_round: number | null } | undefined;
+    const currentRound = maxRoundRow?.max_round ?? 0;
+
+    const agentRows = db
+      .prepare("SELECT DISTINCT agent_name FROM experiments WHERE run_id = ? AND round_number = ?")
+      .all(runId, currentRound) as Array<{ agent_name: string }>;
+    const agentNames = new Set(agentRows.map((a) => a.agent_name));
+    let currentPhase = "idle";
+    if (agentNames.has("ml-critic")) currentPhase = "audit";
+    else if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) currentPhase = "modeling";
+    else if (agentNames.has("feature-engineer")) currentPhase = "feature_engineering";
+    else if (agentNames.has("data-analyst")) currentPhase = "data_analysis";
+    else if (agentNames.size > 0) currentPhase = "complete";
+
+    const stats = getExperimentStats(db, runId);
+    const bestRow = db
+      .prepare(
+        `SELECT * FROM experiments
+           WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
+           ORDER BY val_metric DESC LIMIT 1`,
+      )
+      .get(runId) as Record<string, unknown> | undefined;
+    const bestModel = bestRow ? mapExperimentRow(bestRow) : null;
+
+    const trendRows = db
+      .prepare(
+        `SELECT val_metric FROM experiments
+           WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
+           ORDER BY created_at ASC LIMIT 50`,
+      )
+      .all(runId) as Array<{ val_metric: number }>;
+    const bestModelTrend = trendRows.map((r) => Number(r.val_metric));
+
+    const agentStrip = Object.values(AGENT_INFO_REGISTRY).map((info) => {
+      const trialsRow = db
+        .prepare("SELECT COUNT(*) AS c FROM experiments WHERE run_id = ? AND agent_name = ?")
+        .get(runId, info.name) as { c: number };
+      const bestForAgent = db
+        .prepare(
+          `SELECT val_metric FROM experiments
+             WHERE run_id = ? AND agent_name = ? AND status IN ('SUCCESS','AUDITED')
+             ORDER BY val_metric DESC LIMIT 1`,
+        )
+        .get(runId, info.name) as { val_metric: number } | undefined;
+      const latest = db
+        .prepare(
+          "SELECT status FROM experiments WHERE run_id = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
+        )
+        .get(runId, info.name) as { status: string } | undefined;
+      let status: "idle" | "running" | "completed" | "failed" | "timed_out" = "idle";
+      if (latest) {
+        if (latest.status === "SUCCESS" || latest.status === "AUDITED") status = "completed";
+        else if (latest.status === "FAILED" || latest.status === "OVERFITTED") status = "failed";
+        else if (latest.status === "PENDING") status = "running";
+      }
+      return {
+        name: info.name,
+        label: info.label,
+        status,
+        bestCvMean: bestForAgent?.val_metric ?? null,
+        trials: trialsRow.c,
+      };
+    });
+
+    jsonResponse(res, {
+      run: {
+        runId,
+        status: run?.status ?? "idle",
+        currentPhase,
+        currentRound,
+        maxRounds: 5,
+        startedAt: run?.created_at ?? null,
+        updatedAt: run?.updated_at ?? null,
+      },
+      phases: derivePhases(currentPhase),
+      pendingDecisions: derivePendingDecisions(runId),
+      bestModel,
+      bestModelTrend,
+      agentStrip,
+      quickStats: {
+        totalExperiments: stats.total,
+        bestCvMean: bestModel?.cvMean ?? null,
+        roundsCompleted: currentRound,
+        tokensSpent: run?.tokens_spent ?? 0,
+      },
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to build command-center snapshot: ${(err as Error).message}`);
   }
 }
 
@@ -1533,7 +2068,7 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (method === "OPTIONS") {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     });
     res.end();
@@ -1766,6 +2301,78 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // POST /api/pipeline/cancel
   if (method === "POST" && pathname === "/api/pipeline/cancel") {
     handlePipelineCancel(req, res);
+    return;
+  }
+
+  // ── front-specs routes ──────────────────────────────────────────
+
+  // POST /api/experiments/:id/promote
+  const promoteMatch = pathname.match(/^\/api\/experiments\/([0-9]+)\/promote$/);
+  if (method === "POST" && promoteMatch) {
+    handleExperimentPromote(req, res, promoteMatch[1]);
+    return;
+  }
+
+  // POST /api/experiments/:id/reject
+  const rejectMatch = pathname.match(/^\/api\/experiments\/([0-9]+)\/reject$/);
+  if (method === "POST" && rejectMatch) {
+    handleExperimentReject(req, res, rejectMatch[1]);
+    return;
+  }
+
+  // PATCH /api/specs/:specId/approve
+  const specApproveMatch = pathname.match(/^\/api\/specs\/([^/]+)\/approve$/);
+  if (method === "PATCH" && specApproveMatch) {
+    handleSpecApprove(req, res, decodeURIComponent(specApproveMatch[1]));
+    return;
+  }
+
+  // PATCH /api/specs/:specId/reject
+  const specRejectMatch = pathname.match(/^\/api\/specs\/([^/]+)\/reject$/);
+  if (method === "PATCH" && specRejectMatch) {
+    handleSpecReject(req, res, decodeURIComponent(specRejectMatch[1]));
+    return;
+  }
+
+  // GET /api/checklist/:runId/:phase
+  const checklistGetMatch = pathname.match(/^\/api\/checklist\/([^/]+)\/([^/]+)$/);
+  if (method === "GET" && checklistGetMatch) {
+    handleChecklistGet(
+      req,
+      res,
+      decodeURIComponent(checklistGetMatch[1]),
+      decodeURIComponent(checklistGetMatch[2]),
+    );
+    return;
+  }
+
+  // PUT /api/checklist/:runId/:phase
+  if (method === "PUT" && checklistGetMatch) {
+    handleChecklistPut(
+      req,
+      res,
+      decodeURIComponent(checklistGetMatch[1]),
+      decodeURIComponent(checklistGetMatch[2]),
+    );
+    return;
+  }
+
+  // GET /api/trace/:agentName/:roundNumber
+  const traceMatch = pathname.match(/^\/api\/trace\/([^/]+)\/([0-9]+)$/);
+  if (method === "GET" && traceMatch) {
+    handleTrace(req, res, decodeURIComponent(traceMatch[1]), Number(traceMatch[2]));
+    return;
+  }
+
+  // GET /api/decisions/pending
+  if (method === "GET" && pathname === "/api/decisions/pending") {
+    handlePendingDecisions(req, res);
+    return;
+  }
+
+  // GET /api/command-center
+  if (method === "GET" && pathname === "/api/command-center") {
+    handleCommandCenter(req, res);
     return;
   }
 
