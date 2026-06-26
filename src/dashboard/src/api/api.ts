@@ -13,6 +13,13 @@ import type {
   RoundSummary,
   CrossFinding,
   AgentInfo,
+  CompareResponse,
+  SpecApproval,
+  ChecklistState,
+  ChecklistItem,
+  TraceEntry,
+  CommandCenterSnapshot,
+  PendingDecision,
 } from "@shared/dashboard-types";
 
 const BASE = "/api";
@@ -68,7 +75,7 @@ export function useAgentLogs(agentName: string | undefined, offset = 0, limit = 
 export function useKanbanSnapshot(runId: string | undefined) {
   return useQuery({
     queryKey: ["kanban", runId],
-    queryFn: () => fetchJSON<MLKanbanSnapshot>(`${BASE}/pipeline/kanban?runId=${encodeURIComponent(runId ?? "")}`),
+    queryFn: () => fetchJSON<MLKanbanSnapshot>(`${BASE}/runs/${encodeURIComponent(runId ?? "")}/kanban`),
     enabled: !!runId,
   });
 }
@@ -144,4 +151,153 @@ export function usePipelineControl() {
   });
 
   return { pause, resume, cancel };
+}
+
+// ── Compare experiments (front-specs §5.1) ──────────────────────────
+
+export function useCompareExperiments(ids: string[]) {
+  const qs = ids.map((id) => `id=${encodeURIComponent(id)}`).join("&");
+  return useQuery({
+    queryKey: ["leaderboard", "compare", ids.slice().sort().join(",")],
+    queryFn: () => fetchJSON<CompareResponse>(`${BASE}/leaderboard/compare?${qs}`),
+    enabled: ids.length >= 2,
+  });
+}
+
+// ── Experiment promote / reject ─────────────────────────────────────
+
+export function useExperimentActions() {
+  const qc = useQueryClient();
+
+  const promote = useMutation({
+    mutationFn: (id: string) =>
+      fetchJSON<LeaderboardEntry>(`${BASE}/experiments/${encodeURIComponent(id)}/promote`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["leaderboard"] });
+      qc.invalidateQueries({ queryKey: ["command-center"] });
+    },
+  });
+
+  const reject = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
+      fetchJSON<LeaderboardEntry>(`${BASE}/experiments/${encodeURIComponent(id)}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason ?? null }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["leaderboard"] });
+      qc.invalidateQueries({ queryKey: ["command-center"] });
+    },
+  });
+
+  return { promote, reject };
+}
+
+// ── Spec approval ───────────────────────────────────────────────────
+
+export function useSpecActions() {
+  const qc = useQueryClient();
+
+  const approve = useMutation({
+    mutationFn: ({ specId, approvedBy }: { specId: string; approvedBy?: string }) =>
+      fetchJSON<SpecApproval>(`${BASE}/specs/${encodeURIComponent(specId)}/approve`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approvedBy: approvedBy ?? null }),
+      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["specs", vars.specId] });
+      qc.invalidateQueries({ queryKey: ["command-center"] });
+      qc.invalidateQueries({ queryKey: ["decisions", "pending"] });
+    },
+  });
+
+  const reject = useMutation({
+    mutationFn: ({
+      specId,
+      reason,
+      rejectedBy,
+    }: {
+      specId: string;
+      reason?: string;
+      rejectedBy?: string;
+    }) =>
+      fetchJSON<SpecApproval>(`${BASE}/specs/${encodeURIComponent(specId)}/reject`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason ?? null, rejectedBy: rejectedBy ?? null }),
+      }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["specs", vars.specId] });
+      qc.invalidateQueries({ queryKey: ["command-center"] });
+      qc.invalidateQueries({ queryKey: ["decisions", "pending"] });
+    },
+  });
+
+  return { approve, reject };
+}
+
+// ── Checklist ───────────────────────────────────────────────────────
+
+export function useChecklist(runId: string | undefined, phase: string | undefined) {
+  return useQuery({
+    queryKey: ["checklist", runId, phase],
+    queryFn: () =>
+      fetchJSON<ChecklistState>(
+        `${BASE}/checklist/${encodeURIComponent(runId ?? "")}/${encodeURIComponent(phase ?? "")}`,
+      ),
+    enabled: !!runId && !!phase,
+  });
+}
+
+export function useChecklistMutation(runId: string, phase: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (items: ChecklistItem[]) =>
+      fetchJSON<ChecklistState>(
+        `${BASE}/checklist/${encodeURIComponent(runId)}/${encodeURIComponent(phase)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items }),
+        },
+      ),
+    onSuccess: (data) => {
+      qc.setQueryData(["checklist", runId, phase], data);
+    },
+  });
+}
+
+// ── Trace ───────────────────────────────────────────────────────────
+
+export function useTrace(agentName: string | undefined, roundNumber: number | undefined) {
+  return useQuery({
+    queryKey: ["trace", agentName, roundNumber],
+    queryFn: () =>
+      fetchJSON<TraceEntry[]>(
+        `${BASE}/trace/${encodeURIComponent(agentName ?? "")}/${roundNumber ?? 0}`,
+      ),
+    enabled: !!agentName && roundNumber !== undefined,
+  });
+}
+
+// ── Command Center aggregate ────────────────────────────────────────
+
+export function useCommandCenter() {
+  return useQuery({
+    queryKey: ["command-center"],
+    queryFn: () => fetchJSON<CommandCenterSnapshot>(`${BASE}/command-center`),
+    refetchInterval: 3000,
+  });
+}
+
+export function usePendingDecisions(runId?: string) {
+  const qs = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+  return useQuery({
+    queryKey: ["decisions", "pending", runId ?? null],
+    queryFn: () => fetchJSON<PendingDecision[]>(`${BASE}/decisions/pending${qs}`),
+  });
 }
