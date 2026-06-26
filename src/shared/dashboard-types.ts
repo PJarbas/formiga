@@ -55,6 +55,13 @@ export interface LeaderboardEntry {
   trainTimeSeconds: number | null;
   inferenceTimeMsPer1k: number | null;
   createdAt: string;
+  promotedAt: string | null;
+  rejectedAt: string | null;
+  rejectReason: string | null;
+}
+
+export interface CompareResponse {
+  entries: LeaderboardEntry[];
 }
 
 export interface LeaderboardResponse {
@@ -196,3 +203,125 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     model: "sonnet",
   },
 };
+
+// ── Actions, decisions & UX primitives (front-specs §9) ──────────────
+
+export type ExperimentAction = "promote" | "reject" | "compare" | "re-run";
+
+export type SpecAction = "approve" | "reject" | "edit";
+
+export interface Action {
+  id: string;
+  label: string;
+  primary?: boolean;
+  variant?: "default" | "destructive" | "success";
+}
+
+export interface DecisionAction {
+  id: string;
+  label: string;
+  primary?: boolean;
+}
+
+export interface ChecklistItem {
+  id: string;
+  label: string;
+  checked: boolean;
+  required: boolean;
+}
+
+export interface ChecklistState {
+  runId: string;
+  phase: string;
+  items: ChecklistItem[];
+  updatedAt: string;
+}
+
+export interface DiffHunk {
+  type: "added" | "removed" | "unchanged";
+  content: string;
+  lineNumber: number;
+}
+
+export interface SpecDiff {
+  before: string;
+  after: string;
+  changes: DiffHunk[];
+}
+
+export interface TraceEntry {
+  timestamp: string;
+  event: string;
+  detail?: string;
+  level: "info" | "warn" | "error";
+}
+
+export type PhaseStatus = "done" | "running" | "pending" | "failed";
+
+export interface PhaseInfo {
+  id: string;
+  label: string;
+  status: PhaseStatus;
+  elapsedMs: number;
+  estimatedMs: number;
+}
+
+export type PendingDecisionType =
+  | "spec_approval"
+  | "model_rejected"
+  | "model_promoted"
+  | "overfitting_warning";
+
+export interface PendingDecision {
+  id: string;
+  type: PendingDecisionType;
+  title: string;
+  description: string;
+  actions: DecisionAction[];
+  createdAt: string;
+}
+
+// ── Spec approvals (persisted) ───────────────────────────────────────
+
+export type SpecApprovalStatus = "pending" | "approved" | "rejected";
+
+export interface SpecApproval {
+  id: string;
+  runId: string;
+  phase: string;
+  status: SpecApprovalStatus;
+  reason?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedAt?: string;
+  rejectedBy?: string;
+  updatedAt: string;
+}
+
+// ── Command Center aggregate (front-specs §3.1) ──────────────────────
+
+export interface AgentStripItem {
+  name: string;
+  label: string;
+  status: AgentStatus;
+  bestCvMean: number | null;
+  trials: number;
+}
+
+export interface CommandCenterSnapshot {
+  run: {
+    runId: string | null;
+    status: PipelineStatus["status"];
+    currentPhase: PipelinePhase;
+    currentRound: number;
+    maxRounds: number;
+    startedAt: string | null;
+    updatedAt: string | null;
+  };
+  phases: PhaseInfo[];
+  pendingDecisions: PendingDecision[];
+  bestModel: LeaderboardEntry | null;
+  bestModelTrend: number[];
+  agentStrip: AgentStripItem[];
+  quickStats: PipelineStatus["quickStats"];
+}

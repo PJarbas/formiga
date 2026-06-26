@@ -36,6 +36,35 @@ export const EXPERIMENTS_DDL = `
     ON experiments(agent_name, run_id);
 `;
 
+/**
+ * Additive migration: promote/reject decision columns.
+ * Orthogonal to `status` — a model can be SUCCESS *and* promoted.
+ * Applied idempotently by introspecting PRAGMA table_info(experiments).
+ */
+const PROMOTE_REJECT_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: "promoted_at", ddl: "ALTER TABLE experiments ADD COLUMN promoted_at TEXT" },
+  { name: "rejected_at", ddl: "ALTER TABLE experiments ADD COLUMN rejected_at TEXT" },
+  { name: "reject_reason", ddl: "ALTER TABLE experiments ADD COLUMN reject_reason TEXT" },
+];
+
+const PROMOTED_INDEX_DDL = `
+  CREATE INDEX IF NOT EXISTS idx_experiments_promoted
+    ON experiments(promoted_at)
+    WHERE promoted_at IS NOT NULL;
+`;
+
 export function initLeaderboardSchema(db: DatabaseSync): void {
   db.exec(EXPERIMENTS_DDL);
+
+  // Introspect existing columns so re-init is safe.
+  const existing = db.prepare("PRAGMA table_info(experiments)").all() as Array<{ name: string }>;
+  const existingNames = new Set(existing.map((row) => row.name));
+
+  for (const col of PROMOTE_REJECT_COLUMNS) {
+    if (!existingNames.has(col.name)) {
+      db.exec(col.ddl);
+    }
+  }
+
+  db.exec(PROMOTED_INDEX_DDL);
 }

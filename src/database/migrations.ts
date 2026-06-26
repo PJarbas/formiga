@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { initDashboardStoreSchema } from "../dashboard-store/schema.js";
 import { initLeaderboardSchema } from "../leaderboard/schema.js";
 
 export function migrate(db: DatabaseSync): void {
@@ -194,4 +195,7 @@ export function migrate(db: DatabaseSync): void {
 
   // ── Leaderboard experiments table ──
   initLeaderboardSchema(db);
+
+  // ── Dashboard-owned UX state (approvals, checklists) ──
+  initDashboardStoreSchema(db);
 }
