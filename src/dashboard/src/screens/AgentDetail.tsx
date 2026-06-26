@@ -1,18 +1,67 @@
 // ══════════════════════════════════════════════════════════════════════
-// AgentDetail.tsx — Tela 4: agent plan, trials, paginated logs
+// AgentDetail.tsx — Agent Deep Dive (front-specs §6)
+// Adds: TraceTimeline above logs, InteractiveChecklist for feature-engineer,
+// SpecDiffViewer (graceful fallback when prior spec is unavailable).
 // ══════════════════════════════════════════════════════════════════════
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { useAgentDetail, useAgentLogs } from "../api/api";
+import {
+  useAgentDetail,
+  useAgentLogs,
+  useChecklist,
+  usePipelineStatus,
+  useTrace,
+} from "../api/api";
+import { TraceTimeline } from "../components/TraceTimeline";
+import { InteractiveChecklist } from "../components/InteractiveChecklist";
+import { SpecDiffViewer } from "../components/SpecDiffViewer";
+import type { ChecklistItem } from "@shared/dashboard-types";
 
 const LOG_PAGE_SIZE = 50;
+
+// Default checklist scaffold for the feature-engineer phase.
+// Server returns an empty array when the row doesn't exist yet; we seed
+// these so users have something actionable on first visit.
+const DEFAULT_FEAT_ENG_CHECKLIST: ChecklistItem[] = [
+  { id: "missing", label: "Handle missing values", checked: false, required: true },
+  { id: "encode", label: "Encode categorical features", checked: false, required: true },
+  { id: "scale", label: "Scale/normalize numerics", checked: false, required: false },
+  { id: "leak", label: "Verify no target leakage", checked: false, required: true },
+  { id: "doc", label: "Document feature decisions", checked: false, required: false },
+];
 
 export default function AgentDetail() {
   const { name } = useParams<{ name: string }>();
   const { data: detail, isLoading } = useAgentDetail(name);
+  const { data: pipeline } = usePipelineStatus();
   const [logOffset, setLogOffset] = useState(0);
   const { data: logs } = useAgentLogs(name, logOffset, LOG_PAGE_SIZE);
+
+  const latestRoundNumber = useMemo(() => {
+    if (!detail?.rounds || detail.rounds.length === 0) return null;
+    return Math.max(...detail.rounds.map((r) => r.roundNumber));
+  }, [detail]);
+
+  const { data: trace } = useTrace(name, latestRoundNumber ?? undefined);
+  const { data: checklist } = useChecklist(
+    name === "feature-engineer" ? pipeline?.runId ?? undefined : undefined,
+    name === "feature-engineer" ? "feat-eng" : undefined,
+  );
+
+  // Derive "before / after" spec content from rounds when possible.
+  // Without a dedicated spec endpoint, we fall back to comparing the
+  // serialized round summaries — useful enough for v1 to demo the diff.
+  const { specBefore, specAfter } = useMemo(() => {
+    if (!detail?.rounds || detail.rounds.length < 2) return { specBefore: null, specAfter: null };
+    const sorted = [...detail.rounds].sort((a, b) => a.roundNumber - b.roundNumber);
+    const prev = sorted[sorted.length - 2];
+    const curr = sorted[sorted.length - 1];
+    return {
+      specBefore: JSON.stringify(prev, null, 2),
+      specAfter: JSON.stringify(curr, null, 2),
+    };
+  }, [detail]);
 
   if (isLoading) {
     return (
@@ -31,6 +80,8 @@ export default function AgentDetail() {
   }
 
   const { agent, currentStatus, totalTrials, rounds, lastError } = detail;
+  const runId = pipeline?.runId ?? "";
+  const isFeatureEngineer = name === "feature-engineer";
 
   return (
     <div className="space-y-6">
@@ -46,7 +97,7 @@ export default function AgentDetail() {
             <span className="text-sm font-medium capitalize text-[var(--text-primary)]">{currentStatus}</span>
           </div>
         </div>
-        <div className="flex gap-6 mt-4 text-sm">
+        <div className="flex gap-6 mt-4 text-sm flex-wrap">
           <div>
             <span className="text-[var(--text-muted)]">Model: </span>
             <span className="text-[var(--text-primary)] font-medium">{agent.model}</span>
@@ -60,6 +111,38 @@ export default function AgentDetail() {
             <span className="text-[var(--text-primary)] font-medium">{agent.tools.join(", ")}</span>
           </div>
         </div>
+      </div>
+
+      {/* Feature-engineer checklist */}
+      {isFeatureEngineer && runId && (
+        <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Engineering Checklist</h3>
+          <InteractiveChecklist
+            runId={runId}
+            phase="feat-eng"
+            items={checklist?.items?.length ? checklist.items : DEFAULT_FEAT_ENG_CHECKLIST}
+          />
+        </div>
+      )}
+
+      {/* Spec diff (graceful fallback) */}
+      <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
+        <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Spec Diff</h3>
+        {specBefore && specAfter ? (
+          <SpecDiffViewer before={specBefore} after={specAfter} />
+        ) : (
+          <p className="text-xs text-[var(--text-muted)] italic">
+            No prior round available to diff against yet.
+          </p>
+        )}
+      </div>
+
+      {/* Trace timeline */}
+      <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
+        <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
+          Trace {latestRoundNumber != null && `(Round ${latestRoundNumber})`}
+        </h3>
+        <TraceTimeline entries={trace ?? []} />
       </div>
 
       {/* Rounds table */}

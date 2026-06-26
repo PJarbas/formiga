@@ -6,9 +6,9 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { usePipelineStatus } from "./api/api";
 
 const NAV_ITEMS = [
-  { to: "/", label: "Overview", end: true },
-  { to: "/kanban", label: "Kanban" },
-  { to: "/leaderboard", label: "Leaderboard" },
+  { to: "/", label: "Command Center", end: true },
+  { to: "/kanban", label: "Experiment Board" },
+  { to: "/leaderboard", label: "Model Arena" },
   { to: "/agents/data-analyst", label: "Agent Detail" },
 ];
 
