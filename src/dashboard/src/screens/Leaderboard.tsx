@@ -1,6 +1,6 @@
 // ══════════════════════════════════════════════════════════════════════
 // Leaderboard.tsx — Model Arena (front-specs §5)
-// Scatter chart + selectable table + ComparePanel + promote/reject.
+// Scatter chart + selectable table + ComparePanel. Best model chosen automatically from leaderboard.
 // ══════════════════════════════════════════════════════════════════════
 
 import { useState, useMemo } from "react";
@@ -8,11 +8,9 @@ import ReactECharts from "echarts-for-react";
 import {
   useLeaderboard,
   useCompareExperiments,
-  useExperimentActions,
 } from "../api/api";
 import { ComparePanel } from "../components/ComparePanel";
-import { ActionBar } from "../components/ActionBar";
-import type { Action, LeaderboardEntry } from "@shared/dashboard-types";
+import type { LeaderboardEntry } from "@shared/dashboard-types";
 
 type SortKey = "cvMean" | "trainMean" | "trainValGap" | "roundNumber";
 
@@ -45,7 +43,6 @@ export default function Leaderboard() {
     sortBy,
     sortDir,
   });
-  const { promote, reject } = useExperimentActions();
 
   const selectedIdArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
   const compareQuery = useCompareExperiments(selectedIdArray);
@@ -59,11 +56,11 @@ export default function Leaderboard() {
     });
   }, [data, sortBy, sortDir]);
 
-  // Best CV among the visible (non-rejected) entries — drives the ⭐.
+  // Best CV among visible (non-FAILED/OVERFITTED) entries — drives the ⭐.
   const bestId = useMemo(() => {
     let best: LeaderboardEntry | null = null;
     for (const e of sortedEntries) {
-      if (e.rejectedAt) continue;
+      if (e.status === "FAILED" || e.status === "OVERFITTED") continue;
       if (!best || (e.cvMean ?? -Infinity) > (best.cvMean ?? -Infinity)) best = e;
     }
     return best?.id ?? null;
@@ -132,42 +129,14 @@ export default function Leaderboard() {
     return best;
   }, [compareEntries]);
 
-  function handlePromote(id: string) {
-    setActionMsg(null);
-    promote.mutate(id, {
-      onSuccess: () => setActionMsg(`Promoted ${id}`),
-      onError: (err) => setActionMsg(`Promote failed: ${(err as Error).message}`),
-    });
-  }
-
-  function handleReject(id: string) {
-    setActionMsg(null);
-    const reason = window.prompt("Reject reason (optional):") ?? undefined;
-    reject.mutate(
-      { id, reason },
-      {
-        onSuccess: () => setActionMsg(`Rejected ${id}`),
-        onError: (err) => setActionMsg(`Reject failed: ${(err as Error).message}`),
-      },
-    );
-  }
-
-  const panelActions: Action[] = useMemo(() => {
-    const acts: Action[] = [];
-    if (compareWinner) {
-      acts.push({ id: "promote-winner", label: `Promote ${compareWinner.modelId}`, primary: true, variant: "success" });
-    }
-    acts.push({ id: "export", label: "Export comparison" });
-    acts.push({ id: "rerun", label: "Re-run with tweaks" });
-    return acts;
-  }, [compareWinner]);
+  const panelActions = useMemo(() => {
+    return [
+      { id: "export", label: "Export comparison" },
+      { id: "rerun", label: "Re-run with tweaks" },
+    ];
+  }, []);
 
   function onPanelAction(id: string) {
-    if (id === "promote-winner" && compareWinner) {
-      handlePromote(compareWinner.id);
-      return;
-    }
-    // Stubbed for spec parity (front-specs §5.1)
     setActionMsg(`"${id}" not yet wired`);
   }
 
@@ -252,20 +221,18 @@ export default function Leaderboard() {
                   ["cvStd", "CV Std"],
                   ["trainMean", "Train"],
                   ["trainValGap", "Gap"],
-                  ["actions", "Actions"],
                 ] as const).map(([key, label]) => (
                   <th
                     key={key}
                     className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide select-none"
                     onClick={() => {
-                      if (key === "actions") return;
                       if (sortBy === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
                       else {
                         setSortBy(key as SortKey);
                         setSortDir("desc");
                       }
                     }}
-                    style={{ cursor: key === "actions" ? "default" : "pointer" }}
+                    style={{ cursor: "pointer" }}
                   >
                     {label}
                     {sortBy === key && (
@@ -275,12 +242,15 @@ export default function Leaderboard() {
                     )}
                   </th>
                 ))}
+                <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide select-none">
+                  Audit
+                </th>
               </tr>
             </thead>
             <tbody>
               {sortedEntries.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-[var(--text-muted)]">
+                  <td colSpan={9} className="px-4 py-8 text-center text-[var(--text-muted)]">
                     No leaderboard entries yet
                   </td>
                 </tr>
@@ -288,23 +258,12 @@ export default function Leaderboard() {
                 sortedEntries.map((entry) => {
                   const isSelected = selectedIds.has(entry.id);
                   const isBest = entry.id === bestId;
-                  const isRejected = !!entry.rejectedAt;
-                  const isPromoted = !!entry.promotedAt;
                   return (
                     <tr
                       key={entry.id}
                       data-testid={`arena-row-${entry.id}`}
                       data-selected={isSelected ? "true" : "false"}
-                      data-rejected={isRejected ? "true" : "false"}
-                      data-promoted={isPromoted ? "true" : "false"}
-                      className={`border-b border-[var(--border-default)] hover:bg-[var(--bg-tertiary)] transition-colors ${
-                        isRejected ? "opacity-50" : ""
-                      }`}
-                      style={
-                        isPromoted
-                          ? { borderLeft: "3px solid var(--accent-green)" }
-                          : undefined
-                      }
+                      className="border-b border-[var(--border-default)] hover:bg-[var(--bg-tertiary)] transition-colors"
                     >
                       <td className="px-3 py-2.5">
                         <input
@@ -334,26 +293,18 @@ export default function Leaderboard() {
                         {entry.trainValGap.toFixed(4)}
                       </td>
                       <td className="px-4 py-2.5">
-                        <div className="flex gap-2 text-xs">
-                          {!isPromoted && (
-                            <button
-                              data-testid={`promote-${entry.id}`}
-                              className="text-[var(--accent-green)] hover:underline"
-                              onClick={() => handlePromote(entry.id)}
-                            >
-                              Promote
-                            </button>
-                          )}
-                          {!isRejected && (
-                            <button
-                              data-testid={`reject-${entry.id}`}
-                              className="text-[var(--accent-red)] hover:underline"
-                              onClick={() => handleReject(entry.id)}
-                            >
-                              Reject
-                            </button>
-                          )}
-                        </div>
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded ${
+                            entry.status === "AUDITED"
+                              ? "bg-[var(--accent-green)]/10 text-[var(--accent-green)]"
+                              : entry.status === "FAILED" || entry.status === "OVERFITTED"
+                                ? "bg-[var(--accent-red)]/10 text-[var(--accent-red)]"
+                                : "bg-[var(--bg-tertiary)] text-[var(--text-muted)]"
+                          }`}
+                          title={entry.status}
+                        >
+                          {entry.status === "AUDITED" ? "✓" : entry.status === "FAILED" ? "✗" : entry.status === "OVERFITTED" ? "⚠" : "·"}
+                        </span>
                       </td>
                     </tr>
                   );
