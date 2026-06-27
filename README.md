@@ -44,7 +44,8 @@ This builds the TypeScript CLI + React dashboard and symlinks `~/.local/bin/form
 ```bash
 # Run the ML pipeline on your CSV — Formiga auto-installs what it needs
 formiga workflow run ml-pipeline \
-  "dataset_path=data/train.csv target_column=price"
+  "dataset_path=data/train.csv target_column=price" \
+  [--pi-as-harness | --hermes-as-harness]
 
 # Open the dashboard
 formiga dashboard start
@@ -92,6 +93,29 @@ Every step is deterministic and resumable. Pause it, restart your laptop, resume
 | `ml-critic` | Adversarial audit (read-only) | Read, Bash, Glob, Grep |
 
 Each agent has its own persona file, workspace, and acceptance criteria. The ML Critic is deliberately read-only — it audits but cannot touch models.
+
+## Harness
+
+Formiga needs a coding-agent harness to execute agent steps. By default it uses [`pi`](https://github.com/mariozechner/pi-coding-agent) (the default and recommended harness for production workflows).
+
+You can choose a different harness at run time with these mutually exclusive flags:
+
+```bash
+# Default — recommended for production
+formiga workflow run ml-pipeline "dataset_path=data/train.csv" --pi-as-harness
+
+# Hermes (alpha quality, very slow, token accounting is broken)
+formiga workflow run ml-pipeline "dataset_path=data/train.csv" --hermes-as-harness
+```
+
+- `--pi-as-harness` is the default and recommended choice. This is the default. Use pi for production workflows.
+- `--hermes-as-harness` is **Alpha quality** — very slow, and has broken token accounting.
+- The two flags are **mutually exclusive** — only one can be passed at a time.
+- If Hermes is selected, Formiga searches for the binary in this order:
+  1. `FORMIGA_HERMES_BINARY` environment variable
+  2. The `hermes` binary on your `PATH`
+
+Harness binary validation runs at scheduling time — if the chosen harness is missing, the workflow run will fail immediately with a clear error instead of silently hanging.
 
 ## Architecture
 
