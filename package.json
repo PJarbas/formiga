@@ -10,7 +10,7 @@
     "formiga": "dist/cli/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/server/index.html dist/server/index.html && cp src/server/kanban.html dist/server/kanban.html && chmod +x dist/cli/cli.js && node scripts/inject-version.js && rm -rf dist/www && cp -r www dist/www && npm run build:dashboard",
+    "build": "rm -f dist/server/index.html dist/server/kanban.html && tsc -p tsconfig.json && chmod +x dist/cli/cli.js && node scripts/inject-version.js && rm -rf dist/www && cp -r www dist/www && npm run build:dashboard",
     "build:dashboard": "vite build --config src/dashboard/vite.config.ts",
     "start": "node dist/cli/cli.js",
     "test": "node --test tests/*.test.ts src/**/*.test.ts",

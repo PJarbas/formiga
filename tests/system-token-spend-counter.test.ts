@@ -320,69 +320,6 @@ describe("system token spend counter — e2e integration", () => {
     }
   });
 
-  // ── Test 5: Dashboard HTML token counter markup ──
-
-  it("dashboard HTML contains token counter elements and JS fetch logic", () => {
-    // Read the source HTML directly — no server needed
-    const htmlPath = path.join(repoRoot, "src", "server", "index.html");
-    const html = fs.readFileSync(htmlPath, "utf-8");
-
-    // Token counter container
-    assert.match(html, /<div class="token-counters" id="token-counters">/,
-      "token-counters div should exist");
-
-    // System tokens span with default 0
-    assert.match(html, /<span class="mono" id="system-tokens">0<\/span>/,
-      "system-tokens span should exist with default 0");
-
-    // Total tokens span with default 0
-    assert.match(html, /<span class="mono" id="total-tokens">0<\/span>/,
-      "total-tokens span should exist with default 0");
-
-    // Separator pipe
-    assert.match(html, /<span class="token-sep">\|<\/span>/,
-      "separator pipe should exist");
-
-    // Labels System: and Total:
-    assert.match(html, /System:/, "System label should exist");
-    assert.match(html, /Total:/, "Total label should exist");
-
-    // JS: fetchStats function
-    assert.match(html, /async function fetchStats/,
-      "fetchStats function should exist");
-
-    // JS: fetch /api/stats
-    assert.match(html, /fetch\(["']\/api\/stats["']\)/,
-      "fetch /api/stats call should exist");
-
-    // JS: fmtNum function (comma formatting)
-    assert.match(html, /function fmtNum/,
-      "fmtNum function should exist");
-
-    // JS: toLocaleString call
-    assert.match(html, /\.toLocaleString\(\)/,
-      "toLocaleString should exist");
-
-    // JS: fetchStats called in refreshAll
-    assert.match(html, /fetchStats\(\)/,
-      "fetchStats should be called");
-
-    // JS: get system-tokens element
-    assert.match(html, /document\.getElementById\("system-tokens"\)/,
-      "system-tokens element reference should exist");
-
-    // JS: get total-tokens element
-    assert.match(html, /document\.getElementById\("total-tokens"\)/,
-      "total-tokens element reference should exist");
-
-    // JS: update textContent with fmtNum
-    assert.match(html, /systemEl\.textContent = fmtNum/,
-      "system-tokens textContent update should exist");
-
-    assert.match(html, /totalEl\.textContent = fmtNum/,
-      "total-tokens textContent update should exist");
-  });
-
   // ── Additional regression: existing tests' coverage confirmations ──
 
   it("heartbeat rounds attribute token usage to system spend, leave run unchanged", () => {

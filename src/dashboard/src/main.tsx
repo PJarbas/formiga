@@ -5,7 +5,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import App from "./App";
 import CommandCenter from "./screens/CommandCenter";
 import ExperimentBoard from "./screens/ExperimentBoard";
@@ -32,6 +32,8 @@ const router = createBrowserRouter([
       { path: "kanban", element: <ExperimentBoard /> },
       { path: "leaderboard", element: <Leaderboard /> },
       { path: "agents/:name", element: <AgentDetail /> },
+      { path: "runs/:id/kanban", element: <Navigate to="/kanban" replace /> },
+      { path: "*", element: <CommandCenter /> },
     ],
   },
 ]);
