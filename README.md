@@ -9,9 +9,9 @@
   <img src="https://img.shields.io/badge/workflows-4%20bundled-8a2be2.svg" alt="4 bundled workflows">
 </p>
 
-<p align="center"><b>Point Formiga at a dataset. Walk away. Come back to a leaderboard of validated models.</b></p>
+<p align="center"><b>Formiga is a CLI that orchestrates a team of specialist AI agents — a Data Analyst, a Feature Engineer, two competing Modelers, and an adversarial ML Critic — through a deterministic, repeatable workflow.</b></p>
 
-Formiga is a CLI that orchestrates a team of specialist AI agents — a Data Analyst, a Feature Engineer, two competing Modelers, and an adversarial ML Critic — through a deterministic, repeatable workflow. The agents share artifacts through SQLite, cross-pollinate findings, and submit experiments to a live leaderboard you can watch in the browser.
+Formiga is a **Data Science and AutoResearch Multi-Agent Platform**. Point it at a dataset and walk away. The agents share artifacts through SQLite, cross-pollinate findings, and submit experiments to a live leaderboard you can watch in the browser. Every run is deterministic, resumable, and fully auditable.
 
 No Redis. No Kubernetes. No YAML soup. Just Node, SQLite, and a polling loop.
 
@@ -48,7 +48,7 @@ formiga workflow run ml-pipeline \
 
 # Open the dashboard
 formiga dashboard start
-open http://localhost:3334/ml/
+open http://localhost:3334/
 ```
 
 You should see the 5 agents come online, pick up the dataset, and start filling the leaderboard.
@@ -95,7 +95,9 @@ Each agent has its own persona file, workspace, and acceptance criteria. The ML 
 
 ## Architecture
 
-Formiga is a **TypeScript CLI + SQLite + polling**. No Redis. No Kafka. No containers. Agents poll for work independently, claim steps atomically, and pass context through the database.
+Formiga is a **TypeScript CLI + SQLite + polling** — a lightweight, local-first Data Science and AutoResearch orchestrator. No Redis. No Kafka. No containers. Agents poll for work independently, claim steps atomically, and pass context through the database.
+
+See [docs/architecture-overview.md](docs/architecture-overview.md) for a deep dive into the ML pipeline, template variables, sidecar JSON protocol, experiment lifecycle, and recent improvements (active failure avoidance, dataset signature transfer learning, and auto-critique / early stopping).
 
 ```mermaid
 flowchart TB
@@ -106,7 +108,7 @@ flowchart TB
     Agents -->|claim / write| DB
     DB --> Server["HTTP server :3334"]
     Server --> Dash["Workflow dashboard"]
-    Server --> ML["ML dashboard /ml/"]
+    Server --> ML["ML dashboard /"]
 ```
 
 Everything Formiga knows lives in a single SQLite database at `~/.formiga/formiga.db`:
@@ -125,10 +127,10 @@ A React 19 SPA with real-time polling (TanStack Query, 3s) and ECharts visualiza
 | Path | Screen | What you do here |
 |------|--------|------------------|
 | `/` | Workflow Kanban | Swim-lane view of every workflow run |
-| `/ml/` | **Command Center** | Single glance: stepper, pending decisions, best model, agent strip |
-| `/ml/kanban` | **Experiment Board** | Phase / Agent / Status lanes with inline Approve · Reject · Promote |
-| `/ml/leaderboard` | **Model Arena** | Sortable table + scatter; select ≥2 rows to compare side-by-side |
-| `/ml/agents/:name` | **Agent Detail** | Trace timeline, checklist (feature-engineer), spec diff, rounds, logs |
+| `/` | **Command Center** | Single glance: stepper, pending decisions, best model, agent strip |
+| `/kanban` | **Experiment Board** | Phase / Agent / Status lanes with inline Approve · Reject · Promote |
+| `/leaderboard` | **Model Arena** | Sortable table + scatter; select ≥2 rows to compare side-by-side |
+| `/agents/:name` | **Agent Detail** | Trace timeline, checklist (feature-engineer), spec diff, rounds, logs |
 
 <p align="center">
   <img src="docs/screenshots/experiment-board.png" alt="Experiment Board" width="48%">
