@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getDb, nextRunNumber } from "../db.js";
+import { computeDatasetSignature } from "../leaderboard/queries.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
 import { resolveWorkflowDir, resolvePiStateDir } from "./paths.js";
 import {
@@ -188,6 +189,19 @@ export async function runWorkflow(
       seededContext.workspace = runWorkspaceDir;
     } else {
       seededContext.workspace = workingDirectoryForHarness;
+    }
+
+    // Compute dataset signature for ml-pipeline so modelers can query
+    // cross-run transfer-learning experiments from the leaderboard.
+    if (workflowId === "ml-pipeline" && seededContext.dataset_path) {
+      try {
+        const datasetFullPath = path.resolve(seededContext.dataset_path);
+        const sig = await computeDatasetSignature(datasetFullPath);
+        seededContext.dataset_signature = sig.signature;
+        seededContext.dataset_row_bucket = sig.rowBucket;
+      } catch {
+        /* leave signature fields absent if dataset file is unreadable */
+      }
     }
 
     // Capture original branch for rugpull detection in direct mode — records

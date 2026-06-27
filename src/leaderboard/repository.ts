@@ -20,6 +20,7 @@ export interface ExperimentRow {
   artifact_path: string;
   status: "PENDING" | "SUCCESS" | "FAILED" | "AUDITED" | "OVERFITTED";
   error_message: string | null;
+  dataset_signature: string | null;
   created_at: string;
 }
 
@@ -43,6 +44,8 @@ export interface LeaderboardReadonly {
   getByAgent(agentName: string, runId: string): ExperimentRow[];
   getValidated(runId: string): ExperimentRow[];
   getFailedConfigs(agentName: string): ExperimentRow[];
+  getBestByDatasetSignature(signature: string, limit?: number): ExperimentRow[];
+  getBestInRun(runId: string): ExperimentRow | undefined;
 }
 
 export interface LeaderboardRepository extends LeaderboardReadonly {
@@ -50,6 +53,7 @@ export interface LeaderboardRepository extends LeaderboardReadonly {
   updateTestMetric(experimentId: number, testMetric: number, status: "AUDITED" | "OVERFITTED"): void;
   reject(experimentId: number, reason: string): void;
   autoAudit(experimentId: number): void;
+  setDatasetSignature(experimentId: number, signature: string): void;
 }
 
 // ── Implementation ───────────────────────────────────────────────────
@@ -69,6 +73,7 @@ function deserializeRow(raw: Record<string, unknown>): ExperimentRow {
     artifact_path: raw.artifact_path as string,
     status: raw.status as ExperimentRow["status"],
     error_message: raw.error_message != null ? (raw.error_message as string) : null,
+    dataset_signature: raw.dataset_signature != null ? (raw.dataset_signature as string) : null,
     created_at: raw.created_at as string,
   };
 }
@@ -161,5 +166,33 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
     this.db
       .prepare("UPDATE experiments SET status = 'AUDITED' WHERE experiment_id = ? AND status = 'SUCCESS'")
       .run(experimentId);
+  }
+
+  setDatasetSignature(experimentId: number, signature: string): void {
+    this.db
+      .prepare("UPDATE experiments SET dataset_signature = ? WHERE experiment_id = ?")
+      .run(signature, experimentId);
+  }
+
+  getBestByDatasetSignature(signature: string, limit = 5): ExperimentRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM experiments
+         WHERE dataset_signature = ? AND status IN ('SUCCESS','AUDITED')
+         ORDER BY val_metric DESC LIMIT ?`,
+      )
+      .all(signature, limit) as Record<string, unknown>[];
+    return rows.map(deserializeRow);
+  }
+
+  getBestInRun(runId: string): ExperimentRow | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM experiments
+         WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
+         ORDER BY val_metric DESC LIMIT 1`,
+      )
+      .get(runId) as Record<string, unknown> | undefined;
+    return row ? deserializeRow(row) : undefined;
   }
 }

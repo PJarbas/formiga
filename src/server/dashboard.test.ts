@@ -195,7 +195,7 @@ describe("dashboard AutoResearch progress", () => {
           goal: "Increase unit test coverage",
           metricName: "coverage",
           direction: "higher",
-          command: "./measure-test-coverage.sh",
+          command: "scripts/measure-test-coverage.sh",
         }, null, 2),
       );
       const entries = [
@@ -205,7 +205,7 @@ describe("dashboard AutoResearch progress", () => {
           goal: "Increase unit test coverage",
           metric_name: "coverage",
           direction: "higher",
-          command: "./measure-test-coverage.sh",
+          command: "scripts/measure-test-coverage.sh",
         },
         {
           type: "run_result",
@@ -217,7 +217,7 @@ describe("dashboard AutoResearch progress", () => {
           direction: "higher",
           duration_ms: 1200,
           exit_code: 0,
-          command: "./measure-test-coverage.sh",
+          command: "scripts/measure-test-coverage.sh",
           output_tail: "0.336",
           error_tail: "",
         },
@@ -230,7 +230,7 @@ describe("dashboard AutoResearch progress", () => {
           metric_name: "coverage",
           direction: "higher",
           duration_ms: 1200,
-          command: "./measure-test-coverage.sh",
+          command: "scripts/measure-test-coverage.sh",
           description: "baseline coverage",
           baseline_metric: 0.336,
           best_metric: 0.336,
