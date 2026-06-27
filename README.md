@@ -9,9 +9,9 @@
   <img src="https://img.shields.io/badge/workflows-4%20bundled-8a2be2.svg" alt="4 bundled workflows">
 </p>
 
-<p align="center"><b>Formiga is a CLI that orchestrates a team of specialist AI agents — a Data Analyst, a Feature Engineer, two competing Modelers, and an adversarial ML Critic — through a deterministic, repeatable workflow.</b></p>
-
 Formiga is a **Data Science and AutoResearch Multi-Agent Platform**. Point it at a dataset and walk away. The agents share artifacts through SQLite, cross-pollinate findings, and submit experiments to a live leaderboard you can watch in the browser. Every run is deterministic, resumable, and fully auditable.
+
+<p align="center"><b>Formiga is a CLI that orchestrates a team of specialist AI agents — a Data Analyst, a Feature Engineer, two competing Modelers, and an adversarial ML Critic — through a deterministic, repeatable workflow.</b></p>
 
 No Redis. No Kubernetes. No YAML soup. Just Node, SQLite, and a polling loop.
 
