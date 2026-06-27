@@ -206,8 +206,6 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
 
 // ── Actions, decisions & UX primitives (front-specs §9) ──────────────
 
-export type ExperimentAction = "promote" | "reject" | "compare" | "re-run";
-
 export type SpecAction = "approve" | "reject" | "edit";
 
 export interface Action {
@@ -268,8 +266,6 @@ export interface PhaseInfo {
 
 export type PendingDecisionType =
   | "spec_approval"
-  | "model_rejected"
-  | "model_promoted"
   | "overfitting_warning";
 
 export interface PendingDecision {

@@ -8,7 +8,6 @@
 import { useState } from "react";
 import {
   useCommandCenter,
-  useExperimentActions,
   useSpecActions,
 } from "../api/api";
 import { PipelineStepper } from "../components/PipelineStepper";
@@ -42,7 +41,6 @@ function decisionToActions(d: PendingDecision): Action[] {
 
 export default function CommandCenter() {
   const { data, isLoading, error } = useCommandCenter();
-  const { promote, reject } = useExperimentActions();
   const { approve: approveSpec, reject: rejectSpec } = useSpecActions();
   const [toast, setToast] = useState<string | null>(null);
 
@@ -105,25 +103,8 @@ export default function CommandCenter() {
       }
       return;
     }
-    if (d.type === "overfitting_warning" || d.type === "model_rejected") {
-      // Decision ids of the form "exp:<id>"
-      const expId = d.id.startsWith("exp:") ? d.id.slice(4) : d.id;
-      if (actionId === "promote") {
-        promote.mutate(expId, {
-          onSuccess: () => setToast(`Promoted ${expId}`),
-          onError: (e) => setToast(`Promote failed: ${(e as Error).message}`),
-        });
-      } else if (actionId === "reject") {
-        reject.mutate(
-          { id: expId },
-          {
-            onSuccess: () => setToast(`Rejected ${expId}`),
-            onError: (e) => setToast(`Reject failed: ${(e as Error).message}`),
-          },
-        );
-      } else {
-        setToast(`"${actionId}" not yet wired`);
-      }
+    if (d.type === "overfitting_warning") {
+      setToast(`"${actionId}" not yet wired`);
       return;
     }
     setToast(`"${actionId}" not yet wired`);
@@ -252,19 +233,11 @@ export default function CommandCenter() {
             </div>
             <ActionBar
               actions={[
-                { id: "promote", label: "Promote", primary: true, variant: "success" },
                 { id: "details", label: "Details" },
                 { id: "compare", label: "Compare" },
               ]}
               onAction={(actionId) => {
-                if (actionId === "promote") {
-                  promote.mutate(bestModel.id, {
-                    onSuccess: () => setToast(`Promoted ${bestModel.id}`),
-                    onError: (e) => setToast(`Promote failed: ${(e as Error).message}`),
-                  });
-                } else {
-                  setToast(`"${actionId}" not yet wired`);
-                }
+                setToast(`"${actionId}" not yet wired`);
               }}
             />
           </div>

@@ -164,37 +164,9 @@ export function useCompareExperiments(ids: string[]) {
   });
 }
 
-// ── Experiment promote / reject ─────────────────────────────────────
-
-export function useExperimentActions() {
-  const qc = useQueryClient();
-
-  const promote = useMutation({
-    mutationFn: (id: string) =>
-      fetchJSON<LeaderboardEntry>(`${BASE}/experiments/${encodeURIComponent(id)}/promote`, {
-        method: "POST",
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["leaderboard"] });
-      qc.invalidateQueries({ queryKey: ["command-center"] });
-    },
-  });
-
-  const reject = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason?: string }) =>
-      fetchJSON<LeaderboardEntry>(`${BASE}/experiments/${encodeURIComponent(id)}/reject`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: reason ?? null }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["leaderboard"] });
-      qc.invalidateQueries({ queryKey: ["command-center"] });
-    },
-  });
-
-  return { promote, reject };
-}
+// ── Experiment actions (now automated by leaderboard & critic) ────────
+// Note: manual promote/reject removed; best models are determined
+// automatically by CV mean on the leaderboard after audit.
 
 // ── Spec approval ───────────────────────────────────────────────────
 

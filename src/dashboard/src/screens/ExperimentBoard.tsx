@@ -11,7 +11,6 @@ import {
   useKanbanSnapshot,
   useTrace,
   useChecklist,
-  useExperimentActions,
   useSpecActions,
 } from "../api/api";
 import { TraceTimeline } from "../components/TraceTimeline";
@@ -125,8 +124,6 @@ function actionsForCard(card: MLKanbanCard): Action[] {
   }
   // trial
   return [
-    { id: "promote", label: "Promote", variant: "success" },
-    { id: "reject", label: "Reject", variant: "destructive" },
     { id: "details", label: "Details" },
   ];
 }
@@ -139,7 +136,6 @@ export default function ExperimentBoard() {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  const { promote, reject } = useExperimentActions();
   const { approve: approveSpec, reject: rejectSpec } = useSpecActions();
 
   const lanes = useMemo(() => buildLanes(view, kanban?.lanes ?? []), [view, kanban]);
@@ -210,23 +206,8 @@ export default function ExperimentBoard() {
       return;
     }
     if (kind === "trial") {
-      if (actionId === "promote") {
-        promote.mutate(card.id, {
-          onSuccess: () => setToast(`Promoted ${card.id}`),
-          onError: (e) => setToast(`Promote failed: ${(e as Error).message}`),
-        });
-        return;
-      }
-      if (actionId === "reject") {
-        reject.mutate(
-          { id: card.id },
-          {
-            onSuccess: () => setToast(`Rejected ${card.id}`),
-            onError: (e) => setToast(`Reject failed: ${(e as Error).message}`),
-          },
-        );
-        return;
-      }
+      setToast(`"${actionId}" not yet wired`);
+      return;
     }
     setToast(`"${actionId}" not yet wired`);
   }

@@ -49,6 +49,7 @@ export interface LeaderboardRepository extends LeaderboardReadonly {
   register(entry: NewExperiment): number;
   updateTestMetric(experimentId: number, testMetric: number, status: "AUDITED" | "OVERFITTED"): void;
   reject(experimentId: number, reason: string): void;
+  autoAudit(experimentId: number): void;
 }
 
 // ── Implementation ───────────────────────────────────────────────────
@@ -154,5 +155,11 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
     this.db
       .prepare("UPDATE experiments SET status = 'FAILED', error_message = ? WHERE experiment_id = ?")
       .run(reason, experimentId);
+  }
+
+  autoAudit(experimentId: number): void {
+    this.db
+      .prepare("UPDATE experiments SET status = 'AUDITED' WHERE experiment_id = ? AND status = 'SUCCESS'")
+      .run(experimentId);
   }
 }

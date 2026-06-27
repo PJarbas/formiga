@@ -18,6 +18,8 @@ import {
   advancePipeline,
 } from "./pipeline-control.js";
 import { ingestStepOutput } from "../../leaderboard/ingest.js";
+import { LeaderboardRepositoryImpl } from "../../leaderboard/repository.js";
+import { processCriticOutput } from "../../leaderboard/critic-processor.js";
 
 // ══════════════════════════════════════════════════════════════════════
 // Expects Validation
@@ -174,6 +176,38 @@ export function completeStep(stepId: string, output: string): { status: string; 
       stepId: step.step_id,
       error: (err as Error).message,
     });
+  }
+
+  // After leaderboard ingest, if this is the critic step, parse audit verdicts
+  if (step.agent_id === "ml-critic") {
+    try {
+      const repo = new LeaderboardRepositoryImpl(db);
+
+      // 1. Apply rejections from critic output
+      const result = processCriticOutput(output, repo);
+
+      // 2. Auto-audit every remaining SUCCESS experiment for this run
+      const successRows = db
+        .prepare(
+          "SELECT experiment_id FROM experiments WHERE run_id = ? AND status = 'SUCCESS'",
+        )
+        .all(runId) as Array<{ experiment_id: number }>;
+      for (const row of successRows) {
+        repo.autoAudit(row.experiment_id);
+      }
+      result.audited = successRows.length;
+
+      logger.info("Critic audit processed", {
+        runId,
+        rejected: result.rejected,
+        audited: result.audited,
+      });
+    } catch (err) {
+      logger.warn("Critic audit processing failed", {
+        runId,
+        error: (err as Error).message,
+      });
+    }
   }
 
   // Parse STORIES_JSON from output (any step, typically the planner)

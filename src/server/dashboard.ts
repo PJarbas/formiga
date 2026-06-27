@@ -1443,72 +1443,8 @@ async function readJsonBody<T>(req: http.IncomingMessage): Promise<T | null> {
   }
 }
 
-function handleExperimentPromote(
-  _req: http.IncomingMessage,
-  res: http.ServerResponse,
-  id: string,
-): void {
-  try {
-    const experimentId = Number(id);
-    if (!Number.isFinite(experimentId)) {
-      errorResponse(res, `Invalid experiment id: ${id}`, 400);
-      return;
-    }
-    const db = getDb();
-    const row = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown> | undefined;
-    if (!row) {
-      errorResponse(res, `Experiment not found: ${id}`, 404);
-      return;
-    }
-    db.prepare(
-      `UPDATE experiments
-         SET promoted_at = datetime('now'),
-             rejected_at = NULL,
-             reject_reason = NULL
-       WHERE experiment_id = ?`,
-    ).run(experimentId);
-
-    const updated = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown>;
-    jsonResponse(res, mapExperimentRow(updated));
-  } catch (err) {
-    errorResponse(res, `Failed to promote experiment: ${(err as Error).message}`);
-  }
-}
-
-async function handleExperimentReject(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  id: string,
-): Promise<void> {
-  try {
-    const experimentId = Number(id);
-    if (!Number.isFinite(experimentId)) {
-      errorResponse(res, `Invalid experiment id: ${id}`, 400);
-      return;
-    }
-    const body = await readJsonBody<{ reason?: string }>(req);
-    const reason = body?.reason?.trim() ?? null;
-
-    const db = getDb();
-    const row = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown> | undefined;
-    if (!row) {
-      errorResponse(res, `Experiment not found: ${id}`, 404);
-      return;
-    }
-    db.prepare(
-      `UPDATE experiments
-         SET rejected_at = datetime('now'),
-             reject_reason = ?,
-             promoted_at = NULL
-       WHERE experiment_id = ?`,
-    ).run(reason, experimentId);
-
-    const updated = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown>;
-    jsonResponse(res, mapExperimentRow(updated));
-  } catch (err) {
-    errorResponse(res, `Failed to reject experiment: ${(err as Error).message}`);
-  }
-}
+// NOTE: manual promote/reject endpoints removed; audit is now fully automated
+// by the critic-processor that parses the ml-critic step output.
 
 function parseSpecId(specId: string): { runId: string; phase: string } | null {
   const idx = specId.indexOf(":");
@@ -1783,36 +1719,7 @@ function derivePendingDecisions(runId: string): Array<{
     });
   }
 
-  // Overfitted experiments not yet rejected
-  const overfitRows = db
-    .prepare(
-      `SELECT experiment_id, model_type, agent_name, val_metric, train_metric, created_at
-         FROM experiments
-         WHERE run_id = ? AND status = 'OVERFITTED' AND rejected_at IS NULL
-         ORDER BY created_at DESC LIMIT 20`,
-    )
-    .all(runId) as Array<{
-    experiment_id: number;
-    model_type: string;
-    agent_name: string;
-    val_metric: number;
-    train_metric: number;
-    created_at: string;
-  }>;
-  for (const r of overfitRows) {
-    const gap = Number(r.train_metric) - Number(r.val_metric);
-    decisions.push({
-      id: `overfit:${r.experiment_id}`,
-      type: "overfitting_warning",
-      title: `Overfitting: ${r.model_type} (${r.agent_name})`,
-      description: `train_val_gap=${gap.toFixed(4)}. Critic flagged this model.`,
-      actions: [
-        { id: "reject", label: "Reject", primary: true },
-        { id: "details", label: "See reason" },
-      ],
-      createdAt: r.created_at,
-    });
-  }
+  // NOTE: overfitting warnings removed since reject is now automatic via critic-processor
 
   return decisions;
 }
@@ -2305,20 +2212,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   }
 
   // ── front-specs routes ──────────────────────────────────────────
-
-  // POST /api/experiments/:id/promote
-  const promoteMatch = pathname.match(/^\/api\/experiments\/([0-9]+)\/promote$/);
-  if (method === "POST" && promoteMatch) {
-    handleExperimentPromote(req, res, promoteMatch[1]);
-    return;
-  }
-
-  // POST /api/experiments/:id/reject
-  const rejectMatch = pathname.match(/^\/api\/experiments\/([0-9]+)\/reject$/);
-  if (method === "POST" && rejectMatch) {
-    handleExperimentReject(req, res, rejectMatch[1]);
-    return;
-  }
 
   // PATCH /api/specs/:specId/approve
   const specApproveMatch = pathname.match(/^\/api\/specs\/([^/]+)\/approve$/);
