@@ -178,9 +178,17 @@ export async function runWorkflow(
     // Seed `{{workspace}}` so workflow templates that reference the harness
     // working directory (e.g. ml-pipeline writes reports/artifacts to
     // `{{workspace}}/reports/...`) resolve correctly without forcing every
-    // caller to pass `workspace=...` inline. Mirrors workingDirectoryForHarness
-    // (which is the actual cwd pi runs in).
-    seededContext.workspace = workingDirectoryForHarness;
+    // caller to pass `workspace=...` inline.
+    //
+    // For the ml-pipeline workflow, isolate artifacts per run under
+    // `runs/<runId>` so they don't clutter the project root.
+    if (workflowId === "ml-pipeline") {
+      const runWorkspaceDir = path.join(workingDirectoryForHarness, "runs", runId);
+      await fs.mkdir(runWorkspaceDir, { recursive: true });
+      seededContext.workspace = runWorkspaceDir;
+    } else {
+      seededContext.workspace = workingDirectoryForHarness;
+    }
 
     // Capture original branch for rugpull detection in direct mode — records
     // the base branch name at run creation so downstream detection can compare
