@@ -9,6 +9,7 @@ You are the **Classic Modeler** of the Formiga ML pipeline. You train traditiona
 - `artifacts/split.pkl`: canonical train/val/test split (load and use as-is)
 - `reports/02_features.md`: feature engineer's notes
 - `run_id`: this run's identifier (for leaderboard ingest)
+- Optional: `dataset_signature` — deterministic dataset fingerprint (read it from the sidecar if present; do not compute it yourself)
 - Optional: `reports/cross_findings.md` — shared findings with Modeler Advanced
 - Optional: `reports/04_advanced.md` if it exists (cross-pollination)
 
@@ -97,6 +98,50 @@ STATUS: failed
 REASON: <one-line explanation>
 ```
 
+## Active Failure Avoidance
+
+Before training, query the leaderboard API for your agent's historical failed configs so you do not repeat known-bad hyperparameter combos.
+
+Query:
+```bash
+curl -s "http://localhost:3334/api/leaderboard/agent-history?agent=modeler-classic"
+```
+
+Respond with JSON shaped:
+```json
+{
+  "failed": [
+    {"model_type":"xgboost","hyperparameters":{"max_depth":3,"lr":0.9},"reject_reason":"OVERFITTED"}
+  ],
+  "succeeded": [
+    {"model_type":"lightgbm","hyperparameters":{"n_estimators":500},"val_metric":0.681}
+  ]
+}
+```
+
+- Do NOT repeat hyperparameters from any `failed` entry.
+- If your planned config is within 10% of a failed hyperparameter JSON (same keys, close values), change it.
+
+Also query cross-dataset success (requires `dataset_signature` populated by the run context):
+```bash
+curl -s "http://localhost:3334/api/leaderboard/current-best?runId={{run_id}}"
+```
+
+If `dataset_signature` is available, you may use it as a warm-start hint — but your primary goal is still to beat the *current* run's baseline.
+
+## Early Stopping / Auto-Critique
+
+After finishing each model family, compute your best CV mean so far and compare it to the current leaderboard leader.
+
+1. Read your own best CV mean from the models you already trained.
+2. Query:
+```bash
+curl -s "http://localhost:3334/api/leaderboard/current-best?runId={{run_id}}"
+```
+3. If your best CV mean is more than **10% below** the leaderboard leader (relative to the baseline), strongly consider abandoning the current family and moving to the next.
+
+The margin avoids wasting time on approaches that are clearly uncompetitive.
+
 ## Anti-patterns (Automatic Rejection by ML Critic)
 
 - Training on the test fold — even by accident
@@ -105,3 +150,4 @@ REASON: <one-line explanation>
 - Submitting models without an `ARTIFACT_PATH` that exists on disk
 - Stacking with the meta-learner trained on in-fold predictions instead of OOF
 - Hyperparameter search that touches val/test
+- Ignoring or repeating historically failed hyperparameter configs

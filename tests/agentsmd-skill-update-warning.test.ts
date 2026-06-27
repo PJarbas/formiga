@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { resolveBundledWorkflowsDir } from "../dist/installer/paths.js";
 
 const repoRoot = resolve(resolveBundledWorkflowsDir(), "..");
-const agentsMdPath = resolve(repoRoot, "AGENTS.md");
+const agentsMdPath = resolve(repoRoot, "docs", "AGENTS.md");
 const agentsMd = readFileSync(agentsMdPath, "utf-8");
 
 // Extract existing section headings

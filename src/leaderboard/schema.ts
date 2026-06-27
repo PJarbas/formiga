@@ -4,6 +4,14 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
+export const DATASET_SIGNATURE_DDL = `
+  CREATE TABLE IF NOT EXISTS dataset_signatures (
+    signature TEXT PRIMARY KEY,
+    column_hash TEXT NOT NULL,
+    row_bucket TEXT NOT NULL
+  );
+`;
+
 export const EXPERIMENTS_DDL = `
   CREATE TABLE IF NOT EXISTS experiments (
     experiment_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,6 +28,7 @@ export const EXPERIMENTS_DDL = `
     status TEXT NOT NULL DEFAULT 'PENDING'
       CHECK(status IN ('PENDING','SUCCESS','FAILED','AUDITED','OVERFITTED')),
     error_message TEXT,
+    dataset_signature TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -34,6 +43,9 @@ export const EXPERIMENTS_DDL = `
 
   CREATE INDEX IF NOT EXISTS idx_experiments_agent
     ON experiments(agent_name, run_id);
+
+  CREATE INDEX IF NOT EXISTS idx_experiments_dataset_sig
+    ON experiments(dataset_signature, val_metric DESC);
 `;
 
 /**
@@ -54,6 +66,7 @@ const PROMOTED_INDEX_DDL = `
 `;
 
 export function initLeaderboardSchema(db: DatabaseSync): void {
+  db.exec(DATASET_SIGNATURE_DDL);
   db.exec(EXPERIMENTS_DDL);
 
   // Introspect existing columns so re-init is safe.
@@ -64,6 +77,12 @@ export function initLeaderboardSchema(db: DatabaseSync): void {
     if (!existingNames.has(col.name)) {
       db.exec(col.ddl);
     }
+  }
+
+  // ── Dataset signature migration ──
+  // Nullable TEXT column added for cross-run transfer-learning.
+  if (!existingNames.has("dataset_signature")) {
+    db.exec("ALTER TABLE experiments ADD COLUMN dataset_signature TEXT");
   }
 
   db.exec(PROMOTED_INDEX_DDL);

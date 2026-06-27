@@ -22,6 +22,8 @@
  *   GET /api/leaderboard          -> top models sorted by cvMean
  *   GET /api/leaderboard/:id      -> single experiment detail
  *   GET /api/leaderboard/compare  -> compare experiments
+ *   GET /api/leaderboard/agent-history?agent=<name> -> failed/succeeded configs for agent
+ *   GET /api/leaderboard/current-best?runId=<id>    -> single best experiment for a run
  *   GET /api/rounds               -> completed rounds for a run
  *   GET /api/cross-findings       -> cross-pollination findings
  *   POST /api/pipeline/pause      -> pause active pipeline
@@ -50,7 +52,7 @@ import {
   type AutoresearchRunResultEntry,
 } from "../autoresearch/autoresearch.js";
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
-import { getExperimentStats } from "../leaderboard/queries.js";
+import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1331,6 +1333,62 @@ function handleLeaderboardCompare(req: http.IncomingMessage, res: http.ServerRes
   }
 }
 
+function handleLeaderboardAgentHistory(req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const agentName = url.searchParams.get("agent")?.trim();
+    if (!agentName) {
+      errorResponse(res, "Missing required query parameter: agent", 400);
+      return;
+    }
+
+    const db = getDb();
+    const failed = getFailedConfigsForAgent(db, agentName, 5);
+    const succeeded = getSucceededConfigsForAgent(db, agentName, 3);
+
+    jsonResponse(res, {
+      agent: agentName,
+      failed_count: failed.length,
+      succeeded_count: succeeded.length,
+      failed,
+      succeeded,
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to get agent history: ${(err as Error).message}`);
+  }
+}
+
+function handleLeaderboardCurrentBest(req: http.IncomingMessage, res: http.ServerResponse): void {
+  try {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+
+    if (!runId) {
+      errorResponse(res, "Missing required query parameter: runId (no active pipeline)", 400);
+      return;
+    }
+
+    const db = getDb();
+    const row = getCurrentBestForRun(db, runId);
+
+    if (!row) {
+      jsonResponse(res, { experiment: null });
+      return;
+    }
+
+    jsonResponse(res, {
+      experiment: {
+        experiment_id: row.experiment_id,
+        model_type: row.model_type,
+        cv_mean: row.val_metric,
+        agent_name: row.agent_name,
+      },
+    });
+  } catch (err) {
+    errorResponse(res, `Failed to get current best: ${(err as Error).message}`);
+  }
+}
+
 function handleRounds(req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -2159,6 +2217,18 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   const agentDetailMatch = pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)$/);
   if (method === "GET" && agentDetailMatch) {
     handleAgentDetail(req, res, agentDetailMatch[1]);
+    return;
+  }
+
+  // GET /api/leaderboard/agent-history
+  if (method === "GET" && pathname === "/api/leaderboard/agent-history") {
+    handleLeaderboardAgentHistory(req, res);
+    return;
+  }
+
+  // GET /api/leaderboard/current-best
+  if (method === "GET" && pathname === "/api/leaderboard/current-best") {
+    handleLeaderboardCurrentBest(req, res);
     return;
   }
 

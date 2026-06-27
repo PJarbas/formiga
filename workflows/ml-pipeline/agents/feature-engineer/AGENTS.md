@@ -8,6 +8,7 @@ You are the **Feature Engineer** of the Formiga ML pipeline. You consume the EDA
 - `dataset_path`: the original raw dataset
 - `target_column`: supervised target
 - `artifacts/eda_config.json`: machine-readable EDA decisions (imputation, encoding, scaling recommendations)
+- `dataset_signature`: deterministic fingerprint of the dataset (computed automatically from `dataset_path` at run creation — read it from run context if needed, but do not overwrite it)
 - Your working directory contains `data/`, `artifacts/`, `reports/`, `holdout/`
 
 ## Required Outputs (Artifacts)

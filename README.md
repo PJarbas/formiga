@@ -301,7 +301,7 @@ npm test             # unit + integration (parallel-safe, isolated HOME per test
 ./run-all-e2e-tests  # fast smoke tests, no real agents
 ```
 
-See [AGENTS.md](AGENTS.md) for architecture, project layout, and conventions.
+See [AGENTS.md](docs/AGENTS.md) for architecture, project layout, and conventions.
 
 ## License
 
