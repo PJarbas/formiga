@@ -54,6 +54,12 @@ import {
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
+import {
+  findActivePipelineRunId as _findActivePipelineRunIdImpl,
+  getAgentUnifiedStatus,
+  getCurrentPhase,
+  getAgentRoundSummaries,
+} from "./pipeline-status.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
@@ -891,18 +897,10 @@ function handleVersion(_req: http.IncomingMessage, res: http.ServerResponse): vo
 
 // ── ML Pipeline API Handlers ──────────────────────────────────────────
 
+
 function findActivePipelineRunId(): string | null {
   try {
-    const db = getDb();
-    // Look for a run that has experiments and is still running/paused
-    const row = db.prepare(`
-      SELECT DISTINCT e.run_id
-      FROM experiments e
-      JOIN runs r ON r.id = e.run_id
-      WHERE r.status IN ('running', 'paused')
-      ORDER BY e.created_at DESC LIMIT 1
-    `).get() as { run_id: string } | undefined;
-    return row?.run_id ?? null;
+    return _findActivePipelineRunIdImpl(getDb());
   } catch {
     return null;
   }
@@ -911,7 +909,7 @@ function findActivePipelineRunId(): string | null {
 function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
     const db = getDb();
-    const runId = findActivePipelineRunId();
+    const runId = _findActivePipelineRunIdImpl(db);
 
     if (!runId) {
       jsonResponse(res, {
@@ -952,31 +950,15 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
 
     const currentRound = maxRoundRow?.max_round ?? 0;
 
-    // Determine current phase based on the experiments we have
-    const agentPhases = db.prepare(`
-      SELECT DISTINCT agent_name FROM experiments WHERE run_id = ? AND round_number = ?
-    `).all(runId, currentRound) as Array<{ agent_name: string }>;
+    const currentPhase = getCurrentPhase(db, runId);
 
-    const agentNames = new Set(agentPhases.map((a) => a.agent_name));
-    let currentPhase = "idle";
-    if (agentNames.has("ml-critic")) currentPhase = "audit";
-    else if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) currentPhase = "modeling";
-    else if (agentNames.has("feature-engineer")) currentPhase = "feature_engineering";
-    else if (agentNames.has("data-analyst")) currentPhase = "data_analysis";
-    else if (agentNames.size > 0) currentPhase = "complete";
-
-    // Agent statuses for this round
-    function agentInRound(name: string): string {
-      const row = db.prepare(
-        "SELECT status FROM experiments WHERE run_id = ? AND round_number = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
-      ).get(runId, currentRound, name) as { status: string } | undefined;
-      if (!row) return "idle";
-      const s = row.status;
-      if (s === "SUCCESS" || s === "AUDITED") return "completed";
-      if (s === "FAILED" || s === "OVERFITTED") return "failed";
-      if (s === "PENDING") return "running";
-      return "idle";
-    }
+    const phaseStats = {
+      dataAnalyst: getAgentUnifiedStatus(db, runId, "data-analyst", currentRound).status,
+      featureEngineer: getAgentUnifiedStatus(db, runId, "feature-engineer", currentRound).status,
+      modelerClassic: getAgentUnifiedStatus(db, runId, "modeler-classic", currentRound).status,
+      modelerAdvanced: getAgentUnifiedStatus(db, runId, "modeler-advanced", currentRound).status,
+      mlCritic: getAgentUnifiedStatus(db, runId, "ml-critic", currentRound).status,
+    };
 
     jsonResponse(res, {
       runId,
@@ -986,13 +968,7 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
       maxRounds: 5,
       startedAt: run?.created_at ?? null,
       updatedAt: run?.updated_at ?? null,
-      phaseStats: {
-        dataAnalyst: agentInRound("data-analyst"),
-        featureEngineer: agentInRound("feature-engineer"),
-        modelerClassic: agentInRound("modeler-classic"),
-        modelerAdvanced: agentInRound("modeler-advanced"),
-        mlCritic: agentInRound("ml-critic"),
-      },
+      phaseStats,
       quickStats: {
         totalExperiments: stats.total,
         bestCvMean: bestRow?.val_metric ?? null,
@@ -1011,19 +987,9 @@ function handleAgents(_req: http.IncomingMessage, res: http.ServerResponse): voi
     const runId = findActivePipelineRunId();
 
     const agents = Object.entries(AGENT_INFO_REGISTRY).map(([name, info]) => {
-      let currentStatus = "idle";
-      if (runId) {
-        const row = db.prepare(
-          "SELECT status FROM experiments WHERE run_id = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
-        ).get(runId, name) as { status: string } | undefined;
-        if (row) {
-          const s = row.status;
-          if (s === "SUCCESS" || s === "AUDITED") currentStatus = "completed";
-          else if (s === "FAILED" || s === "OVERFITTED") currentStatus = "failed";
-          else if (s === "PENDING") currentStatus = "running";
-        }
-      }
-      return { ...info, currentStatus };
+      if (!runId) return { ...info, currentStatus: "idle" };
+      const unified = getAgentUnifiedStatus(db, runId, name);
+      return { ...info, currentStatus: unified.status };
     });
 
     jsonResponse(res, agents);
@@ -1052,39 +1018,18 @@ function handleAgentDetail(
     let lastError: string | null = null;
 
     if (runId) {
-      const rows = db.prepare(`
-        SELECT round_number, status, val_metric, model_type, error_message
-        FROM experiments WHERE run_id = ? AND agent_name = ?
-        ORDER BY round_number ASC
-      `).all(runId, agentName) as Array<{
-        round_number: number; status: string; val_metric: number;
-        model_type: string; error_message: string | null;
-      }>;
+      const roundSummaries = getAgentRoundSummaries(db, runId, agentName);
+      totalTrials = roundSummaries.length;
+      rounds.push(...roundSummaries);
 
-      totalTrials = rows.length;
-
-      for (const row of rows) {
-        rounds.push({
-          roundNumber: row.round_number,
-          status: row.status,
-          cvMean: row.val_metric,
-          modelType: row.model_type,
-        });
-      }
-
-      const errRow = db.prepare(
-        "SELECT error_message FROM experiments WHERE run_id = ? AND agent_name = ? AND error_message IS NOT NULL ORDER BY experiment_id DESC LIMIT 1",
-      ).get(runId, agentName) as { error_message: string } | undefined;
-      lastError = errRow?.error_message ?? null;
+      const unified = getAgentUnifiedStatus(db, runId, agentName);
+      lastError = unified.errorMessage;
     }
 
-    // Determine current status
-    let currentStatus = "idle";
-    if (rounds.length > 0) {
-      const last = rounds[rounds.length - 1];
-      if (last.status === "SUCCESS" || last.status === "AUDITED") currentStatus = "completed";
-      else if (last.status === "FAILED" || last.status === "OVERFITTED") currentStatus = "failed";
-      else if (last.status === "PENDING") currentStatus = "running";
+    // Determine current status using the unified helper
+    let currentStatus: string = "idle";
+    if (runId) {
+      currentStatus = getAgentUnifiedStatus(db, runId, agentName).status;
     }
 
     const result = {
@@ -1838,12 +1783,15 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
       .prepare("SELECT DISTINCT agent_name FROM experiments WHERE run_id = ? AND round_number = ?")
       .all(runId, currentRound) as Array<{ agent_name: string }>;
     const agentNames = new Set(agentRows.map((a) => a.agent_name));
-    let currentPhase = "idle";
-    if (agentNames.has("ml-critic")) currentPhase = "audit";
-    else if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) currentPhase = "modeling";
-    else if (agentNames.has("feature-engineer")) currentPhase = "feature_engineering";
-    else if (agentNames.has("data-analyst")) currentPhase = "data_analysis";
-    else if (agentNames.size > 0) currentPhase = "complete";
+
+    // Fallback: derive phase from step statuses when no experiments yet
+    const stepRows = db
+      .prepare("SELECT step_id, status FROM steps WHERE run_id = ?")
+      .all(runId) as Array<{ step_id: string; status: string }>;
+    const stepStatus: Record<string, string> = {};
+    for (const s of stepRows) stepStatus[s.step_id] = s.status;
+
+    const currentPhase = getCurrentPhase(db, runId);
 
     const stats = getExperimentStats(db, runId);
     const bestRow = db
@@ -1865,32 +1813,15 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
     const bestModelTrend = trendRows.map((r) => Number(r.val_metric));
 
     const agentStrip = Object.values(AGENT_INFO_REGISTRY).map((info) => {
+      const unified = getAgentUnifiedStatus(db, runId, info.name);
       const trialsRow = db
         .prepare("SELECT COUNT(*) AS c FROM experiments WHERE run_id = ? AND agent_name = ?")
         .get(runId, info.name) as { c: number };
-      const bestForAgent = db
-        .prepare(
-          `SELECT val_metric FROM experiments
-             WHERE run_id = ? AND agent_name = ? AND status IN ('SUCCESS','AUDITED')
-             ORDER BY val_metric DESC LIMIT 1`,
-        )
-        .get(runId, info.name) as { val_metric: number } | undefined;
-      const latest = db
-        .prepare(
-          "SELECT status FROM experiments WHERE run_id = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
-        )
-        .get(runId, info.name) as { status: string } | undefined;
-      let status: "idle" | "running" | "completed" | "failed" | "timed_out" = "idle";
-      if (latest) {
-        if (latest.status === "SUCCESS" || latest.status === "AUDITED") status = "completed";
-        else if (latest.status === "FAILED" || latest.status === "OVERFITTED") status = "failed";
-        else if (latest.status === "PENDING") status = "running";
-      }
       return {
         name: info.name,
         label: info.label,
-        status,
-        bestCvMean: bestForAgent?.val_metric ?? null,
+        status: unified.status as "idle" | "running" | "completed" | "failed" | "timed_out",
+        bestCvMean: unified.valMetric,
         trials: trialsRow.c,
       };
     });
