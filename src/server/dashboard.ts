@@ -4,8 +4,8 @@
  * Creates an HTTP server that serves the dashboard UI and API endpoints.
  *
  * Routes:
- *   GET /                        -> index.html (dashboard UI)
- *   GET /runs/:id/kanban         -> kanban.html (per-run swim-lane view)
+ *   GET /                        -> React SPA (ML dashboard)
+ *   GET /runs/:id/kanban         -> redirect to /kanban (React SPA)
  *   GET /api/autoresearch/runs   -> list workflow runs with AutoResearch state
  *   GET /api/runs                -> list all workflow runs
  *   GET /api/runs/:id            -> detail for a specific run
@@ -14,7 +14,7 @@
  *   GET /api/events              -> recent events (global)
  *   DELETE /api/runs/:id         -> permanently delete a run and all associated data
  *   GET /api/logs-tail           -> logs-tail formatted event lines (cursor based)
- *   GET /ml/*                     -> React ML dashboard SPA
+ *   GET /* (non-API)              -> React SPA fallback
  *   GET /api/pipeline/status      -> active ML pipeline status
  *   GET /api/agents               -> list 5 ML agents
  *   GET /api/agents/:name         -> agent detail
@@ -56,8 +56,6 @@ import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, get
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const INDEX_HTML = path.join(__dirname, "index.html");
-const KANBAN_HTML = path.join(__dirname, "kanban.html");
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -2043,34 +2041,17 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // Parse URL path (strip query string)
   const pathname = url.split("?")[0];
 
-  // GET /
+  // React SPA default
   if (method === "GET" && pathname === "/") {
-    try {
-      const html = fs.readFileSync(INDEX_HTML, "utf-8");
-      htmlResponse(res, html);
-    } catch {
-      htmlResponse(res, `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Formiga Dashboard</title></head>
-<body><h1>Formiga Dashboard</h1><p>Dashboard HTML not found. Rebuild formiga or check dist/server/index.html.</p></body>
-</html>`, 200);
-    }
+    serveStaticFile(res, path.join(DASHBOARD_DIST, "index.html"));
     return;
   }
 
-  // GET /runs/:id/kanban
+  // GET /runs/:id/kanban -> redirect to new kanban
   const kanbanHtmlMatch = pathname.match(/^\/runs\/([a-zA-Z0-9_-]+)\/kanban$/);
   if (method === "GET" && kanbanHtmlMatch) {
-    try {
-      const html = fs.readFileSync(KANBAN_HTML, "utf-8");
-      htmlResponse(res, html);
-    } catch {
-      htmlResponse(res, `<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Formiga Kanban</title></head>
-<body><h1>Formiga Kanban</h1><p>Kanban HTML not found. Rebuild formiga or check dist/server/kanban.html.</p></body>
-</html>`, 200);
-    }
+    res.writeHead(302, { Location: "/kanban" });
+    res.end();
     return;
   }
 
@@ -2339,18 +2320,15 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
-  // ── React SPA: /ml and /ml/* ────────────────────────────────────
-  if (pathname === "/ml" || pathname.startsWith("/ml/")) {
-    const spaPath = pathname === "/ml"
-      ? path.join(DASHBOARD_DIST, "index.html")
-      : path.join(DASHBOARD_DIST, pathname.slice(4)); // remove "/ml/" prefix
-    serveStaticFile(res, spaPath);
-    return;
-  }
-
   // Also serve /assets/ from dashboard dist (Vite output)
   if (pathname.startsWith("/assets/")) {
     serveStaticFile(res, path.join(DASHBOARD_DIST, pathname));
+    return;
+  }
+
+  // ━━ React SPA catch-all for non-API routes ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  if (method === "GET" && !pathname.startsWith("/api/")) {
+    serveStaticFile(res, path.join(DASHBOARD_DIST, "index.html"));
     return;
   }
 

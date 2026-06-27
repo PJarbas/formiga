@@ -5,6 +5,7 @@ import path from "node:path";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  base: "/",
   root: path.resolve(__dirname),
   build: {
     outDir: path.resolve(__dirname, "../../dist/dashboard"),
