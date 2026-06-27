@@ -37,3 +37,6 @@ PROMPT.md
 
 # Graphify skill output
 graphify-out/
+
+# ML pipeline run outputs
+runs/
