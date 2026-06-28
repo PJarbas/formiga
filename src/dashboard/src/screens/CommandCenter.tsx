@@ -1,19 +1,9 @@
-// ══════════════════════════════════════════════════════════════════════
-// CommandCenter.tsx — Tela 1
-// StatusCard + PipelineStepper + RoundsTable.
-// Powered by GET /api/command-center (3s poll inside useCommandCenter).
-// ══════════════════════════════════════════════════════════════════════
-
 import { useCommandCenter } from "../api/api";
-import { PipelineStepper } from "../components/PipelineStepper";
-import { StatusCard } from "../components/StatusCard";
 import { RoundsTable } from "../components/RoundsTable";
 import { EmptyState } from "../components/EmptyState";
-import { useHumanStatus } from "../hooks/useHumanStatus";
 
 export default function CommandCenter() {
   const { data, isLoading, error } = useCommandCenter();
-  const humanStatus = useHumanStatus();
 
   if (isLoading) {
     return (
@@ -53,23 +43,14 @@ export default function CommandCenter() {
   const { run, phases, rounds = [] } = data;
 
   return (
-    <div className="space-y-6" data-testid="command-center">
-      {humanStatus && (
-        <StatusCard
-          status={humanStatus}
-          startedAt={run.startedAt}
-          updatedAt={run.updatedAt}
-        />
-      )}
-
-      <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
-        <PipelineStepper phases={phases} currentPhase={run.currentPhase} />
-      </div>
-
+    <div data-testid="command-center">
       <RoundsTable
         rounds={rounds}
         currentRound={run.currentRound}
         runId={run.runId ?? ""}
+        phases={phases}
+        startedAt={run.startedAt}
+        updatedAt={run.updatedAt}
       />
     </div>
   );
