@@ -1635,6 +1635,21 @@ async function handleChecklistPut(
   }
 }
 
+/**
+ * Match a FormigaEvent to an agent name.
+ * agent_id in DB is "ml-pipeline_data-analyst"; frontend asks for "data-analyst".
+ */
+function eventMatchesAgent(eventAgentId: string | undefined, agentName: string): boolean {
+  if (!eventAgentId) return false;
+  if (eventAgentId === agentName) return true;
+  // Extract suffix after last underscore: "ml-pipeline_data-analyst" → "data-analyst"
+  const underscoreIdx = eventAgentId.indexOf("_");
+  if (underscoreIdx >= 0) {
+    return eventAgentId.slice(underscoreIdx + 1) === agentName;
+  }
+  return false;
+}
+
 function handleTrace(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -1654,16 +1669,30 @@ function handleTrace(
       return;
     }
 
-    // Derive trace entries from experiments table for this agent + round.
-    // Each experiment row becomes one TraceEntry; failures escalate to 'error',
-    // OVERFITTED to 'warn', others 'info'.
+    // --- Source 1: JSONL events (real-time step lifecycle) ---
+    const runEvents = getRunEvents(runId);
+    const eventEntries = runEvents
+      .filter((e) => eventMatchesAgent(e.agentId, agentName))
+      .map((e) => {
+        let level: "info" | "warn" | "error" = "info";
+        if (e.event.includes("failed")) level = "error";
+        else if (e.event.includes("retry") || e.event.includes("timeout")) level = "warn";
+        return {
+          timestamp: e.ts,
+          event: e.event,
+          detail: e.detail ?? undefined,
+          level,
+        };
+      });
+
+    // --- Source 2: Experiments table (ML model results) ---
     const rows = await prisma.experiment.findMany({
       where: { run_id: runId, agent_name: agentName, round_number: roundNumber },
       orderBy: [{ created_at: "asc" }, { experiment_id: "asc" }],
       select: { experiment_id: true, model_type: true, status: true, error_message: true, created_at: true },
     });
 
-    const entries = rows.map((r) => {
+    const experimentEntries = rows.map((r) => {
       let level: "info" | "warn" | "error" = "info";
       if (r.status === "FAILED") level = "error";
       else if (r.status === "OVERFITTED") level = "warn";
@@ -1674,6 +1703,11 @@ function handleTrace(
         level,
       };
     });
+
+    // Merge both sources sorted by timestamp
+    const entries = [...eventEntries, ...experimentEntries].sort((a, b) =>
+      a.timestamp.localeCompare(b.timestamp),
+    );
 
     jsonResponse(res, entries);
   })().catch((err) => errorResponse(res, `Failed to read trace: ${(err as Error).message}`));

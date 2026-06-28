@@ -511,6 +511,14 @@ export async function executePollingRound(
 
     const onSpawn = ({ pid, pgid }: { pid: number; pgid: number }) => {
       setInFlightChild(job.id, { pid, pgid, killed: false });
+      emitEvent({
+        ts: new Date().toISOString(),
+        event: "agent.spawned",
+        runId: job.runId,
+        workflowId: job.workflowId,
+        agentId: job.agentId,
+        detail: `PID ${pid} (pgid ${pgid})`,
+      });
     };
 
     let output: string;
@@ -543,6 +551,15 @@ export async function executePollingRound(
 
     const metadata = parsePollingRoundMetadata(output);
     const outputSummary = summarizePollingRoundOutput(metadata.assistantOutput || output);
+
+    emitEvent({
+      ts: new Date().toISOString(),
+      event: "agent.completed",
+      runId: job.runId,
+      workflowId: job.workflowId,
+      agentId: job.agentId,
+      detail: `outcome=${outputSummary.outcome}`,
+    });
 
     logger.info("Polling round complete", {
       ...context,
@@ -588,6 +605,15 @@ export async function executePollingRound(
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     const errorSummary = buildBoundedPreview(errorMessage, MAX_POLLING_ERROR_PREVIEW);
+
+    emitEvent({
+      ts: new Date().toISOString(),
+      event: "agent.failed",
+      runId: job.runId,
+      workflowId: job.workflowId,
+      agentId: job.agentId,
+      detail: errorSummary.preview,
+    });
 
     logger.error("Polling round failed", {
       ...context,
