@@ -80,7 +80,7 @@ export type Story = {
   title: string;
   description: string;
   acceptanceCriteria: string[];
-  status: "pending" | "running" | "done" | "failed";
+  status: string;
   output?: string;
   retryCount: number;
   maxRetries: number;

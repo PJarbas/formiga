@@ -11,74 +11,20 @@ datasource db {
   provider = "sqlite"
 }
 
-// ── Enums ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──
-enum RunStatus {
-  running
-  paused
-  failed
-  canceled
-  completed
-}
-
-enum StepStatus {
-  waiting
-  pending
-  running
-  done
-  failed
-  skipped
-  canceled
-}
-
-enum StoryStatus {
-  pending
-  running
-  done
-  failed
-}
-
-enum ExperimentStatus {
-  PENDING
-  SUCCESS
-  FAILED
-  AUDITED
-  OVERFITTED
-}
-
-enum SpecApprovalStatus {
-  pending
-  approved
-  rejected
-}
-
-enum WorktreeStatus {
-  creating
-  active
-  cleanup_pending
-  removed
-}
-
-enum SchedulingStatus {
-  pending_register
-  active
-  queued
-  paused
-  draining_pause
-  error
-}
-
 // ── Models ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──
+// SQLite doesn't have native enums, so status fields use String
+// with application-level validation instead.
 
 model Run {
-  id                      String           @id
+  id                      String  @id
   run_number              Int?
   workflow_id             String
   task                    String
-  status                  RunStatus        @default(running)
-  context                 String           @default("{}")
-  tokens_spent            Int              @default(0)
+  status                  String  @default("running")
+  context                 String  @default("{}")
+  tokens_spent            Int     @default(0)
   notify_url              String?
-  scheduling_status       SchedulingStatus?
+  scheduling_status       String?
   scheduling_requested_at DateTime?
   scheduling_error        String?
   created_at              DateTime
@@ -90,26 +36,27 @@ model Run {
   spec_approvals   SpecApproval[]
   checklist_states ChecklistState[]
 
+  @@map("runs")
   @@index([status, scheduling_status, scheduling_requested_at])
   @@index([scheduling_status, scheduling_requested_at, created_at])
 }
 
 model Step {
-  id               String     @id
+  id               String  @id
   run_id           String
   step_id          String
   agent_id         String
   step_index       Int
   input_template   String
   expects          String
-  status           StepStatus @default(waiting)
+  status           String  @default("waiting")
   output           String?
-  retry_count      Int        @default(0)
-  max_retries      Int        @default(4)
-  type             String     @default("single")
+  retry_count      Int     @default(0)
+  max_retries      Int     @default(4)
+  type             String  @default("single")
   loop_config      String?
   current_story_id String?
-  abandoned_count  Int        @default(0)
+  abandoned_count  Int     @default(0)
   parallel_group   String?
   claim_job_id     String?
   claim_pid        Int?
@@ -120,49 +67,53 @@ model Step {
 
   run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
+  @@map("steps")
   @@index([agent_id, run_id, status])
 }
 
 model Story {
-  id                  String      @id
+  id                  String  @id
   run_id              String
   story_index         Int
   story_id            String
   title               String
-  description         String      @default("")
-  acceptance_criteria String      @default("[]")
-  status              StoryStatus @default(pending)
+  description         String  @default("")
+  acceptance_criteria String  @default("[]")
+  status              String  @default("pending")
   output              String?
-  retry_count         Int         @default(0)
-  max_retries         Int         @default(4)
+  retry_count         Int     @default(0)
+  max_retries         Int     @default(4)
   created_at          DateTime
   updated_at          DateTime
 
   run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  @@map("stories")
 }
 
 model Experiment {
-  experiment_id     Int              @id @default(autoincrement())
+  experiment_id     Int     @id @default(autoincrement())
   run_id            String
   round_number      Int
   agent_name        String
   model_type        String
-  hyperparameters   String           @default("{}")
+  hyperparameters   String  @default("{}")
   train_metric      Float
   val_metric        Float
   test_metric       Float?
   metric_name       String
   artifact_path     String
-  status            ExperimentStatus @default(PENDING)
+  status            String  @default("PENDING")
   error_message     String?
   dataset_signature String?
   promoted_at       DateTime?
   rejected_at       DateTime?
   reject_reason     String?
-  created_at        DateTime         @default(now())
+  created_at        DateTime @default(now())
 
   run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
+  @@map("experiments")
   @@index([run_id, round_number])
   @@index([val_metric])
   @@index([status])
@@ -174,11 +125,13 @@ model DatasetSignature {
   signature   String @id
   column_hash String
   row_bucket  String
+
+  @@map("dataset_signatures")
 }
 
 model AutoresearchSession {
-  id              String   @id
-  cwd             String   @unique
+  id              String    @id
+  cwd             String    @unique
   goal            String?
   metric_name     String?
   metric_unit     String?
@@ -188,47 +141,50 @@ model AutoresearchSession {
   updated_at      DateTime
   last_seen_at    DateTime
   last_run_at     DateTime?
-  total_runs      Int      @default(0)
+  total_runs      Int       @default(0)
   baseline_metric Float?
   best_metric     Float?
   best_run        Int?
-  files_missing   Int      @default(0)
+  files_missing   Int       @default(0)
 
+  @@map("autoresearch_sessions")
   @@index([updated_at])
   @@index([last_seen_at])
 }
 
 model RunWorktree {
-  run_id                         String         @id
+  run_id                         String  @id
   worktree_origin_repository     String
   worktree_origin_git_common_dir String
   worktree_path                  String
   worktree_origin_ref            String?
   worktree_origin_sha            String?
   original_branch                String?
-  status                         WorktreeStatus @default(creating)
-  cleanup_policy                 String         @default("remove_on_success")
+  status                         String  @default("creating")
+  cleanup_policy                 String  @default("remove_on_success")
   created_at                     DateTime
   removed_at                     DateTime?
   error                          String?
 
+  @@map("run_worktrees")
   @@index([status])
 }
 
 model SpecApproval {
-  spec_id     String             @id
+  spec_id     String   @id
   run_id      String
   phase       String
-  status      SpecApprovalStatus
+  status      String
   reason      String?
   approved_by String?
   approved_at DateTime?
   rejected_at DateTime?
   rejected_by String?
-  updated_at  DateTime           @default(now())
+  updated_at  DateTime  @default(now())
 
   run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
+  @@map("spec_approvals")
   @@index([run_id])
   @@index([status])
 }
@@ -242,11 +198,14 @@ model ChecklistState {
   run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
   @@id([run_id, phase])
+  @@map("checklist_state")
 }
 
 model FormigaStat {
   id                  Int @id @default(1)
   system_tokens_spent Int @default(0)
+
+  @@map("formiga_stats")
 }
 
 model MedicCheck {
@@ -257,5 +216,6 @@ model MedicCheck {
   summary       String?
   details       String?
 
+  @@map("medic_checks")
   @@index([checked_at])
 }
