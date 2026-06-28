@@ -1,4 +1,4 @@
-import { getDb } from "../../db.js";
+import { getPrisma } from "../../db.js";
 import { resolveWorkflowDir } from "../paths.js";
 import { emitEvent } from "../events.js";
 import { logger } from "../../lib/logger.js";
@@ -40,8 +40,8 @@ function resolveEscalationTarget(policy: WorkflowStepFailure | null): string | n
 
 async function getOnFailPolicy(runId: string, stepId: string): Promise<WorkflowStepFailure | null> {
   try {
-    const db = getDb();
-    const run = db.prepare("SELECT workflow_id FROM runs WHERE id = ?").get(runId) as { workflow_id: string } | undefined;
+    const prisma = getPrisma();
+    const run = await prisma.run.findUnique({ where: { id: runId }, select: { workflow_id: true } });
     if (!run) return null;
 
     const workflowDir = resolveWorkflowDir(run.workflow_id);
@@ -62,37 +62,42 @@ async function getOnFailPolicy(runId: string, stepId: string): Promise<WorkflowS
  * Handles escalate_on_failure by logging the escalation target.
  */
 export async function failStep(stepId: string, error: string): Promise<{ status: string }> {
-  const db = getDb();
+  const prisma = getPrisma();
 
-  const step = db.prepare(
-    "SELECT run_id, step_id, retry_count, max_retries, type, current_story_id FROM steps WHERE id = ?"
-  ).get(stepId) as {
-    run_id: string;
-    step_id: string;
-    retry_count: number;
-    max_retries: number;
-    type: string;
-    current_story_id: string | null;
-  } | undefined;
+  const step = await prisma.step.findUnique({
+    where: { id: stepId },
+  });
 
   if (!step) throw new Error(`Step not found: ${stepId}`);
 
+  const now = new Date();
+
   // Loop step failure — per-story retry
   if (step.type === "loop" && step.current_story_id) {
-    const story = db.prepare(
-      "SELECT id, retry_count, max_retries FROM stories WHERE id = ?"
-    ).get(step.current_story_id) as { id: string; retry_count: number; max_retries: number } | undefined;
+    const story = await prisma.story.findUnique({
+      where: { id: step.current_story_id },
+    });
 
     if (story) {
-      const storyRow = db.prepare("SELECT story_id, title FROM stories WHERE id = ?").get(step.current_story_id!) as { story_id: string; title: string } | undefined;
       const newRetry = story.retry_count + 1;
       if (newRetry > story.max_retries) {
-        db.prepare("UPDATE stories SET status = 'failed', retry_count = ?, updated_at = datetime('now') WHERE id = ?").run(newRetry, story.id);
-        db.prepare("UPDATE steps SET status = 'failed', output = ?, current_story_id = NULL, updated_at = datetime('now') WHERE id = ?").run(error, stepId);
-        db.prepare("UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?").run(step.run_id);
+        await prisma.$transaction([
+          prisma.story.update({
+            where: { id: story.id },
+            data: { status: "failed", retry_count: newRetry, updated_at: now },
+          }),
+          prisma.step.update({
+            where: { id: stepId },
+            data: { status: "failed", output: error, current_story_id: null, updated_at: now },
+          }),
+          prisma.run.update({
+            where: { id: step.run_id },
+            data: { status: "failed", updated_at: now },
+          }),
+        ]);
         const wfId = getWorkflowId(step.run_id);
-        emitEvent({ ts: new Date().toISOString(), event: "story.failed", runId: step.run_id, workflowId: wfId, stepId, storyId: storyRow?.story_id, storyTitle: storyRow?.title, detail: error });
-        emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId, detail: error });
+        emitEvent({ ts: now.toISOString(), event: "story.failed", runId: step.run_id, workflowId: wfId, stepId, storyId: story.story_id, storyTitle: story.title, detail: error });
+        emitEvent({ ts: now.toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId, detail: error });
         emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Story retries exhausted" });
         scheduleRunCronTeardown(step.run_id);
         finalizeDrainingPause(step.run_id);
@@ -112,8 +117,16 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
       }
 
       // Retry the story
-      db.prepare("UPDATE stories SET status = 'pending', retry_count = ?, updated_at = datetime('now') WHERE id = ?").run(newRetry, story.id);
-      db.prepare("UPDATE steps SET status = 'pending', current_story_id = NULL, updated_at = datetime('now') WHERE id = ?").run(stepId);
+      await prisma.$transaction([
+        prisma.story.update({
+          where: { id: story.id },
+          data: { status: "pending", retry_count: newRetry, updated_at: now },
+        }),
+        prisma.step.update({
+          where: { id: stepId },
+          data: { status: "pending", current_story_id: null, updated_at: now },
+        }),
+      ]);
       finalizeDrainingPause(step.run_id);
       return { status: "retrying" };
     }
@@ -123,14 +136,18 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
   const newRetryCount = step.retry_count + 1;
 
   if (newRetryCount > step.max_retries) {
-    db.prepare(
-      "UPDATE steps SET status = 'failed', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(error, newRetryCount, stepId);
-    db.prepare(
-      "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
-    ).run(step.run_id);
+    await prisma.$transaction([
+      prisma.step.update({
+        where: { id: stepId },
+        data: { status: "failed", output: error, retry_count: newRetryCount, updated_at: now },
+      }),
+      prisma.run.update({
+        where: { id: step.run_id },
+        data: { status: "failed", updated_at: now },
+      }),
+    ]);
     const wfId2 = getWorkflowId(step.run_id);
-    emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId2, stepId, detail: error });
+    emitEvent({ ts: now.toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId2, stepId, detail: error });
     emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId2, detail: "Step retries exhausted" });
     scheduleRunCronTeardown(step.run_id);
     finalizeDrainingPause(step.run_id);
@@ -183,9 +200,10 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
 
     return { status: "failed" };
   } else {
-    db.prepare(
-      "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(error, newRetryCount, stepId);
+    await prisma.step.update({
+      where: { id: stepId },
+      data: { status: "pending", output: error, retry_count: newRetryCount, updated_at: now },
+    });
     finalizeDrainingPause(step.run_id);
     return { status: "retrying" };
   }

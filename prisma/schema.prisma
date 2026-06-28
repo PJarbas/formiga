@@ -22,6 +22,7 @@ enum RunStatus {
 
 enum StepStatus {
   waiting
+  pending
   running
   done
   failed
@@ -244,4 +245,15 @@ model ChecklistState {
 model FormigaStat {
   id                  Int @id @default(1)
   system_tokens_spent Int @default(0)
+}
+
+model MedicCheck {
+  id            String   @id
+  checked_at    DateTime
+  issues_found  Int      @default(0)
+  actions_taken Int      @default(0)
+  summary       String?
+  details       String?
+
+  @@index([checked_at])
 }

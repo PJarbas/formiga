@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getDb, nextRunNumber } from "../db.js";
+import { getPrisma, nextRunNumber } from "../db.js";
 import { computeDatasetSignature } from "../leaderboard/queries.js";
 import { loadWorkflowSpec } from "./workflow-spec.js";
 import { resolveWorkflowDir, resolvePiStateDir } from "./paths.js";
@@ -107,8 +107,8 @@ export async function runWorkflow(
   const workflowDir = resolveWorkflowDir(workflowId);
   const workflow = await loadWorkflowSpec(workflowDir);
 
-  const db = getDb();
-  const now = new Date().toISOString();
+  const prisma = getPrisma();
+  const now = new Date();
   const runId = crypto.randomUUID();
   const runNumber = await nextRunNumber();
 
@@ -272,19 +272,25 @@ export async function runWorkflow(
   // Insert the run record. New runs start with
   // scheduling_status='pending_register' so the daemon control plane
   // (and/or reconciler) can admit them.
-  db.prepare(
-    `INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent,
-                       scheduling_status, scheduling_requested_at, notify_url,
-                       created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'running', ?, 0, 'pending_register', ?, ?, ?, ?)`,
-  ).run(runId, runNumber, workflowId, taskTitle, contextJson, now, notifyUrl ?? null, now, now);
+  await prisma.run.create({
+    data: {
+      id: runId,
+      run_number: runNumber,
+      workflow_id: workflowId,
+      task: taskTitle,
+      status: "running",
+      context: contextJson,
+      tokens_spent: 0,
+      scheduling_status: "pending_register",
+      scheduling_requested_at: now,
+      notify_url: notifyUrl ?? null,
+      created_at: now,
+      updated_at: now,
+    },
+  });
 
   // Insert step records for each workflow step
-  const insertStep = db.prepare(
-    `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, parallel_group, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', 0, ?, ?, ?, ?, ?, ?)`,
-  );
-
+  const stepData = [];
   for (let i = 0; i < workflow.steps.length; i++) {
     const step = workflow.steps[i];
     const stepDbId = crypto.randomUUID();
@@ -296,26 +302,32 @@ export async function runWorkflow(
       ? step.agent
       : `${workflow.id}_${step.agent}`;
 
-    insertStep.run(
-      stepDbId,
-      runId,
-      step.id,
-      scopedAgentId,
-      i,
-      step.input,
-      step.expects,
-      maxRetries,
-      stepType,
-      loopConfig,
-      parallelGroup,
-      now,
-      now,
-    );
+    stepData.push({
+      id: stepDbId,
+      run_id: runId,
+      step_id: step.id,
+      agent_id: scopedAgentId,
+      step_index: i,
+      input_template: step.input,
+      expects: step.expects,
+      status: "waiting" as const,
+      retry_count: 0,
+      max_retries: maxRetries,
+      type: stepType,
+      loop_config: loopConfig,
+      parallel_group: parallelGroup,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  if (stepData.length > 0) {
+    await prisma.step.createMany({ data: stepData });
   }
 
   // Emit run.started event
   emitEvent({
-    ts: now,
+    ts: now.toISOString(),
     event: "run.started",
     runId,
     workflowId,
@@ -335,9 +347,15 @@ export async function runWorkflow(
       typeof registration?.body.error === "string"
         ? registration.body.error
         : "daemon registration failed";
-    db.prepare(
-      "UPDATE runs SET status = 'failed', scheduling_status = NULL, scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
-    ).run(message, runId);
+    await prisma.run.update({
+      where: { id: runId },
+      data: {
+        status: "failed",
+        scheduling_status: null,
+        scheduling_error: message,
+        updated_at: new Date(),
+      },
+    });
     emitEvent({
       ts: new Date().toISOString(),
       event: "run.failed",
@@ -368,31 +386,47 @@ export interface ResumeResult {
 }
 
 export async function resumeWorkflow(runId: string): Promise<ResumeResult> {
-  const db = getDb();
-  const run = db.prepare(
-    "SELECT id, workflow_id, status, context FROM runs WHERE id = ? AND status = 'failed'",
-  ).get(runId) as { id: string; workflow_id: string; status: string; context: string } | undefined;
+  const prisma = getPrisma();
+  const run = await prisma.run.findFirst({
+    where: { id: runId, status: "failed" },
+    select: { id: true, workflow_id: true, status: true, context: true },
+  });
 
   if (!run) return { status: "not_found" };
 
   await ensureDaemonControlAvailable();
 
   // Reset the run to running and request fresh scheduling admission.
-  const resumeNow = new Date().toISOString();
-  db.prepare(
-    "UPDATE runs SET status = 'running', scheduling_status = 'pending_register', scheduling_requested_at = ?, scheduling_error = NULL, updated_at = datetime('now') WHERE id = ?",
-  ).run(resumeNow, run.id);
+  const resumeNow = new Date();
+  await prisma.run.update({
+    where: { id: run.id },
+    data: {
+      status: "running",
+      scheduling_status: "pending_register",
+      scheduling_requested_at: resumeNow,
+      scheduling_error: null,
+      updated_at: resumeNow,
+    },
+  });
 
   // Find the first failed step and reset it + subsequent steps
-  const failedStep = db.prepare(
-    "SELECT id, step_id, step_index FROM steps WHERE run_id = ? AND status = 'failed' ORDER BY step_index ASC LIMIT 1",
-  ).get(run.id) as { id: string; step_id: string; step_index: number } | undefined;
+  const failedStep = await prisma.step.findFirst({
+    where: { run_id: run.id, status: "failed" },
+    orderBy: { step_index: "asc" },
+    select: { id: true, step_id: true, step_index: true },
+  });
 
   if (failedStep) {
     // Reset this step and all subsequent steps back to waiting
-    db.prepare(
-      "UPDATE steps SET status = 'waiting', retry_count = 0, output = NULL, updated_at = datetime('now') WHERE run_id = ? AND step_index >= ?",
-    ).run(run.id, failedStep.step_index);
+    await prisma.step.updateMany({
+      where: { run_id: run.id, step_index: { gte: failedStep.step_index } },
+      data: {
+        status: "waiting",
+        retry_count: 0,
+        output: null,
+        updated_at: resumeNow,
+      },
+    });
   }
 
   // Promote the next eligible waiting step to 'pending' so polling agents can claim it.
@@ -404,9 +438,15 @@ export async function resumeWorkflow(runId: string): Promise<ResumeResult> {
       typeof registration?.body.error === "string"
         ? registration.body.error
         : "daemon registration failed";
-    db.prepare(
-      "UPDATE runs SET status = 'failed', scheduling_status = NULL, scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
-    ).run(message, run.id);
+    await prisma.run.update({
+      where: { id: run.id },
+      data: {
+        status: "failed",
+        scheduling_status: null,
+        scheduling_error: message,
+        updated_at: new Date(),
+      },
+    });
     emitEvent({
       ts: new Date().toISOString(),
       event: "run.failed",

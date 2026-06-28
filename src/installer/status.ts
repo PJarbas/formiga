@@ -1,4 +1,4 @@
-import { getDb } from "../db.js";
+import { getDb, getPrisma } from "../db.js";
 import { scheduleRunCronTeardown } from "./step-ops.js";
 import { removeRunCrons } from "./agent-scheduler.js";
 import { terminateRunWithDaemon } from "../server/control-client.js";
@@ -130,11 +130,12 @@ export async function deleteWorkflow(
   runId: string,
   opts: { force?: boolean } = {},
 ): Promise<{ ok: boolean; runId: string; status: string }> {
-  const db = getDb();
+  const prisma = getPrisma();
 
-  const run = db
-    .prepare("SELECT id, status FROM runs WHERE id = ?")
-    .get(runId) as { id: string; status: string } | undefined;
+  const run = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { id: true, status: true },
+  });
 
   if (!run) {
     throw new Error(`Run not found: ${runId}`);
@@ -149,15 +150,19 @@ export async function deleteWorkflow(
 
   // Cancel any active run first
   if (isActive) {
-    // Cancel pending/running steps
-    db.prepare(
-      "UPDATE steps SET status = 'canceled', updated_at = datetime('now') WHERE run_id = ? AND status IN ('waiting', 'pending', 'running')",
-    ).run(runId);
+    const now = new Date();
+    await prisma.step.updateMany({
+      where: {
+        run_id: runId,
+        status: { in: ["waiting", "pending", "running"] },
+      },
+      data: { status: "canceled", updated_at: now },
+    });
 
-    // Mark run as canceled and clear scheduling
-    db.prepare(
-      "UPDATE runs SET status = 'canceled', scheduling_status = NULL, updated_at = datetime('now') WHERE id = ?",
-    ).run(runId);
+    await prisma.run.update({
+      where: { id: runId },
+      data: { status: "canceled", scheduling_status: null, updated_at: now },
+    });
 
     // Tear down cron jobs and notify daemon
     await Promise.allSettled([
@@ -168,10 +173,10 @@ export async function deleteWorkflow(
   }
 
   // Delete associated records in dependency order
-  db.prepare("DELETE FROM stories WHERE run_id = ?").run(runId);
-  db.prepare("DELETE FROM steps WHERE run_id = ?").run(runId);
-  db.prepare("DELETE FROM run_worktrees WHERE run_id = ?").run(runId);
-  db.prepare("DELETE FROM runs WHERE id = ?").run(runId);
+  await prisma.story.deleteMany({ where: { run_id: runId } });
+  await prisma.step.deleteMany({ where: { run_id: runId } });
+  await prisma.runWorktree.deleteMany({ where: { run_id: runId } });
+  await prisma.run.delete({ where: { id: runId } });
 
   // Emit deletion event to logs tail and recent events
   emitEvent({
@@ -189,11 +194,12 @@ export async function deleteWorkflow(
  * Sets the run status to 'canceled' and tears down cron jobs.
  */
 export async function stopWorkflow(runId: string): Promise<{ ok: boolean; runId: string }> {
-  const db = getDb();
+  const prisma = getPrisma();
 
-  const run = db
-    .prepare("SELECT id, status FROM runs WHERE id = ?")
-    .get(runId) as { id: string; status: string } | undefined;
+  const run = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { id: true, status: true },
+  });
 
   if (!run) {
     throw new Error(`Run not found: ${runId}`);
@@ -205,16 +211,23 @@ export async function stopWorkflow(runId: string): Promise<{ ok: boolean; runId:
     );
   }
 
+  const now = new Date();
+
   // Cancel any pending/running steps
-  db.prepare(
-    "UPDATE steps SET status = 'canceled', updated_at = datetime('now') WHERE run_id = ? AND status IN ('waiting', 'pending', 'running')",
-  ).run(runId);
+  await prisma.step.updateMany({
+    where: {
+      run_id: runId,
+      status: { in: ["waiting", "pending", "running"] },
+    },
+    data: { status: "canceled", updated_at: now },
+  });
 
   // Mark the run as canceled and clear scheduling status (terminal runs
   // never carry a scheduling_status).
-  db.prepare(
-    "UPDATE runs SET status = 'canceled', scheduling_status = NULL, updated_at = datetime('now') WHERE id = ?",
-  ).run(runId);
+  await prisma.run.update({
+    where: { id: runId },
+    data: { status: "canceled", scheduling_status: null, updated_at: now },
+  });
 
   // Tear down run-scoped cron jobs in this process (best-effort), and
   // notify the daemon so it tears down its own timers too. The daemon

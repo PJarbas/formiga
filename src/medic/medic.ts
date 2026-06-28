@@ -4,7 +4,7 @@
  * Runs periodic health checks on workflow runs, detects stuck/stalled/dead state,
  * and takes corrective action where safe. Logs all findings to the medic_checks table.
  */
-import { getDb } from "../db.js";
+import { getPrisma } from "../db.js";
 import { emitEvent } from "../installer/events.js";
 import { teardownWorkflowCronsIfIdle } from "../installer/agent-scheduler.js";
 import crypto from "node:crypto";
@@ -21,90 +21,67 @@ export interface MedicFinding {
   remediated?: boolean;
 }
 
-// ── DB Migration ────────────────────────────────────────────────────
-
-export function ensureMedicTables(): void {
-  const db = getDb();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS medic_checks (
-      id TEXT PRIMARY KEY,
-      checked_at TEXT NOT NULL,
-      issues_found INTEGER DEFAULT 0,
-      actions_taken INTEGER DEFAULT 0,
-      summary TEXT,
-      details TEXT
-    )
-  `);
-}
+// ── Types imported from checks ──
+import { checkStuckRuns } from "./checks.js";
 
 // ── Sync Checks ─────────────────────────────────────────────────────
 
 const STUCK_THRESHOLD_MINUTES = 30;
 const ZOMBIE_THRESHOLD_MINUTES = 60;
 
-function getRunTokenSpend(runId: string): number | undefined {
-  try {
-    const db = getDb();
-    const row = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId) as { tokens_spent: number } | undefined;
-    return row?.tokens_spent;
-  } catch {
-    return undefined;
-  }
+function minutesSince(date: Date): number {
+  return Math.floor((Date.now() - date.getTime()) / 60000);
 }
 
-function runSyncChecks(): MedicFinding[] {
+async function runSyncChecks(): Promise<MedicFinding[]> {
   const findings: MedicFinding[] = [];
-  const db = getDb();
+  const prisma = getPrisma();
 
   // Find steps that have been "running" for too long
-  const stuckSteps = db.prepare(`
-    SELECT s.id, s.step_id, s.run_id, s.agent_id, r.workflow_id,
-           (julianday('now') - julianday(s.updated_at)) * 24 * 60 AS idle_minutes
-    FROM steps s
-    JOIN runs r ON r.id = s.run_id
-    WHERE s.status = 'running' AND r.status = 'running'
-      AND (julianday('now') - julianday(s.updated_at)) * 24 * 60 > ?
-  `).all(STUCK_THRESHOLD_MINUTES) as Array<{
-    id: string; step_id: string; run_id: string; agent_id: string;
-    workflow_id: string; idle_minutes: number;
-  }>;
+  const stuckSteps = await prisma.step.findMany({
+    where: {
+      status: "running",
+      run: { status: "running" },
+    },
+    include: { run: true },
+  });
 
   for (const step of stuckSteps) {
+    const idleMinutes = minutesSince(step.updated_at);
+    if (idleMinutes <= STUCK_THRESHOLD_MINUTES) continue;
+
     findings.push({
       severity: "warning",
-      message: `Step ${step.step_id} stuck running for ${Math.round(step.idle_minutes)}m (agent ${step.agent_id}, run ${step.run_id.slice(0, 8)})`,
+      message: `Step ${step.step_id} stuck running for ${idleMinutes}m (agent ${step.agent_id}, run ${step.run_id.slice(0, 8)})`,
       action: "reset_step",
       runId: step.run_id,
       stepId: step.id,
-      workflowId: step.workflow_id,
+      workflowId: step.run.workflow_id,
     });
   }
 
   // Find zombie runs: all steps done/failed but run still "running"
-  const zombieQuery = `
-    SELECT r.id, r.workflow_id,
-           (julianday('now') - julianday(r.updated_at)) * 24 * 60 AS idle_minutes
-    FROM runs r
-    WHERE r.status = 'running'
-      AND (julianday('now') - julianday(r.updated_at)) * 24 * 60 > ?
-      AND NOT EXISTS (
-        SELECT 1 FROM steps s
-        WHERE s.run_id = r.id AND s.status IN ('pending', 'running')
-      )
-  `;
+  const zombieRows = await prisma.run.findMany({
+    where: { status: "running" },
+    include: { steps: { select: { status: true } } },
+  });
 
-  const zombies = db.prepare(zombieQuery).all(ZOMBIE_THRESHOLD_MINUTES) as Array<{
-    id: string; workflow_id: string; idle_minutes: number;
-  }>;
+  for (const run of zombieRows) {
+    const idleMinutes = minutesSince(run.updated_at);
+    if (idleMinutes <= ZOMBIE_THRESHOLD_MINUTES) continue;
 
-  for (const z of zombies) {
-    findings.push({
-      severity: "critical",
-      message: `Run ${z.id.slice(0, 8)} is zombie — idle for ${Math.round(z.idle_minutes)}m with all steps terminal`,
-      action: "fail_run",
-      runId: z.id,
-      workflowId: z.workflow_id,
-    });
+    const hasPendingOrRunning = run.steps.some(
+      (s) => s.status === "pending" || s.status === "running",
+    );
+    if (!hasPendingOrRunning) {
+      findings.push({
+        severity: "critical",
+        message: `Run ${run.id.slice(0, 8)} is zombie — idle for ${idleMinutes}m with all steps terminal`,
+        action: "fail_run",
+        runId: run.id,
+        workflowId: run.workflow_id,
+      });
+    }
   }
 
   return findings;
@@ -113,42 +90,55 @@ function runSyncChecks(): MedicFinding[] {
 // ── Remediation ─────────────────────────────────────────────────────
 
 async function remediate(finding: MedicFinding): Promise<boolean> {
-  const db = getDb();
+  const prisma = getPrisma();
 
   switch (finding.action) {
     case "reset_step": {
       if (!finding.stepId) return false;
-      const step = db.prepare(
-        "SELECT abandoned_count FROM steps WHERE id = ?"
-      ).get(finding.stepId) as { abandoned_count: number } | undefined;
+      const step = await prisma.step.findUnique({
+        where: { id: finding.stepId },
+        select: { abandoned_count: true },
+      });
       if (!step) return false;
 
       const newCount = (step.abandoned_count ?? 0) + 1;
+      const now = new Date();
       if (newCount >= 5) {
-        db.prepare(
-          "UPDATE steps SET status = 'failed', output = 'Medic: abandoned too many times', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
-        ).run(newCount, finding.stepId);
+        await prisma.step.update({
+          where: { id: finding.stepId },
+          data: {
+            status: "failed",
+            output: "Medic: abandoned too many times",
+            abandoned_count: newCount,
+            updated_at: now,
+          },
+        });
         if (finding.runId) {
-          db.prepare(
-            "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
-          ).run(finding.runId);
+          await prisma.run.update({
+            where: { id: finding.runId },
+            data: { status: "failed", updated_at: now },
+          });
           emitEvent({
-            ts: new Date().toISOString(),
+            ts: now.toISOString(),
             event: "run.failed",
             runId: finding.runId,
             detail: "Medic: step abandoned too many times",
-            tokensSpent: getRunTokenSpend(finding.runId),
           });
         }
         return true;
       }
 
-      db.prepare(
-        "UPDATE steps SET status = 'pending', abandoned_count = ?, updated_at = datetime('now') WHERE id = ?"
-      ).run(newCount, finding.stepId);
+      await prisma.step.update({
+        where: { id: finding.stepId },
+        data: {
+          status: "pending",
+          abandoned_count: newCount,
+          updated_at: now,
+        },
+      });
       if (finding.runId) {
         emitEvent({
-          ts: new Date().toISOString(),
+          ts: now.toISOString(),
           event: "step.timeout",
           runId: finding.runId,
           stepId: finding.stepId,
@@ -160,22 +150,30 @@ async function remediate(finding: MedicFinding): Promise<boolean> {
 
     case "fail_run": {
       if (!finding.runId) return false;
-      const run = db.prepare("SELECT status, workflow_id FROM runs WHERE id = ?").get(finding.runId) as { status: string; workflow_id: string } | undefined;
+      const run = await prisma.run.findUnique({
+        where: { id: finding.runId },
+        select: { status: true, workflow_id: true },
+      });
       if (!run || run.status !== "running") return false;
 
-      db.prepare(
-        "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
-      ).run(finding.runId);
-      db.prepare(
-        "UPDATE steps SET status = 'failed', output = 'Medic: run marked as dead', updated_at = datetime('now') WHERE run_id = ? AND status IN ('waiting', 'pending', 'running')"
-      ).run(finding.runId);
+      const now = new Date();
+      await prisma.run.update({
+        where: { id: finding.runId },
+        data: { status: "failed", updated_at: now },
+      });
+      await prisma.step.updateMany({
+        where: {
+          run_id: finding.runId,
+          status: { in: ["waiting", "pending", "running"] },
+        },
+        data: { status: "failed", output: "Medic: run marked as dead", updated_at: now },
+      });
       emitEvent({
-        ts: new Date().toISOString(),
+        ts: now.toISOString(),
         event: "run.failed",
         runId: finding.runId,
         workflowId: run.workflow_id,
         detail: "Medic: zombie run — all steps terminal but run still marked running",
-        tokensSpent: getRunTokenSpend(finding.runId),
       });
       try { await teardownWorkflowCronsIfIdle(run.workflow_id); } catch {}
       return true;
@@ -210,9 +208,7 @@ export interface MedicCheckResult {
 }
 
 export async function runMedicCheck(): Promise<MedicCheckResult> {
-  ensureMedicTables();
-
-  const findings: MedicFinding[] = runSyncChecks();
+  const findings: MedicFinding[] = await runSyncChecks();
 
   // Remediate
   let actionsTaken = 0;
@@ -231,8 +227,8 @@ export async function runMedicCheck(): Promise<MedicCheckResult> {
   if (findings.length === 0) {
     parts.push("All clear — no issues found");
   } else {
-    const critical = findings.filter(f => f.severity === "critical").length;
-    const warnings = findings.filter(f => f.severity === "warning").length;
+    const critical = findings.filter((f) => f.severity === "critical").length;
+    const warnings = findings.filter((f) => f.severity === "warning").length;
     if (critical > 0) parts.push(`${critical} critical`);
     if (warnings > 0) parts.push(`${warnings} warning(s)`);
     if (actionsTaken > 0) parts.push(`${actionsTaken} auto-fixed`);
@@ -241,22 +237,34 @@ export async function runMedicCheck(): Promise<MedicCheckResult> {
 
   // Log to DB
   const checkId = crypto.randomUUID();
-  const checkedAt = new Date().toISOString();
-  const db = getDb();
-  db.prepare(
-    "INSERT INTO medic_checks (id, checked_at, issues_found, actions_taken, summary, details) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(checkId, checkedAt, findings.length, actionsTaken, summary, JSON.stringify(findings));
+  const checkedAt = new Date();
+  const prisma = getPrisma();
+  await prisma.medicCheck.create({
+    data: {
+      id: checkId,
+      checked_at: checkedAt,
+      issues_found: findings.length,
+      actions_taken: actionsTaken,
+      summary,
+      details: JSON.stringify(findings),
+    },
+  });
 
   // Prune old checks (keep last 500)
-  db.prepare(`
-    DELETE FROM medic_checks WHERE id NOT IN (
-      SELECT id FROM medic_checks ORDER BY checked_at DESC LIMIT 500
-    )
-  `).run();
+  const toDelete = await prisma.medicCheck.findMany({
+    orderBy: { checked_at: "desc" },
+    skip: 500,
+    select: { id: true },
+  });
+  if (toDelete.length > 0) {
+    await prisma.medicCheck.deleteMany({
+      where: { id: { in: toDelete.map((d) => d.id) } },
+    });
+  }
 
   return {
     id: checkId,
-    checkedAt,
+    checkedAt: checkedAt.toISOString(),
     issuesFound: findings.length,
     actionsTaken,
     summary,
@@ -274,62 +282,60 @@ export interface MedicStatus {
   recentActions: number;
 }
 
-export function getMedicStatus(): MedicStatus {
+export async function getMedicStatus(): Promise<MedicStatus> {
   try {
-    ensureMedicTables();
-    const db = getDb();
+    const prisma = getPrisma();
 
-    const last = db.prepare(
-      "SELECT checked_at, summary, issues_found, actions_taken FROM medic_checks ORDER BY checked_at DESC LIMIT 1"
-    ).get() as { checked_at: string; summary: string; issues_found: number; actions_taken: number } | undefined;
+    const last = await prisma.medicCheck.findFirst({
+      orderBy: { checked_at: "desc" },
+      select: { checked_at: true, summary: true, issues_found: true, actions_taken: true },
+    });
 
-    const stats = db.prepare(`
-      SELECT COUNT(*) as checks, COALESCE(SUM(issues_found), 0) as issues, COALESCE(SUM(actions_taken), 0) as actions
-      FROM medic_checks
-      WHERE checked_at > datetime('now', '-24 hours')
-    `).get() as { checks: number; issues: number; actions: number };
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const stats = await prisma.medicCheck.aggregate({
+      _count: { id: true },
+      _sum: { issues_found: true, actions_taken: true },
+      where: { checked_at: { gt: twentyFourHoursAgo } },
+    });
 
     return {
       installed: true,
       lastCheck: last ? {
-        checkedAt: last.checked_at,
-        summary: last.summary,
+        checkedAt: last.checked_at.toISOString(),
+        summary: last.summary ?? "",
         issuesFound: last.issues_found,
         actionsTaken: last.actions_taken,
       } : null,
-      recentChecks: stats.checks,
-      recentIssues: stats.issues,
-      recentActions: stats.actions,
+      recentChecks: stats._count.id,
+      recentIssues: stats._sum.issues_found ?? 0,
+      recentActions: stats._sum.actions_taken ?? 0,
     };
   } catch {
     return { installed: false, lastCheck: null, recentChecks: 0, recentIssues: 0, recentActions: 0 };
   }
 }
 
-export function getRecentMedicChecks(limit = 20): Array<{
+export async function getRecentMedicChecks(limit = 20): Promise<Array<{
   id: string;
   checkedAt: string;
   issuesFound: number;
   actionsTaken: number;
   summary: string;
   details: MedicFinding[];
-}> {
+}>> {
   try {
-    ensureMedicTables();
-    const db = getDb();
-    const rows = db.prepare(
-      "SELECT * FROM medic_checks ORDER BY checked_at DESC LIMIT ?"
-    ).all(limit) as Array<{
-      id: string; checked_at: string; issues_found: number;
-      actions_taken: number; summary: string; details: string;
-    }>;
+    const prisma = getPrisma();
+    const rows = await prisma.medicCheck.findMany({
+      orderBy: { checked_at: "desc" },
+      take: limit,
+    });
 
-    return rows.map(r => ({
+    return rows.map((r) => ({
       id: r.id,
-      checkedAt: r.checked_at,
+      checkedAt: r.checked_at.toISOString(),
       issuesFound: r.issues_found,
       actionsTaken: r.actions_taken,
-      summary: r.summary,
+      summary: r.summary ?? "",
       details: JSON.parse(r.details ?? "[]"),
     }));
   } catch {
