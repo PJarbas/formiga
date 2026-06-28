@@ -27,7 +27,7 @@ import path from "node:path";
 import { logger } from "../../lib/logger.js";
 import { getRoleTimeoutSeconds, inferRole } from "../install.js";
 import { resolveWorkflowDir } from "../paths.js";
-import type { HarnessType, WorkflowSpec } from "../types.js";
+import type { HarnessType, WorkflowAgent, WorkflowSpec } from "../types.js";
 import { executePollingRound } from "./polling-round.js";
 import {
   activeTimers,
@@ -157,18 +157,36 @@ export async function createAgentCronJob(
 }
 
 /**
- * Set up polling jobs for every agent in a workflow, scoped to a single run.
+ * Set up polling jobs for a workflow run using sequential scheduling.
+ *
+ * Instead of scheduling ALL agents at once (old behavior), this only
+ * schedules the agent(s) responsible for the first pending step(s).
+ * Subsequent agents are spawned on-demand via `spawnAgentsForPendingSteps`
+ * when the previous step completes (event-driven wakeup).
+ *
+ * A slow supervisor cron for each active agent acts as a fallback in case
+ * the direct-spawn event is lost (daemon restart, crash recovery, etc.).
  */
 export async function setupAgentCrons(
   workflow: WorkflowSpec,
   runId: string,
   options: SetupAgentCronsOptions = {},
 ): Promise<void> {
-  const staggerBaseMs = 60_000; // 1 minute per agent
+  // Determine which agents need scheduling based on pending steps
+  const agentsToSchedule = await getAgentsForPendingSteps(workflow, runId);
 
-  for (let i = 0; i < workflow.agents.length; i++) {
-    const agent = workflow.agents[i];
-    const staggerMs = i * staggerBaseMs;
+  if (agentsToSchedule.length === 0) {
+    // Fallback: if no pending steps found (race condition or fresh run),
+    // schedule only the first agent
+    const firstAgent = workflow.agents[0];
+    if (firstAgent) {
+      agentsToSchedule.push(firstAgent);
+    }
+  }
+
+  for (let i = 0; i < agentsToSchedule.length; i++) {
+    const agent = agentsToSchedule[i];
+    const staggerMs = i * 10_000; // 10s stagger for parallel agents
 
     const jobId = buildJobId(workflow.id, runId, agent.id);
     if (jobMetadata.has(jobId)) {
@@ -185,7 +203,7 @@ export async function setupAgentCrons(
         ? Math.max(15, Math.ceil(workflow.polling.timeoutSeconds / 60))
         : 15)
       : (workflow.polling?.timeoutSeconds
-        ? Math.max(1, Math.ceil(workflow.polling.timeoutSeconds / 60))
+        ? Math.max(5, Math.ceil(workflow.polling.timeoutSeconds / 60))
         : 5);
 
     const result = await createAgentCronJob({
@@ -205,6 +223,52 @@ export async function setupAgentCrons(
         error: result.error,
       });
     }
+  }
+
+  logger.info("Sequential scheduling: agents scheduled for pending steps", {
+    runId,
+    workflowId: workflow.id,
+    scheduledAgents: agentsToSchedule.map((a) => a.id),
+    totalWorkflowAgents: workflow.agents.length,
+  });
+}
+
+/**
+ * Determine which agents should be scheduled based on current pending steps.
+ * Only returns agents that have pending steps assigned to them.
+ */
+async function getAgentsForPendingSteps(
+  workflow: WorkflowSpec,
+  runId: string,
+): Promise<WorkflowAgent[]> {
+  try {
+    const { getPrisma } = await import("../../db.js");
+    const prisma = getPrisma();
+
+    const pendingSteps = await prisma.step.findMany({
+      where: { run_id: runId, status: "pending" },
+      select: { agent_id: true },
+    });
+
+    if (pendingSteps.length === 0) return [];
+
+    const pendingAgentIds = new Set(pendingSteps.map((s) => s.agent_id));
+    const matched: WorkflowAgent[] = [];
+
+    for (const agent of workflow.agents) {
+      const fullId = `${workflow.id}_${agent.id}`;
+      if (pendingAgentIds.has(agent.id) || pendingAgentIds.has(fullId)) {
+        matched.push(agent);
+      }
+    }
+
+    return matched;
+  } catch (err) {
+    logger.warn("getAgentsForPendingSteps failed — falling back to first agent", {
+      runId,
+      error: String(err),
+    });
+    return [];
   }
 }
 
