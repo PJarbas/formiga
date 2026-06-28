@@ -1,5 +1,6 @@
 // ══════════════════════════════════════════════════════════════════════
 // fan-in.ts — Collect agent results and register in leaderboard
+// MIGRATED TO PRISMA — repository.register() is now async
 // ══════════════════════════════════════════════════════════════════════
 
 import type { AgentResult } from "../agents/interfaces.js";
@@ -13,12 +14,12 @@ export interface FanInResult {
 }
 
 /** Collect agent results from fan-out, validate, and register in leaderboard. */
-export function collectAndRegister(
+export async function collectAndRegister(
   fanOutResults: FanOutResult[],
   repository: LeaderboardRepository,
   runId: string,
   roundNumber: number,
-): FanInResult {
+): Promise<FanInResult> {
   const collected: FanInResult = { registered: 0, failed: 0, errors: [] };
 
   for (const fr of fanOutResults) {
@@ -36,7 +37,7 @@ export function collectAndRegister(
 
     try {
       const entry = toNewExperiment(fr.result, runId, roundNumber);
-      repository.register(entry);
+      await repository.register(entry);
       collected.registered++;
     } catch (err) {
       collected.failed++;

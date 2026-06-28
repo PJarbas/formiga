@@ -1,128 +1,149 @@
 // ══════════════════════════════════════════════════════════════════════
 // queries.ts — Named, typed query helpers for the experiments table
+// MIGRATED TO PRISMA — no raw SQL
 // ══════════════════════════════════════════════════════════════════════
 
-import type { DatabaseSync } from "node:sqlite";
+import { getPrisma } from "../database/prisma.js";
 import type { ExperimentRow } from "./repository.js";
 
 /** All experiments for a run, newest first. */
-export function getExperimentsForRun(db: DatabaseSync, runId: string): ExperimentRow[] {
-  return db
-    .prepare("SELECT * FROM experiments WHERE run_id = ? ORDER BY created_at DESC")
-    .all(runId) as unknown as ExperimentRow[];
+export async function getExperimentsForRun(runId: string): Promise<ExperimentRow[]> {
+  const prisma = getPrisma();
+  const rows = await prisma.experiment.findMany({
+    where: { run_id: runId },
+    orderBy: { created_at: "desc" },
+  });
+  return rows.map(toExperimentRow);
 }
 
 /** Count experiments grouped by status for a run. */
-export function getExperimentStats(
-  db: DatabaseSync,
+export async function getExperimentStats(
   runId: string,
-): { total: number; validated: number; rejected: number; pending: number } {
-  const row = db
-    .prepare(
-      `SELECT
-        COUNT(*) AS total,
-        SUM(CASE WHEN status IN ('SUCCESS','AUDITED') THEN 1 ELSE 0 END) AS validated,
-        SUM(CASE WHEN status IN ('FAILED','OVERFITTED') THEN 1 ELSE 0 END) AS rejected,
-        SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) AS pending
-       FROM experiments WHERE run_id = ?`,
-    )
-    .get(runId) as Record<string, number> | undefined;
-
+): Promise<{ total: number; validated: number; rejected: number; pending: number }> {
+  const prisma = getPrisma();
+  const [totalResult, validatedResult, rejectedResult, pendingResult] = await Promise.all([
+    prisma.experiment.count({ where: { run_id: runId } }),
+    prisma.experiment.count({
+      where: { run_id: runId, status: { in: ["SUCCESS", "AUDITED"] } },
+    }),
+    prisma.experiment.count({
+      where: { run_id: runId, status: { in: ["FAILED", "OVERFITTED"] } },
+    }),
+    prisma.experiment.count({
+      where: { run_id: runId, status: "PENDING" },
+    }),
+  ]);
   return {
-    total: row?.total ?? 0,
-    validated: row?.validated ?? 0,
-    rejected: row?.rejected ?? 0,
-    pending: row?.pending ?? 0,
+    total: totalResult,
+    validated: validatedResult,
+    rejected: rejectedResult,
+    pending: pendingResult,
   };
 }
 
 /** Best N experiments by val_metric for a run. */
-export function getBestExperiments(db: DatabaseSync, runId: string, limit = 10): ExperimentRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM experiments
-       WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
-       ORDER BY val_metric DESC LIMIT ?`,
-    )
-    .all(runId, limit) as unknown as ExperimentRow[];
+export async function getBestExperiments(
+  runId: string,
+  limit = 10,
+): Promise<ExperimentRow[]> {
+  const prisma = getPrisma();
+  const rows = await prisma.experiment.findMany({
+    where: {
+      run_id: runId,
+      status: { in: ["SUCCESS", "AUDITED"] },
+    },
+    orderBy: { val_metric: "desc" },
+    take: limit,
+  });
+  return rows.map(toExperimentRow);
 }
 
 /** Count of rejected experiments for a given agent across all runs. */
-export function getRejectedCount(db: DatabaseSync, agentName: string): number {
-  const row = db
-    .prepare("SELECT COUNT(*) AS cnt FROM experiments WHERE agent_name = ? AND status IN ('FAILED','OVERFITTED')")
-    .get(agentName) as { cnt: number } | undefined;
-  return row?.cnt ?? 0;
+export async function getRejectedCount(agentName: string): Promise<number> {
+  const prisma = getPrisma();
+  return prisma.experiment.count({
+    where: {
+      agent_name: agentName,
+      status: { in: ["FAILED", "OVERFITTED"] },
+    },
+  });
 }
 
 /** Best experiment (by val_metric) for a single run. */
-export function getCurrentBestForRun(
-  db: DatabaseSync,
+export async function getCurrentBestForRun(
   runId: string,
-): ExperimentRow | undefined {
-  const row = db
-    .prepare(
-      `SELECT * FROM experiments
-       WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
-       ORDER BY val_metric DESC LIMIT 1`,
-    )
-    .get(runId) as Record<string, unknown> | undefined;
-  return row ? deserializeExperimentRow(row) : undefined;
+): Promise<ExperimentRow | undefined> {
+  const prisma = getPrisma();
+  const row = await prisma.experiment.findFirst({
+    where: {
+      run_id: runId,
+      status: { in: ["SUCCESS", "AUDITED"] },
+    },
+    orderBy: { val_metric: "desc" },
+  });
+  return row ? toExperimentRow(row) : undefined;
 }
 
 /** Failed / OVERFITTED configs for a given agent across ALL runs.
  *  Agent name is matched with LIKE '%_<agentName>' so the scoped
  *  workflow prefix (e.g. ml-pipeline_modeler-classic) still hits. */
-export function getFailedConfigsForAgent(
-  db: DatabaseSync,
+export async function getFailedConfigsForAgent(
   agentName: string,
   limit = 5,
-): Array<{
-  model_type: string;
-  hyperparameters: Record<string, unknown>;
-  reject_reason: string | null;
-}> {
-  const rows = db
-    .prepare(
-      `SELECT model_type, hyperparameters, COALESCE(NULLIF(reject_reason,''), error_message) AS reject_reason
-       FROM experiments
-       WHERE agent_name LIKE '%_' || ? AND status IN ('FAILED','OVERFITTED')
-       ORDER BY created_at DESC LIMIT ?`,
-    )
-    .all(agentName, limit) as Array<{
-      model_type: string;
-      hyperparameters: string;
-      reject_reason: string | null;
-    }>;
+): Promise<
+  Array<{
+    model_type: string;
+    hyperparameters: Record<string, unknown>;
+    reject_reason: string | null;
+  }>
+> {
+  const prisma = getPrisma();
+  const rows = await prisma.experiment.findMany({
+    where: {
+      agent_name: { endsWith: `_${agentName}` },
+      status: { in: ["FAILED", "OVERFITTED"] },
+    },
+    orderBy: { created_at: "desc" },
+    take: limit,
+    select: {
+      model_type: true,
+      hyperparameters: true,
+      reject_reason: true,
+      error_message: true,
+    },
+  });
   return rows.map((r) => ({
     model_type: r.model_type,
     hyperparameters: safeJsonParse(r.hyperparameters),
-    reject_reason: r.reject_reason,
+    reject_reason: r.reject_reason ?? r.error_message,
   }));
 }
 
 /** Top succeeded configs for a given agent across ALL runs. */
-export function getSucceededConfigsForAgent(
-  db: DatabaseSync,
+export async function getSucceededConfigsForAgent(
   agentName: string,
   limit = 3,
-): Array<{
-  model_type: string;
-  hyperparameters: Record<string, unknown>;
-  val_metric: number;
-}> {
-  const rows = db
-    .prepare(
-      `SELECT model_type, hyperparameters, val_metric
-       FROM experiments
-       WHERE agent_name LIKE '%_' || ? AND status IN ('SUCCESS','AUDITED')
-       ORDER BY val_metric DESC LIMIT ?`,
-    )
-    .all(agentName, limit) as Array<{
-      model_type: string;
-      hyperparameters: string;
-      val_metric: number;
-    }>;
+): Promise<
+  Array<{
+    model_type: string;
+    hyperparameters: Record<string, unknown>;
+    val_metric: number;
+  }>
+> {
+  const prisma = getPrisma();
+  const rows = await prisma.experiment.findMany({
+    where: {
+      agent_name: { endsWith: `_${agentName}` },
+      status: { in: ["SUCCESS", "AUDITED"] },
+    },
+    orderBy: { val_metric: "desc" },
+    take: limit,
+    select: {
+      model_type: true,
+      hyperparameters: true,
+      val_metric: true,
+    },
+  });
   return rows.map((r) => ({
     model_type: r.model_type,
     hyperparameters: safeJsonParse(r.hyperparameters),
@@ -131,36 +152,37 @@ export function getSucceededConfigsForAgent(
 }
 
 /** Best experiments that share a dataset signature, across runs. */
-export function getBestExperimentsBySignature(
-  db: DatabaseSync,
+export async function getBestExperimentsBySignature(
   signature: string,
   limit = 5,
-): ExperimentRow[] {
-  const rows = db
-    .prepare(
-      `SELECT * FROM experiments
-       WHERE dataset_signature = ? AND status IN ('SUCCESS','AUDITED')
-       ORDER BY val_metric DESC LIMIT ?`,
-    )
-    .all(signature, limit) as Array<Record<string, unknown>>;
-  return rows.map(deserializeExperimentRow);
+): Promise<ExperimentRow[]> {
+  const prisma = getPrisma();
+  const rows = await prisma.experiment.findMany({
+    where: {
+      dataset_signature: signature,
+      status: { in: ["SUCCESS", "AUDITED"] },
+    },
+    orderBy: { val_metric: "desc" },
+    take: limit,
+  });
+  return rows.map(toExperimentRow);
 }
 
 /** Upsert a dataset signature record. */
-export function upsertDatasetSignature(
-  db: DatabaseSync,
+export async function upsertDatasetSignature(
   signature: string,
   columnHash: string,
   rowBucket: string,
-): void {
-  db.prepare(
-    `INSERT INTO dataset_signatures (signature, column_hash, row_bucket)
-     VALUES (?, ?, ?)
-     ON CONFLICT(signature) DO UPDATE SET column_hash=excluded.column_hash, row_bucket=excluded.row_bucket`,
-  ).run(signature, columnHash, rowBucket);
+): Promise<void> {
+  const prisma = getPrisma();
+  await prisma.datasetSignature.upsert({
+    where: { signature },
+    create: { signature, column_hash: columnHash, row_bucket: rowBucket },
+    update: { column_hash: columnHash, row_bucket: rowBucket },
+  });
 }
 
-// ── Dataset Signature Computation ──
+// ── Dataset Signature Computation ─────────────────────────────────────────────────
 
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
@@ -192,13 +214,13 @@ export async function computeDatasetSignature(datasetPath: string): Promise<{
   const header = lines[0].trim();
   const columns = header.split(",").map((c) => c.trim()).sort();
   const columnHash = createHash("md5").update(columns.join(",")).digest("hex");
-  const totalRows = lines.length - 1; // exclude header line
+  const totalRows = lines.length - 1;
   const rb = rowBucket(totalRows);
   const signature = `${columnHash}_${rb}`;
   return { signature, columnHash, rowBucket: rb };
 }
 
-// ── Rehydration helper (mirrors repository mapping) ──
+// ── Serialization helpers ──────────────────────────────────────────────────────────────
 
 function safeJsonParse(raw: string): Record<string, unknown> {
   try {
@@ -208,22 +230,38 @@ function safeJsonParse(raw: string): Record<string, unknown> {
   }
 }
 
-function deserializeExperimentRow(raw: Record<string, unknown>): ExperimentRow {
+function toExperimentRow(model: {
+  experiment_id: number;
+  run_id: string;
+  round_number: number;
+  agent_name: string;
+  model_type: string;
+  hyperparameters: string;
+  train_metric: number;
+  val_metric: number;
+  test_metric: number | null;
+  metric_name: string;
+  artifact_path: string;
+  status: string;
+  error_message: string | null;
+  dataset_signature: string | null;
+  created_at: Date;
+}): ExperimentRow {
   return {
-    experiment_id: Number(raw.experiment_id),
-    run_id: raw.run_id as string,
-    round_number: Number(raw.round_number),
-    agent_name: raw.agent_name as string,
-    model_type: raw.model_type as string,
-    hyperparameters: safeJsonParse(raw.hyperparameters as string),
-    train_metric: Number(raw.train_metric),
-    val_metric: Number(raw.val_metric),
-    test_metric: raw.test_metric != null ? Number(raw.test_metric) : null,
-    metric_name: raw.metric_name as string,
-    artifact_path: raw.artifact_path as string,
-    status: raw.status as ExperimentRow["status"],
-    error_message: raw.error_message != null ? (raw.error_message as string) : null,
-    dataset_signature: raw.dataset_signature != null ? (raw.dataset_signature as string) : null,
-    created_at: raw.created_at as string,
+    experiment_id: model.experiment_id,
+    run_id: model.run_id,
+    round_number: model.round_number,
+    agent_name: model.agent_name,
+    model_type: model.model_type,
+    hyperparameters: safeJsonParse(model.hyperparameters),
+    train_metric: model.train_metric,
+    val_metric: model.val_metric,
+    test_metric: model.test_metric,
+    metric_name: model.metric_name,
+    artifact_path: model.artifact_path,
+    status: model.status as ExperimentRow["status"],
+    error_message: model.error_message,
+    dataset_signature: model.dataset_signature,
+    created_at: model.created_at.toISOString(),
   };
 }

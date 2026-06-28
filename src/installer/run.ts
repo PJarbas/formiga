@@ -110,7 +110,7 @@ export async function runWorkflow(
   const db = getDb();
   const now = new Date().toISOString();
   const runId = crypto.randomUUID();
-  const runNumber = nextRunNumber();
+  const runNumber = await nextRunNumber();
 
   const workspaceMode = workflow.run?.workspace ?? "direct";
 

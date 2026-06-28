@@ -35,6 +35,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDb, getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession } from "../db.js";
+import { getPrisma } from "../database/prisma.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { buildKanbanSnapshot, buildKanbanCardDetail } from "./kanban-data.js";
@@ -54,6 +55,12 @@ import {
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
+import {
+  findActivePipelineRunId,
+  getAgentUnifiedStatus,
+  getCurrentPhase,
+  getAgentRoundSummaries,
+} from "./pipeline-status.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
@@ -177,31 +184,39 @@ function buildAutoresearchExperiments(entries: AutoresearchLogEntry[]) {
 // ── API Handlers ─────────────────────────────────────────────────────
 
 function handleListRuns(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const db = getDb();
+  (async () => {
+    const prisma = getPrisma();
 
-    const rawRuns = db.prepare(`
-      SELECT
-        r.id,
-        r.workflow_id,
-        r.task,
-        r.status,
-        r.context,
-        r.created_at,
-        r.updated_at,
-        r.run_number,
-        r.tokens_spent,
-        COUNT(s.id) AS total_steps,
-        SUM(CASE WHEN s.status = 'done' THEN 1 ELSE 0 END) AS completed_steps,
-        SUM(CASE WHEN s.status = 'failed' THEN 1 ELSE 0 END) AS failed_steps,
-        SUM(CASE WHEN s.status = 'running' THEN 1 ELSE 0 END) AS running_steps,
-        SUM(CASE WHEN s.status = 'waiting' THEN 1 ELSE 0 END) AS waiting_steps
-      FROM runs r
-      LEFT JOIN steps s ON s.run_id = r.id
-      GROUP BY r.id
-      ORDER BY r.created_at DESC
-      LIMIT 100
-    `).all() as Array<Record<string, unknown>>;
+    const allRuns = await prisma.run.findMany({
+      orderBy: { created_at: "desc" },
+      take: 100,
+      include: { steps: true },
+    });
+
+    const rawRuns = allRuns.map((run) => {
+      const total_steps = run.steps.length;
+      const completed_steps = run.steps.filter((s) => s.status === "done").length;
+      const failed_steps = run.steps.filter((s) => s.status === "failed").length;
+      const running_steps = run.steps.filter((s) => s.status === "running").length;
+      const waiting_steps = run.steps.filter((s) => s.status === "waiting").length;
+
+      return {
+        id: run.id,
+        workflow_id: run.workflow_id,
+        task: run.task,
+        status: run.status,
+        context: run.context,
+        created_at: run.created_at,
+        updated_at: run.updated_at,
+        run_number: run.run_number,
+        tokens_spent: run.tokens_spent,
+        total_steps,
+        completed_steps,
+        failed_steps,
+        running_steps,
+        waiting_steps,
+      };
+    });
 
     const runs = rawRuns.map((row) => {
       let no_hurry = false;
@@ -215,9 +230,7 @@ function handleListRuns(_req: http.IncomingMessage, res: http.ServerResponse): v
     });
 
     jsonResponse(res, { runs });
-  } catch (err) {
-    errorResponse(res, `Failed to list runs: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to list runs: ${(err as Error).message}`));
 }
 
 function handleRunDetail(
@@ -225,59 +238,46 @@ function handleRunDetail(
   res: http.ServerResponse,
   runId: string,
 ): void {
-  try {
-    const db = getDb();
+  (async () => {
+    const prisma = getPrisma();
 
-    const run = db.prepare(`
-      SELECT id, workflow_id, task, status, context, created_at, updated_at, run_number, tokens_spent
-      FROM runs WHERE id = ?
-    `).get(runId);
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      include: { steps: { orderBy: { step_index: "asc" } } },
+    });
 
     if (!run) {
       errorResponse(res, `Run not found: ${runId}`, 404);
       return;
     }
 
-    const steps = db.prepare(`
-      SELECT id, step_id, agent_id, step_index, status, output,
-             retry_count, max_retries, type, created_at, updated_at
-      FROM steps WHERE run_id = ?
-      ORDER BY step_index ASC
-    `).all(runId);
-
+    const steps = run.steps;
     const events = getRunEvents(runId);
 
     // Derive failure_reason from existing data (no new DB column)
     let failure_reason: string | null = null;
-    const runStatus = (run as { status: string }).status;
-    if (runStatus === "failed") {
-      const failedStep = (steps as Array<{ status: string; output?: string | null }>).find(
-        (s) => s.status === "failed",
-      );
+    if (run.status === "failed") {
+      const failedStep = steps.find((s) => s.status === "failed");
       failure_reason = failedStep?.output || "Run failed";
-    } else if (runStatus === "canceled") {
+    } else if (run.status === "canceled") {
       failure_reason = "Canceled";
     }
 
     // Enrich with worktree information
     let worktree: unknown = null;
     try {
-      const ctx = JSON.parse((run as { context?: string }).context ?? "{}") as Record<string, string>;
+      const ctx = JSON.parse(run.context ?? "{}") as Record<string, string>;
       if (ctx.workspace_mode === "worktree") {
-        worktree = db
-          .prepare(
-            "SELECT worktree_path, worktree_origin_repository, worktree_origin_ref, worktree_origin_sha, status AS wt_status, cleanup_policy FROM run_worktrees WHERE run_id = ?",
-          )
-          .get(runId) ?? null;
+        worktree = await prisma.runWorktree.findUnique({
+          where: { run_id: runId },
+        });
       }
     } catch {
       // context may be malformed
     }
 
-    jsonResponse(res, { run, steps, events, worktree, failure_reason, prompt: (run as { task: string }).task });
-  } catch (err) {
-    errorResponse(res, `Failed to get run detail: ${(err as Error).message}`);
-  }
+    jsonResponse(res, { run, steps, events, worktree, failure_reason, prompt: run.task });
+  })().catch((err) => errorResponse(res, `Failed to get run detail: ${(err as Error).message}`));
 }
 
 function handleRunKanbanCardDetail(
@@ -331,14 +331,12 @@ function handleRunAutoresearch(
   res: http.ServerResponse,
   runId: string,
 ): void {
-  try {
-    const db = getDb();
-    const run = db.prepare(`
-      SELECT id, workflow_id, task, status, context, created_at, updated_at
-      FROM runs WHERE id = ?
-    `).get(runId) as
-      | { id: string; workflow_id: string; task: string; status: string; context?: string | null; created_at: string; updated_at: string }
-      | undefined;
+  (async () => {
+    const prisma = getPrisma();
+
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+    });
 
     if (!run) {
       errorResponse(res, `Run not found: ${runId}`, 404);
@@ -379,37 +377,43 @@ function handleRunAutoresearch(
       pendingResults: results.filter((result) => !entries.some((entry) => entry.type === "run" && entry.run === result.run)),
       entries: entries.slice(-100),
     });
-  } catch (err) {
-    errorResponse(res, `Failed to get AutoResearch progress: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get AutoResearch progress: ${(err as Error).message}`));
 }
 
 function handleAutoresearchRuns(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const db = getDb();
+  (async () => {
+    const prisma = getPrisma();
 
-    const rawRuns = db.prepare(`
-      SELECT
-        r.id,
-        r.workflow_id,
-        r.task,
-        r.status,
-        r.context,
-        r.created_at,
-        r.updated_at,
-        r.run_number,
-        r.tokens_spent,
-        COUNT(s.id) AS total_steps,
-        SUM(CASE WHEN s.status = 'done' THEN 1 ELSE 0 END) AS completed_steps,
-        SUM(CASE WHEN s.status = 'failed' THEN 1 ELSE 0 END) AS failed_steps,
-        SUM(CASE WHEN s.status = 'running' THEN 1 ELSE 0 END) AS running_steps,
-        SUM(CASE WHEN s.status = 'waiting' THEN 1 ELSE 0 END) AS waiting_steps
-      FROM runs r
-      LEFT JOIN steps s ON s.run_id = r.id
-      GROUP BY r.id
-      ORDER BY r.created_at DESC
-      LIMIT 100
-    `).all() as Array<Record<string, unknown>>;
+    const allRuns = await prisma.run.findMany({
+      orderBy: { created_at: "desc" },
+      take: 100,
+      include: { steps: true },
+    });
+
+    const rawRuns = allRuns.map((run) => {
+      const total_steps = run.steps.length;
+      const completed_steps = run.steps.filter((s) => s.status === "done").length;
+      const failed_steps = run.steps.filter((s) => s.status === "failed").length;
+      const running_steps = run.steps.filter((s) => s.status === "running").length;
+      const waiting_steps = run.steps.filter((s) => s.status === "waiting").length;
+
+      return {
+        id: run.id,
+        workflow_id: run.workflow_id,
+        task: run.task,
+        status: run.status,
+        context: run.context,
+        created_at: run.created_at,
+        updated_at: run.updated_at,
+        run_number: run.run_number,
+        tokens_spent: run.tokens_spent,
+        total_steps,
+        completed_steps,
+        failed_steps,
+        running_steps,
+        waiting_steps,
+      };
+    });
 
     const filtered = rawRuns.filter((row) => {
       const cwd = resolveRunHarnessCwd({ context: row.context as string | null | undefined });
@@ -435,9 +439,7 @@ function handleAutoresearchRuns(_req: http.IncomingMessage, res: http.ServerResp
 
     console.log(`[dashboard] GET /api/autoresearch/runs → ${runs.length} of ${rawRuns.length} total runs have AutoResearch state`);
     jsonResponse(res, { runs });
-  } catch (err) {
-    errorResponse(res, `Failed to list AutoResearch runs: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to list AutoResearch runs: ${(err as Error).message}`));
 }
 
 function handleEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -472,14 +474,16 @@ function handleLogsTail(req: http.IncomingMessage, res: http.ServerResponse): vo
 }
 
 function handleStats(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const db = getDb();
-    const systemTokensSpent = getSystemTokenSpend();
+  (async () => {
+    const prisma = getPrisma();
+    const systemTokensSpent = await getSystemTokenSpend();
 
     let runTokensSpent = 0;
     try {
-      const row = db.prepare("SELECT COALESCE(SUM(tokens_spent), 0) AS total FROM runs").get() as { total: number } | undefined;
-      runTokensSpent = row?.total ?? 0;
+      const result = await prisma.run.aggregate({
+        _sum: { tokens_spent: true },
+      });
+      runTokensSpent = result._sum.tokens_spent ?? 0;
     } catch {
       // runs table may not exist yet
       runTokensSpent = 0;
@@ -489,32 +493,30 @@ function handleStats(_req: http.IncomingMessage, res: http.ServerResponse): void
       systemTokensSpent,
       totalTokensSpent: systemTokensSpent + runTokensSpent,
     });
-  } catch (err) {
-    errorResponse(res, `Failed to get stats: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get stats: ${(err as Error).message}`));
 }
 
 function handleHealth(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const db = getDb();
+  (async () => {
+    const prisma = getPrisma();
     // Quick health check: can we query the DB?
-    db.prepare("SELECT 1").get();
+    await prisma.$queryRaw`SELECT 1`;
     jsonResponse(res, {
       status: "ok",
       uptime: process.uptime(),
       pid: process.pid,
       timestamp: new Date().toISOString(),
     });
-  } catch (err) {
-    errorResponse(res, `Health check failed: ${(err as Error).message}`, 503);
-  }
+  })().catch((err) =>
+    errorResponse(res, `Health check failed: ${(err as Error).message}`, 503),
+  );
 }
 
 // ── AutoResearch Session API Handlers ──────────────────────────────
 
 function handleAutoresearchSessions(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const sessions = getAutoresearchSessions();
+  (async () => {
+    const sessions = await getAutoresearchSessions();
     const enriched = sessions.map((s) => {
       const summary = summarizeAutoresearch(s.cwd);
       return {
@@ -540,9 +542,7 @@ function handleAutoresearchSessions(_req: http.IncomingMessage, res: http.Server
 
     console.log(`[dashboard] GET /api/autoresearch/sessions → ${sessions.length} sessions`);
     jsonResponse(res, { sessions: enriched });
-  } catch (err) {
-    errorResponse(res, `Failed to list AutoResearch sessions: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to list AutoResearch sessions: ${(err as Error).message}`));
 }
 
 function handleAutoresearchSessionById(
@@ -550,8 +550,8 @@ function handleAutoresearchSessionById(
   res: http.ServerResponse,
   sessionId: string,
 ): void {
-  try {
-    const session = getAutoresearchSessionById(sessionId);
+  (async () => {
+    const session = await getAutoresearchSessionById(sessionId);
     if (!session) {
       errorResponse(res, `Session not found: ${sessionId}`, 404);
       return;
@@ -575,21 +575,19 @@ function handleAutoresearchSessionById(
       ),
       entries: entries.slice(-100),
     });
-  } catch (err) {
-    errorResponse(res, `Failed to get AutoResearch session: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get AutoResearch session: ${(err as Error).message}`));
 }
 
 // ── Backfill ────────────────────────────────────────────────────────
 
 export function backfillAutoresearchSessions(): void {
-  try {
-    const db = getDb();
-    const rows = db.prepare(`
-      SELECT context FROM runs
-      ORDER BY created_at DESC
-      LIMIT 100
-    `).all() as Array<{ context: string }>;
+  (async () => {
+    const prisma = getPrisma();
+    const rows = await prisma.run.findMany({
+      select: { context: true },
+      orderBy: { created_at: "desc" },
+      take: 100,
+    });
 
     const seen = new Set<string>();
     let backfilled = 0;
@@ -619,9 +617,9 @@ export function backfillAutoresearchSessions(): void {
     if (backfilled > 0) {
       console.log(`[dashboard] backfill: inserted ${backfilled} missing AutoResearch sessions from recent runs`);
     }
-  } catch (err) {
+  })().catch((err) => {
     console.error(`[dashboard] backfill error: ${(err as Error).message}`);
-  }
+  });
 }
 
 async function handlePauseRun(
@@ -630,15 +628,16 @@ async function handlePauseRun(
   runId: string,
 ): Promise<void> {
   try {
-    const db = getDb();
+    const prisma = getPrisma();
 
     // Parse drain query parameter
     const url = new URL(req.url ?? "/", "http://localhost");
     const drain = url.searchParams.get("drain") === "true";
 
-    const run = db.prepare("SELECT id, status FROM runs WHERE id = ?").get(runId) as
-      | { id: string; status: string }
-      | undefined;
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { id: true, status: true },
+    });
 
     if (!run) {
       errorResponse(res, `Run not found: ${runId}`, 404);
@@ -683,11 +682,12 @@ async function handleResumeRun(
   runId: string,
 ): Promise<void> {
   try {
-    const db = getDb();
+    const prisma = getPrisma();
 
-    const run = db.prepare("SELECT id, status FROM runs WHERE id = ?").get(runId) as
-      | { id: string; status: string }
-      | undefined;
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { id: true, status: true },
+    });
 
     if (!run) {
       errorResponse(res, `Run not found: ${runId}`, 404);
@@ -732,11 +732,12 @@ async function handleCancelRun(
   runId: string,
 ): Promise<void> {
   try {
-    const db = getDb();
+    const prisma = getPrisma();
 
-    const run = db.prepare("SELECT id, status FROM runs WHERE id = ?").get(runId) as
-      | { id: string; status: string }
-      | undefined;
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { id: true, status: true },
+    });
 
     if (!run) {
       errorResponse(res, `Run not found: ${runId}`, 404);
@@ -798,13 +799,12 @@ async function handleRelaunchRun(
   runId: string,
 ): Promise<void> {
   try {
-    const db = getDb();
+    const prisma = getPrisma();
 
-    const run = db.prepare(
-      "SELECT id, workflow_id, task, status, context, notify_url FROM runs WHERE id = ?",
-    ).get(runId) as
-      | { id: string; workflow_id: string; task: string; status: string; context: string; notify_url: string | null }
-      | undefined;
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { id: true, workflow_id: true, task: true, status: true, context: true, notify_url: true },
+    });
 
     if (!run) {
       errorResponse(res, `Run not found: ${runId}`, 404);
@@ -838,7 +838,7 @@ async function handleRelaunchRun(
     // Parse original context to extract workspace settings
     let originalContext: Record<string, string> = {};
     try {
-      originalContext = JSON.parse(run.context) as Record<string, string>;
+      originalContext = JSON.parse(run.context ?? "{}") as Record<string, string>;
     } catch {
       // context may be malformed — proceed with empty context
     }
@@ -891,27 +891,10 @@ function handleVersion(_req: http.IncomingMessage, res: http.ServerResponse): vo
 
 // ── ML Pipeline API Handlers ──────────────────────────────────────────
 
-function findActivePipelineRunId(): string | null {
-  try {
-    const db = getDb();
-    // Look for a run that has experiments and is still running/paused
-    const row = db.prepare(`
-      SELECT DISTINCT e.run_id
-      FROM experiments e
-      JOIN runs r ON r.id = e.run_id
-      WHERE r.status IN ('running', 'paused')
-      ORDER BY e.created_at DESC LIMIT 1
-    `).get() as { run_id: string } | undefined;
-    return row?.run_id ?? null;
-  } catch {
-    return null;
-  }
-}
-
 function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const db = getDb();
-    const runId = findActivePipelineRunId();
+  (async () => {
+    const prisma = getPrisma();
+    const runId = await findActivePipelineRunId();
 
     if (!runId) {
       jsonResponse(res, {
@@ -934,49 +917,37 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
       return;
     }
 
-    const run = db.prepare(
-      "SELECT id, status, created_at, updated_at, tokens_spent FROM runs WHERE id = ?",
-    ).get(runId) as { id: string; status: string; created_at: string; updated_at: string; tokens_spent: number } | undefined;
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { id: true, status: true, created_at: true, updated_at: true, tokens_spent: true },
+    });
 
-    const stats = getExperimentStats(db, runId);
+    const stats = await getExperimentStats(runId);
 
     // Best cvMean from leaderboard
-    const bestRow = db.prepare(
-      "SELECT val_metric FROM experiments WHERE run_id = ? AND status IN ('SUCCESS','AUDITED') ORDER BY val_metric DESC LIMIT 1",
-    ).get(runId) as { val_metric: number } | undefined;
+    const bestRow = await prisma.experiment.findFirst({
+      where: { run_id: runId, status: { in: ["SUCCESS", "AUDITED"] } },
+      orderBy: { val_metric: "desc" },
+      select: { val_metric: true },
+    });
 
     // Determine the max round number observed
-    const maxRoundRow = db.prepare(
-      "SELECT MAX(round_number) AS max_round FROM experiments WHERE run_id = ?",
-    ).get(runId) as { max_round: number } | undefined;
+    const maxRoundRow = await prisma.experiment.aggregate({
+      where: { run_id: runId },
+      _max: { round_number: true },
+    });
 
-    const currentRound = maxRoundRow?.max_round ?? 0;
+    const currentRound = maxRoundRow._max.round_number ?? 0;
 
-    // Determine current phase based on the experiments we have
-    const agentPhases = db.prepare(`
-      SELECT DISTINCT agent_name FROM experiments WHERE run_id = ? AND round_number = ?
-    `).all(runId, currentRound) as Array<{ agent_name: string }>;
+    const currentPhase = await getCurrentPhase(runId);
 
-    const agentNames = new Set(agentPhases.map((a) => a.agent_name));
-    let currentPhase = "idle";
-    if (agentNames.has("ml-critic")) currentPhase = "audit";
-    else if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) currentPhase = "modeling";
-    else if (agentNames.has("feature-engineer")) currentPhase = "feature_engineering";
-    else if (agentNames.has("data-analyst")) currentPhase = "data_analysis";
-    else if (agentNames.size > 0) currentPhase = "complete";
-
-    // Agent statuses for this round
-    function agentInRound(name: string): string {
-      const row = db.prepare(
-        "SELECT status FROM experiments WHERE run_id = ? AND round_number = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
-      ).get(runId, currentRound, name) as { status: string } | undefined;
-      if (!row) return "idle";
-      const s = row.status;
-      if (s === "SUCCESS" || s === "AUDITED") return "completed";
-      if (s === "FAILED" || s === "OVERFITTED") return "failed";
-      if (s === "PENDING") return "running";
-      return "idle";
-    }
+    const phaseStats = {
+      dataAnalyst: (await getAgentUnifiedStatus(runId, "data-analyst", currentRound)).status,
+      featureEngineer: (await getAgentUnifiedStatus(runId, "feature-engineer", currentRound)).status,
+      modelerClassic: (await getAgentUnifiedStatus(runId, "modeler-classic", currentRound)).status,
+      modelerAdvanced: (await getAgentUnifiedStatus(runId, "modeler-advanced", currentRound)).status,
+      mlCritic: (await getAgentUnifiedStatus(runId, "ml-critic", currentRound)).status,
+    };
 
     jsonResponse(res, {
       runId,
@@ -986,13 +957,7 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
       maxRounds: 5,
       startedAt: run?.created_at ?? null,
       updatedAt: run?.updated_at ?? null,
-      phaseStats: {
-        dataAnalyst: agentInRound("data-analyst"),
-        featureEngineer: agentInRound("feature-engineer"),
-        modelerClassic: agentInRound("modeler-classic"),
-        modelerAdvanced: agentInRound("modeler-advanced"),
-        mlCritic: agentInRound("ml-critic"),
-      },
+      phaseStats,
       quickStats: {
         totalExperiments: stats.total,
         bestCvMean: bestRow?.val_metric ?? null,
@@ -1000,36 +965,23 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
         tokensSpent: run?.tokens_spent ?? 0,
       },
     });
-  } catch (err) {
-    errorResponse(res, `Failed to get pipeline status: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get pipeline status: ${(err as Error).message}`));
 }
 
 function handleAgents(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const db = getDb();
-    const runId = findActivePipelineRunId();
+  (async () => {
+    const runId = await findActivePipelineRunId();
 
-    const agents = Object.entries(AGENT_INFO_REGISTRY).map(([name, info]) => {
-      let currentStatus = "idle";
-      if (runId) {
-        const row = db.prepare(
-          "SELECT status FROM experiments WHERE run_id = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
-        ).get(runId, name) as { status: string } | undefined;
-        if (row) {
-          const s = row.status;
-          if (s === "SUCCESS" || s === "AUDITED") currentStatus = "completed";
-          else if (s === "FAILED" || s === "OVERFITTED") currentStatus = "failed";
-          else if (s === "PENDING") currentStatus = "running";
-        }
-      }
-      return { ...info, currentStatus };
-    });
+    const agents = await Promise.all(
+      Object.entries(AGENT_INFO_REGISTRY).map(async ([name, info]) => {
+        if (!runId) return { ...info, currentStatus: "idle" };
+        const unified = await getAgentUnifiedStatus(runId, name, 0);
+        return { ...info, currentStatus: unified.status };
+      }),
+    );
 
     jsonResponse(res, agents);
-  } catch (err) {
-    errorResponse(res, `Failed to list agents: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to list agents: ${(err as Error).message}`));
 }
 
 function handleAgentDetail(
@@ -1037,54 +989,32 @@ function handleAgentDetail(
   res: http.ServerResponse,
   agentName: string,
 ): void {
-  try {
+  (async () => {
     const info = AGENT_INFO_REGISTRY[agentName];
     if (!info) {
       errorResponse(res, `Agent not found: ${agentName}`, 404);
       return;
     }
 
-    const db = getDb();
-    const runId = findActivePipelineRunId();
+    const runId = await findActivePipelineRunId();
 
     const rounds: Array<{ roundNumber: number; status: string; cvMean: number | null; modelType: string | null }> = [];
     let totalTrials = 0;
     let lastError: string | null = null;
 
     if (runId) {
-      const rows = db.prepare(`
-        SELECT round_number, status, val_metric, model_type, error_message
-        FROM experiments WHERE run_id = ? AND agent_name = ?
-        ORDER BY round_number ASC
-      `).all(runId, agentName) as Array<{
-        round_number: number; status: string; val_metric: number;
-        model_type: string; error_message: string | null;
-      }>;
+      const roundSummaries = await getAgentRoundSummaries(runId, agentName);
+      totalTrials = roundSummaries.length;
+      rounds.push(...roundSummaries);
 
-      totalTrials = rows.length;
-
-      for (const row of rows) {
-        rounds.push({
-          roundNumber: row.round_number,
-          status: row.status,
-          cvMean: row.val_metric,
-          modelType: row.model_type,
-        });
-      }
-
-      const errRow = db.prepare(
-        "SELECT error_message FROM experiments WHERE run_id = ? AND agent_name = ? AND error_message IS NOT NULL ORDER BY experiment_id DESC LIMIT 1",
-      ).get(runId, agentName) as { error_message: string } | undefined;
-      lastError = errRow?.error_message ?? null;
+      const unified = await getAgentUnifiedStatus(runId, agentName, 0);
+      lastError = unified.errorMessage;
     }
 
-    // Determine current status
-    let currentStatus = "idle";
-    if (rounds.length > 0) {
-      const last = rounds[rounds.length - 1];
-      if (last.status === "SUCCESS" || last.status === "AUDITED") currentStatus = "completed";
-      else if (last.status === "FAILED" || last.status === "OVERFITTED") currentStatus = "failed";
-      else if (last.status === "PENDING") currentStatus = "running";
+    // Determine current status using the unified helper
+    let currentStatus: string = "idle";
+    if (runId) {
+      currentStatus = (await getAgentUnifiedStatus(runId, agentName, 0)).status;
     }
 
     const result = {
@@ -1097,9 +1027,7 @@ function handleAgentDetail(
     };
 
     jsonResponse(res, result);
-  } catch (err) {
-    errorResponse(res, `Failed to get agent detail: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get agent detail: ${(err as Error).message}`));
 }
 
 function handleAgentLogs(
@@ -1107,7 +1035,9 @@ function handleAgentLogs(
   res: http.ServerResponse,
   agentName: string,
 ): void {
-  try {
+  (async () => {
+    const prisma = getPrisma();
+
     const info = AGENT_INFO_REGISTRY[agentName];
     if (!info) {
       errorResponse(res, `Agent not found: ${agentName}`, 404);
@@ -1118,8 +1048,7 @@ function handleAgentLogs(
     const offset = parseInt(url.searchParams.get("offset") ?? "0", 10);
     const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10), 200);
 
-    const db = getDb();
-    const runId = findActivePipelineRunId();
+    const runId = await findActivePipelineRunId();
 
     if (!runId) {
       jsonResponse(res, { agentName, entries: [], total: 0, offset, limit });
@@ -1127,22 +1056,21 @@ function handleAgentLogs(
     }
 
     // Read experiments for this agent as log entries
-    const countRow = db.prepare(
-      "SELECT COUNT(*) AS cnt FROM experiments WHERE run_id = ? AND agent_name = ?",
-    ).get(runId, agentName) as { cnt: number };
+    const total = await prisma.experiment.count({
+      where: { run_id: runId, agent_name: agentName },
+    });
 
-    const rows = db.prepare(`
-      SELECT experiment_id, round_number, status, val_metric, error_message, created_at
-      FROM experiments WHERE run_id = ? AND agent_name = ?
-      ORDER BY experiment_id DESC LIMIT ? OFFSET ?
-    `).all(runId, agentName, limit, offset) as Array<{
-      experiment_id: number; round_number: number; status: string;
-      val_metric: number; error_message: string | null; created_at: string;
-    }>;
+    const rows = await prisma.experiment.findMany({
+      where: { run_id: runId, agent_name: agentName },
+      orderBy: { experiment_id: "desc" },
+      skip: offset,
+      take: limit,
+      select: { experiment_id: true, round_number: true, status: true, val_metric: true, error_message: true, created_at: true },
+    });
 
     const entries = rows.flatMap((row) => {
       const logs: Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }> = [];
-      const ts = row.created_at;
+      const ts = row.created_at.toISOString();
       if (row.status === "SUCCESS" || row.status === "AUDITED") {
         logs.push({ timestamp: ts, level: "info", message: `[Round ${row.round_number}] Trial completed — val_metric: ${row.val_metric.toFixed(4)}, status: ${row.status}` });
       } else if (row.status === "FAILED" || row.status === "OVERFITTED") {
@@ -1156,17 +1084,17 @@ function handleAgentLogs(
     jsonResponse(res, {
       agentName,
       entries,
-      total: countRow.cnt,
+      total,
       offset,
       limit,
     });
-  } catch (err) {
-    errorResponse(res, `Failed to get agent logs: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get agent logs: ${(err as Error).message}`));
 }
 
 function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
+    const prisma = getPrisma();
+
     const url = new URL(req.url ?? "/", "http://localhost");
     const agentName = url.searchParams.get("agentName")?.trim();
     const roundStr = url.searchParams.get("roundNumber");
@@ -1174,58 +1102,61 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
     const sortBy = url.searchParams.get("sortBy") ?? "cvMean";
     const sortDir = url.searchParams.get("sortDir") ?? "desc";
 
-    const db = getDb();
-    const runId = findActivePipelineRunId();
+    const runId = await findActivePipelineRunId();
 
     if (!runId) {
       jsonResponse(res, { entries: [], total: 0, bestCvMean: null, filters: {} });
       return;
     }
 
-    let where = "WHERE run_id = ?";
-    const params: (string | number)[] = [runId];
-
-    if (agentName) {
-      where += " AND agent_name = ?";
-      params.push(agentName);
-    }
-    if (roundStr) {
-      where += " AND round_number = ?";
-      params.push(Number(roundStr));
-    }
-    if (statusFilter) {
-      where += " AND status = ?";
-      params.push(statusFilter);
-    }
+    // Build where clause
+    const whereClause: Record<string, unknown> = { run_id: runId };
+    if (agentName) whereClause.agent_name = agentName;
+    if (roundStr) whereClause.round_number = Number(roundStr);
+    if (statusFilter) whereClause.status = statusFilter;
 
     // Map sortBy field
-    const sortCol = sortBy === "trainMean" ? "train_metric" :
-                    sortBy === "trainValGap" ? "(train_metric - val_metric)" :
-                    sortBy === "roundNumber" ? "round_number" :
-                    "val_metric";
-    const dir = sortDir === "asc" ? "ASC" : "DESC";
+    const sortOrderBy: Record<string, string> = {};
+    if (sortBy === "trainMean") {
+      sortOrderBy.train_metric = sortDir;
+    } else if (sortBy === "roundNumber") {
+      sortOrderBy.round_number = sortDir;
+    } else {
+      // cvMean is default, and trainValGap requires calculation
+      sortOrderBy.val_metric = sortDir;
+    }
 
-    const countRow = db.prepare(`SELECT COUNT(*) AS cnt FROM experiments ${where}`).get(...params) as { cnt: number };
+    const total = await prisma.experiment.count({ where: whereClause });
 
-    const rows = db.prepare(`
-      SELECT * FROM experiments ${where} ORDER BY ${sortCol} ${dir} LIMIT 100
-    `).all(...params) as Array<Record<string, unknown>>;
+    const rows = await prisma.experiment.findMany({
+      where: whereClause,
+      orderBy: sortOrderBy,
+      take: 100,
+    });
 
-    const bestRow = db.prepare(
-      "SELECT val_metric FROM experiments WHERE run_id = ? AND status IN ('SUCCESS','AUDITED') ORDER BY val_metric DESC LIMIT 1",
-    ).get(runId) as { val_metric: number } | undefined;
+    const bestRow = await prisma.experiment.findFirst({
+      where: { run_id: runId, status: { in: ["SUCCESS", "AUDITED"] } },
+      orderBy: { val_metric: "desc" },
+      select: { val_metric: true },
+    });
 
-    const entries = rows.map(mapExperimentRow);
+    // Handle trainValGap sorting in JS if needed
+    let entries = rows.map(mapExperimentRow);
+    if (sortBy === "trainValGap") {
+      entries.sort((a, b) => {
+        const gapA = a.trainValGap;
+        const gapB = b.trainValGap;
+        return sortDir === "asc" ? gapA - gapB : gapB - gapA;
+      });
+    }
 
     jsonResponse(res, {
       entries,
-      total: countRow.cnt,
+      total,
       bestCvMean: bestRow?.val_metric ?? null,
       filters: { agentName: agentName || undefined, roundNumber: roundStr ? Number(roundStr) : undefined, status: statusFilter || undefined },
     });
-  } catch (err) {
-    errorResponse(res, `Failed to get leaderboard: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get leaderboard: ${(err as Error).message}`));
 }
 
 function safeParseJson(raw: string): Record<string, unknown> {
@@ -1287,28 +1218,32 @@ function handleLeaderboardEntry(
   res: http.ServerResponse,
   id: string,
 ): void {
-  try {
-    const db = getDb();
+  (async () => {
+    const prisma = getPrisma();
+
     const experimentId = Number(id);
     if (!Number.isFinite(experimentId)) {
       errorResponse(res, `Invalid experiment id: ${id}`, 400);
       return;
     }
 
-    const row = db.prepare("SELECT * FROM experiments WHERE experiment_id = ?").get(experimentId) as Record<string, unknown> | undefined;
+    const row = await prisma.experiment.findUnique({
+      where: { experiment_id: experimentId },
+    });
+
     if (!row) {
       errorResponse(res, `Experiment not found: ${id}`, 404);
       return;
     }
 
-    jsonResponse(res, mapExperimentRow(row));
-  } catch (err) {
-    errorResponse(res, `Failed to get leaderboard entry: ${(err as Error).message}`);
-  }
+    jsonResponse(res, mapExperimentRow(row as Record<string, unknown>));
+  })().catch((err) => errorResponse(res, `Failed to get leaderboard entry: ${(err as Error).message}`));
 }
 
 function handleLeaderboardCompare(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
+    const prisma = getPrisma();
+
     const url = new URL(req.url ?? "/", "http://localhost");
     const ids = url.searchParams.getAll("id");
 
@@ -1317,22 +1252,19 @@ function handleLeaderboardCompare(req: http.IncomingMessage, res: http.ServerRes
       return;
     }
 
-    const db = getDb();
-    const placeholders = ids.map(() => "?").join(",");
-    const rows = db.prepare(
-      `SELECT * FROM experiments WHERE experiment_id IN (${placeholders})`,
-    ).all(...ids.map(Number)) as Array<Record<string, unknown>>;
+    const experimentIds = ids.map(Number);
+    const rows = await prisma.experiment.findMany({
+      where: { experiment_id: { in: experimentIds } },
+    });
 
-    const entries = rows.map(mapExperimentRow);
+    const entries = rows.map((r) => mapExperimentRow(r as Record<string, unknown>));
 
     jsonResponse(res, { entries });
-  } catch (err) {
-    errorResponse(res, `Failed to compare leaderboard entries: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to compare leaderboard entries: ${(err as Error).message}`));
 }
 
 function handleLeaderboardAgentHistory(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const agentName = url.searchParams.get("agent")?.trim();
     if (!agentName) {
@@ -1340,9 +1272,8 @@ function handleLeaderboardAgentHistory(req: http.IncomingMessage, res: http.Serv
       return;
     }
 
-    const db = getDb();
-    const failed = getFailedConfigsForAgent(db, agentName, 5);
-    const succeeded = getSucceededConfigsForAgent(db, agentName, 3);
+    const failed = await getFailedConfigsForAgent(agentName, 5);
+    const succeeded = await getSucceededConfigsForAgent(agentName, 3);
 
     jsonResponse(res, {
       agent: agentName,
@@ -1351,23 +1282,23 @@ function handleLeaderboardAgentHistory(req: http.IncomingMessage, res: http.Serv
       failed,
       succeeded,
     });
-  } catch (err) {
-    errorResponse(res, `Failed to get agent history: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get agent history: ${(err as Error).message}`));
 }
 
 function handleLeaderboardCurrentBest(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+    let runId = url.searchParams.get("runId")?.trim() ?? null;
+    if (!runId) {
+      runId = await findActivePipelineRunId();
+    }
 
     if (!runId) {
       errorResponse(res, "Missing required query parameter: runId (no active pipeline)", 400);
       return;
     }
 
-    const db = getDb();
-    const row = getCurrentBestForRun(db, runId);
+    const row = await getCurrentBestForRun(runId);
 
     if (!row) {
       jsonResponse(res, { experiment: null });
@@ -1382,79 +1313,91 @@ function handleLeaderboardCurrentBest(req: http.IncomingMessage, res: http.Serve
         agent_name: row.agent_name,
       },
     });
-  } catch (err) {
-    errorResponse(res, `Failed to get current best: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get current best: ${(err as Error).message}`));
 }
 
 function handleRounds(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
+    const prisma = getPrisma();
+
     const url = new URL(req.url ?? "/", "http://localhost");
-    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+    let runId = url.searchParams.get("runId")?.trim() ?? null;
+    if (!runId) {
+      runId = await findActivePipelineRunId();
+    }
 
     if (!runId) {
       jsonResponse(res, []);
       return;
     }
 
-    const db = getDb();
-    const roundRows = db.prepare(`
-      SELECT DISTINCT round_number, MIN(created_at) AS started_at, MAX(created_at) AS completed_at
-      FROM experiments WHERE run_id = ?
-      GROUP BY round_number ORDER BY round_number ASC
-    `).all(runId) as Array<{ round_number: number; started_at: string; completed_at: string }>;
-
-    const rounds = roundRows.map((r) => {
-      const stats = db.prepare(`
-        SELECT
-          COUNT(*) AS total,
-          SUM(CASE WHEN status IN ('SUCCESS','AUDITED') THEN 1 ELSE 0 END) AS registered,
-          SUM(CASE WHEN status IN ('FAILED','OVERFITTED') THEN 1 ELSE 0 END) AS rejected
-        FROM experiments WHERE run_id = ? AND round_number = ?
-      `).get(runId, r.round_number) as { total: number; registered: number; rejected: number };
-
-      return {
-        runId,
-        roundNumber: r.round_number,
-        status: stats.total > 0 ? "completed" : "pending",
-        experimentsRegistered: stats.registered,
-        experimentsRejected: stats.rejected,
-        startedAt: r.started_at,
-        completedAt: r.completed_at,
-      };
+    const roundRows = await prisma.experiment.groupBy({
+      by: ["round_number"],
+      where: { run_id: runId },
+      _min: { created_at: true },
+      _max: { created_at: true },
+      orderBy: { round_number: "asc" },
     });
 
+    const rounds = await Promise.all(
+      roundRows.map(async (r) => {
+        const stats = await prisma.experiment.aggregate({
+          where: { run_id: runId, round_number: r.round_number },
+          _count: true,
+        });
+
+        const successCount = await prisma.experiment.count({
+          where: { run_id: runId, round_number: r.round_number, status: { in: ["SUCCESS", "AUDITED"] } },
+        });
+
+        const rejectedCount = await prisma.experiment.count({
+          where: { run_id: runId, round_number: r.round_number, status: { in: ["FAILED", "OVERFITTED"] } },
+        });
+
+        return {
+          runId,
+          roundNumber: r.round_number,
+          status: stats._count > 0 ? "completed" : "pending",
+          experimentsRegistered: successCount,
+          experimentsRejected: rejectedCount,
+          startedAt: r._min.created_at?.toISOString(),
+          completedAt: r._max.created_at?.toISOString(),
+        };
+      }),
+    );
+
     jsonResponse(res, rounds);
-  } catch (err) {
-    errorResponse(res, `Failed to list rounds: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to list rounds: ${(err as Error).message}`));
 }
 
 function handleCrossFindings(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
+    const prisma = getPrisma();
+
     const url = new URL(req.url ?? "/", "http://localhost");
-    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+    let runId = url.searchParams.get("runId")?.trim() ?? null;
+    if (!runId) {
+      runId = await findActivePipelineRunId();
+    }
 
     if (!runId) {
       jsonResponse(res, []);
       return;
     }
 
-    const db = getDb();
     // Cross-findings are experiments where both modelers ran and produced results
-    const rows = db.prepare(`
-      SELECT e.experiment_id, e.round_number, e.agent_name, e.model_type, e.val_metric, e.created_at
-      FROM experiments e
-      WHERE e.run_id = ? AND e.agent_name IN ('modeler-classic', 'modeler-advanced')
-        AND e.status IN ('SUCCESS','AUDITED')
-      ORDER BY e.round_number ASC, e.agent_name ASC
-    `).all(runId) as Array<{
-      experiment_id: number; round_number: number; agent_name: string;
-      model_type: string; val_metric: number; created_at: string;
-    }>;
+    const rows = await prisma.experiment.findMany({
+      where: {
+        run_id: runId,
+        agent_name: { in: ["modeler-classic", "modeler-advanced"] },
+        status: { in: ["SUCCESS", "AUDITED"] },
+      },
+      orderBy: [{ round_number: "asc" }, { agent_name: "asc" }],
+      select: { experiment_id: true, round_number: true, agent_name: true, model_type: true, val_metric: true, created_at: true },
+    });
 
     // Group by round to find cross-findings
-    const byRound = new Map<number, Array<typeof rows[number]>>();
+    const byRound = new Map<number, typeof rows>();
     for (const row of rows) {
       const list = byRound.get(row.round_number) ?? [];
       list.push(row);
@@ -1467,24 +1410,22 @@ function handleCrossFindings(req: http.IncomingMessage, res: http.ServerResponse
         const classic = entries.find((e) => e.agent_name === "modeler-classic");
         const advanced = entries.find((e) => e.agent_name === "modeler-advanced");
         if (classic && advanced) {
-          const diff = Math.abs(Number(classic.val_metric) - Number(advanced.val_metric));
+          const diff = Math.abs(classic.val_metric - advanced.val_metric);
           findings.push({
             id: `cross_${round}`,
             runId,
             roundNumber: round,
             fromAgent: "modeler-classic",
             toAgent: "modeler-advanced",
-            content: `Round ${round}: Classic (${classic.model_type}) cvMean=${Number(classic.val_metric).toFixed(4)} vs Advanced (${advanced.model_type}) cvMean=${Number(advanced.val_metric).toFixed(4)} (diff=${diff.toFixed(4)})`,
-            createdAt: advanced.created_at,
+            content: `Round ${round}: Classic (${classic.model_type}) cvMean=${classic.val_metric.toFixed(4)} vs Advanced (${advanced.model_type}) cvMean=${advanced.val_metric.toFixed(4)} (diff=${diff.toFixed(4)})`,
+            createdAt: advanced.created_at.toISOString(),
           });
         }
       }
     }
 
     jsonResponse(res, findings);
-  } catch (err) {
-    errorResponse(res, `Failed to get cross-findings: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to get cross-findings: ${(err as Error).message}`));
 }
 
 // ── Front-specs handlers: promote/reject, approvals, checklist, trace ─
@@ -1540,6 +1481,8 @@ async function handleSpecApprove(
   specId: string,
 ): Promise<void> {
   try {
+    const prisma = getPrisma();
+
     const parts = parseSpecId(specId);
     if (!parts) {
       errorResponse(res, `Invalid spec id (expected "<runId>:<phase>"): ${specId}`, 400);
@@ -1547,23 +1490,34 @@ async function handleSpecApprove(
     }
     const body = await readJsonBody<{ approvedBy?: string }>(req);
     const approvedBy = body?.approvedBy?.trim() ?? null;
+    const now = new Date();
 
-    const db = getDb();
-    db.prepare(
-      `INSERT INTO spec_approvals (spec_id, run_id, phase, status, approved_by, approved_at, rejected_at, rejected_by, reason, updated_at)
-         VALUES (?, ?, ?, 'approved', ?, datetime('now'), NULL, NULL, NULL, datetime('now'))
-         ON CONFLICT(spec_id) DO UPDATE SET
-           status='approved',
-           approved_by=excluded.approved_by,
-           approved_at=datetime('now'),
-           rejected_at=NULL,
-           rejected_by=NULL,
-           reason=NULL,
-           updated_at=datetime('now')`,
-    ).run(specId, parts.runId, parts.phase, approvedBy);
+    const row = await prisma.specApproval.upsert({
+      where: { spec_id: specId },
+      create: {
+        spec_id: specId,
+        run_id: parts.runId,
+        phase: parts.phase,
+        status: "approved",
+        approved_by: approvedBy,
+        approved_at: now,
+        rejected_at: null,
+        rejected_by: null,
+        reason: null,
+        updated_at: now,
+      },
+      update: {
+        status: "approved",
+        approved_by: approvedBy,
+        approved_at: now,
+        rejected_at: null,
+        rejected_by: null,
+        reason: null,
+        updated_at: now,
+      },
+    });
 
-    const row = db.prepare("SELECT * FROM spec_approvals WHERE spec_id = ?").get(specId) as Record<string, unknown>;
-    jsonResponse(res, rowToSpecApproval(row));
+    jsonResponse(res, rowToSpecApproval(row as Record<string, unknown>));
   } catch (err) {
     errorResponse(res, `Failed to approve spec: ${(err as Error).message}`);
   }
@@ -1575,6 +1529,8 @@ async function handleSpecReject(
   specId: string,
 ): Promise<void> {
   try {
+    const prisma = getPrisma();
+
     const parts = parseSpecId(specId);
     if (!parts) {
       errorResponse(res, `Invalid spec id (expected "<runId>:<phase>"): ${specId}`, 400);
@@ -1583,23 +1539,34 @@ async function handleSpecReject(
     const body = await readJsonBody<{ reason?: string; rejectedBy?: string }>(req);
     const reason = body?.reason?.trim() ?? null;
     const rejectedBy = body?.rejectedBy?.trim() ?? null;
+    const now = new Date();
 
-    const db = getDb();
-    db.prepare(
-      `INSERT INTO spec_approvals (spec_id, run_id, phase, status, reason, rejected_by, rejected_at, approved_by, approved_at, updated_at)
-         VALUES (?, ?, ?, 'rejected', ?, ?, datetime('now'), NULL, NULL, datetime('now'))
-         ON CONFLICT(spec_id) DO UPDATE SET
-           status='rejected',
-           reason=excluded.reason,
-           rejected_by=excluded.rejected_by,
-           rejected_at=datetime('now'),
-           approved_by=NULL,
-           approved_at=NULL,
-           updated_at=datetime('now')`,
-    ).run(specId, parts.runId, parts.phase, reason, rejectedBy);
+    const row = await prisma.specApproval.upsert({
+      where: { spec_id: specId },
+      create: {
+        spec_id: specId,
+        run_id: parts.runId,
+        phase: parts.phase,
+        status: "rejected",
+        reason,
+        rejected_by: rejectedBy,
+        rejected_at: now,
+        approved_by: null,
+        approved_at: null,
+        updated_at: now,
+      },
+      update: {
+        status: "rejected",
+        reason,
+        rejected_by: rejectedBy,
+        rejected_at: now,
+        approved_by: null,
+        approved_at: null,
+        updated_at: now,
+      },
+    });
 
-    const row = db.prepare("SELECT * FROM spec_approvals WHERE spec_id = ?").get(specId) as Record<string, unknown>;
-    jsonResponse(res, rowToSpecApproval(row));
+    jsonResponse(res, rowToSpecApproval(row as Record<string, unknown>));
   } catch (err) {
     errorResponse(res, `Failed to reject spec: ${(err as Error).message}`);
   }
@@ -1611,11 +1578,13 @@ function handleChecklistGet(
   runId: string,
   phase: string,
 ): void {
-  try {
-    const db = getDb();
-    const row = db
-      .prepare("SELECT items_json, updated_at FROM checklist_state WHERE run_id = ? AND phase = ?")
-      .get(runId, phase) as { items_json: string; updated_at: string } | undefined;
+  (async () => {
+    const prisma = getPrisma();
+
+    const row = await prisma.checklistState.findUnique({
+      where: { run_id_phase: { run_id: runId, phase } },
+      select: { items_json: true, updated_at: true },
+    });
 
     if (!row) {
       jsonResponse(res, { runId, phase, items: [], updatedAt: new Date().toISOString() });
@@ -1628,10 +1597,8 @@ function handleChecklistGet(
     } catch {
       items = [];
     }
-    jsonResponse(res, { runId, phase, items, updatedAt: row.updated_at });
-  } catch (err) {
-    errorResponse(res, `Failed to read checklist: ${(err as Error).message}`);
-  }
+    jsonResponse(res, { runId, phase, items, updatedAt: row.updated_at.toISOString() });
+  })().catch((err) => errorResponse(res, `Failed to read checklist: ${(err as Error).message}`));
 }
 
 async function handleChecklistPut(
@@ -1641,23 +1608,29 @@ async function handleChecklistPut(
   phase: string,
 ): Promise<void> {
   try {
+    const prisma = getPrisma();
+
     const body = await readJsonBody<{ items?: unknown }>(req);
     const items = Array.isArray(body?.items) ? body!.items : [];
     const json = JSON.stringify(items);
+    const now = new Date();
 
-    const db = getDb();
-    db.prepare(
-      `INSERT INTO checklist_state (run_id, phase, items_json, updated_at)
-         VALUES (?, ?, ?, datetime('now'))
-         ON CONFLICT(run_id, phase) DO UPDATE SET
-           items_json = excluded.items_json,
-           updated_at = datetime('now')`,
-    ).run(runId, phase, json);
+    const row = await prisma.checklistState.upsert({
+      where: { run_id_phase: { run_id: runId, phase } },
+      create: {
+        run_id: runId,
+        phase,
+        items_json: json,
+        updated_at: now,
+      },
+      update: {
+        items_json: json,
+        updated_at: now,
+      },
+      select: { updated_at: true },
+    });
 
-    const row = db
-      .prepare("SELECT updated_at FROM checklist_state WHERE run_id = ? AND phase = ?")
-      .get(runId, phase) as { updated_at: string };
-    jsonResponse(res, { runId, phase, items, updatedAt: row.updated_at });
+    jsonResponse(res, { runId, phase, items, updatedAt: row.updated_at.toISOString() });
   } catch (err) {
     errorResponse(res, `Failed to update checklist: ${(err as Error).message}`);
   }
@@ -1669,39 +1642,34 @@ function handleTrace(
   agentName: string,
   roundNumber: number,
 ): void {
-  try {
+  (async () => {
+    const prisma = getPrisma();
+
     const url = new URL(req.url ?? "/", "http://localhost");
-    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+    let runId = url.searchParams.get("runId")?.trim() ?? null;
+    if (!runId) {
+      runId = await findActivePipelineRunId();
+    }
     if (!runId) {
       jsonResponse(res, []);
       return;
     }
 
-    const db = getDb();
     // Derive trace entries from experiments table for this agent + round.
     // Each experiment row becomes one TraceEntry; failures escalate to 'error',
     // OVERFITTED to 'warn', others 'info'.
-    const rows = db
-      .prepare(
-        `SELECT experiment_id, model_type, status, error_message, created_at
-           FROM experiments
-           WHERE run_id = ? AND agent_name = ? AND round_number = ?
-           ORDER BY created_at ASC, experiment_id ASC`,
-      )
-      .all(runId, agentName, roundNumber) as Array<{
-      experiment_id: number;
-      model_type: string;
-      status: string;
-      error_message: string | null;
-      created_at: string;
-    }>;
+    const rows = await prisma.experiment.findMany({
+      where: { run_id: runId, agent_name: agentName, round_number: roundNumber },
+      orderBy: [{ created_at: "asc" }, { experiment_id: "asc" }],
+      select: { experiment_id: true, model_type: true, status: true, error_message: true, created_at: true },
+    });
 
     const entries = rows.map((r) => {
       let level: "info" | "warn" | "error" = "info";
       if (r.status === "FAILED") level = "error";
       else if (r.status === "OVERFITTED") level = "warn";
       return {
-        timestamp: r.created_at,
+        timestamp: r.created_at.toISOString(),
         event: `${r.status} · ${r.model_type}`,
         detail: r.error_message ?? undefined,
         level,
@@ -1709,9 +1677,7 @@ function handleTrace(
     });
 
     jsonResponse(res, entries);
-  } catch (err) {
-    errorResponse(res, `Failed to read trace: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to read trace: ${(err as Error).message}`));
 }
 
 const PIPELINE_PHASE_LABELS: Array<{ id: string; label: string }> = [
@@ -1739,15 +1705,15 @@ function derivePhases(currentPhase: string): Array<{
   });
 }
 
-function derivePendingDecisions(runId: string): Array<{
+async function derivePendingDecisions(runId: string): Promise<Array<{
   id: string;
   type: "spec_approval" | "model_rejected" | "model_promoted" | "overfitting_warning";
   title: string;
   description: string;
   actions: Array<{ id: string; label: string; primary?: boolean }>;
   createdAt: string;
-}> {
-  const db = getDb();
+}>> {
+  const prisma = getPrisma();
   const decisions: Array<{
     id: string;
     type: "spec_approval" | "model_rejected" | "model_promoted" | "overfitting_warning";
@@ -1758,9 +1724,11 @@ function derivePendingDecisions(runId: string): Array<{
   }> = [];
 
   // Pending spec approvals for this run
-  const pendingSpecs = db
-    .prepare("SELECT spec_id, phase, updated_at FROM spec_approvals WHERE run_id = ? AND status = 'pending'")
-    .all(runId) as Array<{ spec_id: string; phase: string; updated_at: string }>;
+  const pendingSpecs = await prisma.specApproval.findMany({
+    where: { run_id: runId, status: "pending" },
+    select: { spec_id: true, phase: true, updated_at: true },
+  });
+
   for (const s of pendingSpecs) {
     decisions.push({
       id: `spec:${s.spec_id}`,
@@ -1771,7 +1739,7 @@ function derivePendingDecisions(runId: string): Array<{
         { id: "approve", label: "Approve", primary: true },
         { id: "reject", label: "Reject" },
       ],
-      createdAt: s.updated_at,
+      createdAt: s.updated_at.toISOString(),
     });
   }
 
@@ -1781,23 +1749,25 @@ function derivePendingDecisions(runId: string): Array<{
 }
 
 function handlePendingDecisions(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const runId = url.searchParams.get("runId")?.trim() ?? findActivePipelineRunId();
+    let runId = url.searchParams.get("runId")?.trim() ?? null;
+    if (!runId) {
+      runId = await findActivePipelineRunId();
+    }
     if (!runId) {
       jsonResponse(res, []);
       return;
     }
-    jsonResponse(res, derivePendingDecisions(runId));
-  } catch (err) {
-    errorResponse(res, `Failed to derive pending decisions: ${(err as Error).message}`);
-  }
+    jsonResponse(res, await derivePendingDecisions(runId));
+  })().catch((err) => errorResponse(res, `Failed to derive pending decisions: ${(err as Error).message}`));
 }
 
 function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
-    const db = getDb();
-    const runId = findActivePipelineRunId();
+  (async () => {
+    const prisma = getPrisma();
+
+    const runId = await findActivePipelineRunId();
     if (!runId) {
       jsonResponse(res, {
         run: {
@@ -1825,75 +1795,64 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
       return;
     }
 
-    const run = db
-      .prepare("SELECT id, status, created_at, updated_at, tokens_spent FROM runs WHERE id = ?")
-      .get(runId) as { id: string; status: string; created_at: string; updated_at: string; tokens_spent: number } | undefined;
-
-    const maxRoundRow = db
-      .prepare("SELECT MAX(round_number) AS max_round FROM experiments WHERE run_id = ?")
-      .get(runId) as { max_round: number | null } | undefined;
-    const currentRound = maxRoundRow?.max_round ?? 0;
-
-    const agentRows = db
-      .prepare("SELECT DISTINCT agent_name FROM experiments WHERE run_id = ? AND round_number = ?")
-      .all(runId, currentRound) as Array<{ agent_name: string }>;
-    const agentNames = new Set(agentRows.map((a) => a.agent_name));
-    let currentPhase = "idle";
-    if (agentNames.has("ml-critic")) currentPhase = "audit";
-    else if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) currentPhase = "modeling";
-    else if (agentNames.has("feature-engineer")) currentPhase = "feature_engineering";
-    else if (agentNames.has("data-analyst")) currentPhase = "data_analysis";
-    else if (agentNames.size > 0) currentPhase = "complete";
-
-    const stats = getExperimentStats(db, runId);
-    const bestRow = db
-      .prepare(
-        `SELECT * FROM experiments
-           WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
-           ORDER BY val_metric DESC LIMIT 1`,
-      )
-      .get(runId) as Record<string, unknown> | undefined;
-    const bestModel = bestRow ? mapExperimentRow(bestRow) : null;
-
-    const trendRows = db
-      .prepare(
-        `SELECT val_metric FROM experiments
-           WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
-           ORDER BY created_at ASC LIMIT 50`,
-      )
-      .all(runId) as Array<{ val_metric: number }>;
-    const bestModelTrend = trendRows.map((r) => Number(r.val_metric));
-
-    const agentStrip = Object.values(AGENT_INFO_REGISTRY).map((info) => {
-      const trialsRow = db
-        .prepare("SELECT COUNT(*) AS c FROM experiments WHERE run_id = ? AND agent_name = ?")
-        .get(runId, info.name) as { c: number };
-      const bestForAgent = db
-        .prepare(
-          `SELECT val_metric FROM experiments
-             WHERE run_id = ? AND agent_name = ? AND status IN ('SUCCESS','AUDITED')
-             ORDER BY val_metric DESC LIMIT 1`,
-        )
-        .get(runId, info.name) as { val_metric: number } | undefined;
-      const latest = db
-        .prepare(
-          "SELECT status FROM experiments WHERE run_id = ? AND agent_name = ? ORDER BY experiment_id DESC LIMIT 1",
-        )
-        .get(runId, info.name) as { status: string } | undefined;
-      let status: "idle" | "running" | "completed" | "failed" | "timed_out" = "idle";
-      if (latest) {
-        if (latest.status === "SUCCESS" || latest.status === "AUDITED") status = "completed";
-        else if (latest.status === "FAILED" || latest.status === "OVERFITTED") status = "failed";
-        else if (latest.status === "PENDING") status = "running";
-      }
-      return {
-        name: info.name,
-        label: info.label,
-        status,
-        bestCvMean: bestForAgent?.val_metric ?? null,
-        trials: trialsRow.c,
-      };
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { id: true, status: true, created_at: true, updated_at: true, tokens_spent: true },
     });
+
+    const maxRoundRow = await prisma.experiment.aggregate({
+      where: { run_id: runId },
+      _max: { round_number: true },
+    });
+    const currentRound = maxRoundRow._max.round_number ?? 0;
+
+    const agentRows = await prisma.experiment.findMany({
+      where: { run_id: runId, round_number: currentRound },
+      distinct: ["agent_name"],
+      select: { agent_name: true },
+    });
+    const agentNames = new Set(agentRows.map((a) => a.agent_name));
+
+    // Fallback: derive phase from step statuses when no experiments yet
+    const stepRows = await prisma.step.findMany({
+      where: { run_id: runId },
+      select: { step_id: true, status: true },
+    });
+    const stepStatus: Record<string, string> = {};
+    for (const s of stepRows) stepStatus[s.step_id] = s.status;
+
+    const currentPhase = await getCurrentPhase(runId);
+
+    const stats = await getExperimentStats(runId);
+    const bestRow = await prisma.experiment.findFirst({
+      where: { run_id: runId, status: { in: ["SUCCESS", "AUDITED"] } },
+      orderBy: { val_metric: "desc" },
+    });
+    const bestModel = bestRow ? mapExperimentRow(bestRow as Record<string, unknown>) : null;
+
+    const trendRows = await prisma.experiment.findMany({
+      where: { run_id: runId, status: { in: ["SUCCESS", "AUDITED"] } },
+      orderBy: { created_at: "asc" },
+      take: 50,
+      select: { val_metric: true },
+    });
+    const bestModelTrend = trendRows.map((r) => r.val_metric);
+
+    const agentStrip = await Promise.all(
+      Object.values(AGENT_INFO_REGISTRY).map(async (info) => {
+        const unified = await getAgentUnifiedStatus(runId, info.name, currentRound);
+        const trialsCount = await prisma.experiment.count({
+          where: { run_id: runId, agent_name: info.name },
+        });
+        return {
+          name: info.name,
+          label: info.label,
+          status: unified.status as "idle" | "running" | "completed" | "failed" | "timed_out",
+          bestCvMean: unified.valMetric,
+          trials: trialsCount,
+        };
+      }),
+    );
 
     jsonResponse(res, {
       run: {
@@ -1906,7 +1865,7 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
         updatedAt: run?.updated_at ?? null,
       },
       phases: derivePhases(currentPhase),
-      pendingDecisions: derivePendingDecisions(runId),
+      pendingDecisions: await derivePendingDecisions(runId),
       bestModel,
       bestModelTrend,
       agentStrip,
@@ -1917,9 +1876,7 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
         tokensSpent: run?.tokens_spent ?? 0,
       },
     });
-  } catch (err) {
-    errorResponse(res, `Failed to build command-center snapshot: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to build command-center snapshot: ${(err as Error).message}`));
 }
 
 async function handlePipelinePause(
@@ -1927,7 +1884,7 @@ async function handlePipelinePause(
   res: http.ServerResponse,
 ): Promise<void> {
   try {
-    const runId = findActivePipelineRunId();
+    const runId = await findActivePipelineRunId();
     if (!runId) {
       errorResponse(res, "No active pipeline run", 404);
       return;
@@ -1948,7 +1905,7 @@ async function handlePipelineResume(
   res: http.ServerResponse,
 ): Promise<void> {
   try {
-    const runId = findActivePipelineRunId();
+    const runId = await findActivePipelineRunId();
     if (!runId) {
       errorResponse(res, "No active pipeline run", 404);
       return;
@@ -1969,7 +1926,7 @@ async function handlePipelineCancel(
   res: http.ServerResponse,
 ): Promise<void> {
   try {
-    const runId = findActivePipelineRunId();
+    const runId = await findActivePipelineRunId();
     if (!runId) {
       errorResponse(res, "No active pipeline run", 404);
       return;

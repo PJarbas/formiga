@@ -40,3 +40,5 @@ graphify-out/
 
 # ML pipeline run outputs
 runs/
+
+/src/generated/prisma

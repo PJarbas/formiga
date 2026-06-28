@@ -1,7 +1,11 @@
+// ══════════════════════════════════════════════════════════════════════
+// session-repo.ts — AutoResearch session registry
+// MIGRATED TO PRISMA — no raw SQL
+// ══════════════════════════════════════════════════════════════════════
+
 import fs from "node:fs";
 import path from "node:path";
-
-import { getDb } from "./connection.js";
+import { getPrisma } from "./prisma.js";
 
 interface AutoresearchSessionConfigRaw {
   goal?: string;
@@ -112,17 +116,56 @@ function resolveSessionCwd(cwd: string): string {
   return result;
 }
 
-export function upsertAutoresearchSession(cwd: string): AutoresearchSessionRow | null {
-  const db = getDb();
+function toAutoresearchRow(model: {
+  id: string;
+  cwd: string;
+  goal: string | null;
+  metric_name: string | null;
+  metric_unit: string | null;
+  direction: string | null;
+  command: string | null;
+  created_at: Date;
+  updated_at: Date;
+  last_seen_at: Date;
+  last_run_at: Date | null;
+  total_runs: number;
+  baseline_metric: number | null;
+  best_metric: number | null;
+  best_run: number | null;
+  files_missing: number;
+}): AutoresearchSessionRow {
+  return {
+    id: model.id,
+    cwd: model.cwd,
+    goal: model.goal,
+    metric_name: model.metric_name,
+    metric_unit: model.metric_unit,
+    direction: model.direction,
+    command: model.command,
+    created_at: model.created_at.toISOString(),
+    updated_at: model.updated_at.toISOString(),
+    last_seen_at: model.last_seen_at.toISOString(),
+    last_run_at: model.last_run_at?.toISOString() ?? null,
+    total_runs: model.total_runs,
+    baseline_metric: model.baseline_metric,
+    best_metric: model.best_metric,
+    best_run: model.best_run,
+    files_missing: model.files_missing,
+  };
+}
+
+export async function upsertAutoresearchSession(
+  cwd: string,
+): Promise<AutoresearchSessionRow | null> {
+  const prisma = getPrisma();
   const resolvedCwd = resolveSessionCwd(cwd);
   const id = resolvedCwd;
 
   const { config, missing } = readSessionConfigFromFiles(resolvedCwd);
-  const now = new Date().toISOString();
+  const now = new Date();
 
   let filesMissing = missing ? 1 : 0;
   if (!filesMissing) {
-    // Check if log file exists (not strictly required but useful for completeness)
     const logPath = path.join(resolvedCwd, "autoresearch.jsonl");
     if (!fs.existsSync(logPath)) filesMissing = 1;
   }
@@ -138,11 +181,9 @@ export function upsertAutoresearchSession(cwd: string): AutoresearchSessionRow |
   const keptRuns = runs.filter((r) => r.status === "baseline" || r.status === "keep");
   const totalRuns = runs.length;
 
-  // Find baseline metric (first entry with status "baseline")
   const baselineEntry = runs.find((r) => r.status === "baseline" && r.metric !== null);
   const baselineMetric = baselineEntry?.metric ?? null;
 
-  // Find best metric among kept runs
   let bestMetric: number | null = null;
   let bestRun: number | null = null;
   for (const r of keptRuns) {
@@ -157,61 +198,84 @@ export function upsertAutoresearchSession(cwd: string): AutoresearchSessionRow |
     }
   }
 
-  // Determine last_run_at from the highest run number
   const latestRun = runs.reduce<AutoresearchLogRunEntry | null>((latest, r) => {
     if (!latest || r.run > latest.run) return r;
     return latest;
   }, null);
-  const lastRunAt = latestRun ? now : null; // We use 'now' as last_seen; last_run_at is approximate
+  const lastRunAt = latestRun ? now : null;
 
-  db.prepare(`
-    INSERT OR REPLACE INTO autoresearch_sessions
-      (id, cwd, goal, metric_name, metric_unit, direction, command,
-       created_at, updated_at, last_seen_at, last_run_at,
-       total_runs, baseline_metric, best_metric, best_run, files_missing)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id, resolvedCwd, goal, metricName, metricUnit, direction, command,
-    now, now, now, lastRunAt,
-    totalRuns, baselineMetric, bestMetric, bestRun, filesMissing,
-  );
+  const upserted = await prisma.autoresearchSession.upsert({
+    where: { id },
+    create: {
+      id,
+      cwd: resolvedCwd,
+      goal,
+      metric_name: metricName,
+      metric_unit: metricUnit,
+      direction,
+      command,
+      created_at: now,
+      updated_at: now,
+      last_seen_at: now,
+      last_run_at: lastRunAt,
+      total_runs: totalRuns,
+      baseline_metric: baselineMetric,
+      best_metric: bestMetric,
+      best_run: bestRun,
+      files_missing: filesMissing,
+    },
+    update: {
+      cwd: resolvedCwd,
+      goal,
+      metric_name: metricName,
+      metric_unit: metricUnit,
+      direction,
+      command,
+      updated_at: now,
+      last_seen_at: now,
+      last_run_at: lastRunAt,
+      total_runs: totalRuns,
+      baseline_metric: baselineMetric,
+      best_metric: bestMetric,
+      best_run: bestRun,
+      files_missing: filesMissing,
+    },
+  });
 
-  return {
-    id,
-    cwd: resolvedCwd,
-    goal,
-    metric_name: metricName,
-    metric_unit: metricUnit,
-    direction,
-    command,
-    created_at: now,
-    updated_at: now,
-    last_seen_at: now,
-    last_run_at: lastRunAt,
-    total_runs: totalRuns,
-    baseline_metric: baselineMetric,
-    best_metric: bestMetric,
-    best_run: bestRun,
-    files_missing: filesMissing,
-  };
+  return toAutoresearchRow(upserted);
 }
 
-export function getAutoresearchSessions(opts?: { includeMissing?: boolean }): AutoresearchSessionRow[] {
-  const db = getDb();
+export async function getAutoresearchSessions(
+  opts?: { includeMissing?: boolean },
+): Promise<AutoresearchSessionRow[]> {
+  const prisma = getPrisma();
   const includeMissing = opts?.includeMissing ?? false;
-  const rows = includeMissing
-    ? db.prepare("SELECT * FROM autoresearch_sessions ORDER BY updated_at DESC").all()
-    : db.prepare("SELECT * FROM autoresearch_sessions WHERE files_missing = 0 ORDER BY updated_at DESC").all();
-  return rows as unknown as AutoresearchSessionRow[];
+  const where = includeMissing
+    ? {}
+    : { files_missing: 0 };
+  const rows = await prisma.autoresearchSession.findMany({
+    where,
+    orderBy: { updated_at: "desc" },
+  });
+  return rows.map(toAutoresearchRow);
 }
 
-export function getAutoresearchSessionById(id: string): AutoresearchSessionRow | undefined {
-  const db = getDb();
-  return db.prepare("SELECT * FROM autoresearch_sessions WHERE id = ?").get(id) as unknown as AutoresearchSessionRow | undefined;
+export async function getAutoresearchSessionById(
+  id: string,
+): Promise<AutoresearchSessionRow | undefined> {
+  const prisma = getPrisma();
+  const row = await prisma.autoresearchSession.findUnique({
+    where: { id },
+  });
+  return row ? toAutoresearchRow(row) : undefined;
 }
 
-export function deleteAutoresearchSession(id: string): boolean {
-  const db = getDb();
-  const result = db.prepare("DELETE FROM autoresearch_sessions WHERE id = ?").run(id);
-  return result.changes > 0;
+export async function deleteAutoresearchSession(id: string): Promise<boolean> {
+  const prisma = getPrisma();
+  try {
+    await prisma.autoresearchSession.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
+  }
 }

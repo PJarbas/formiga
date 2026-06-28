@@ -19,12 +19,12 @@ export class FormigaEngine {
   private executor: FanOutExecutor;
 
   constructor(
-    db: DatabaseSync,
+    _db: DatabaseSync | null,
     executor: FanOutExecutor,
     configOverrides?: Partial<FormigaConfig>,
   ) {
     this.config = buildConfig(configOverrides);
-    this.repository = new LeaderboardRepositoryImpl(db);
+    this.repository = new LeaderboardRepositoryImpl();
     this.store = new LocalArtifactStore(this.config.workspaceRoot);
     this.roundManager = new RoundManager(this.repository);
     this.executor = executor;
@@ -73,7 +73,7 @@ export class FormigaEngine {
     }
 
     // Collect best result
-    const best = this.repository.getBestByMetric(runId, 1);
+    const best = await this.repository.getBestByMetric(runId, 1);
     const bestModel = best[0] ?? null;
 
     return {

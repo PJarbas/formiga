@@ -1786,7 +1786,7 @@ async function main() {
       const cutoff = new Date(Date.now() - thresholdMs).toISOString();
 
       const { getAutoresearchSessions, deleteAutoresearchSession } = await import("../db.js");
-      const sessions = getAutoresearchSessions({ includeMissing: true });
+      const sessions = await getAutoresearchSessions({ includeMissing: true });
 
       const candidates = sessions.filter((s) => {
         // Check if session is older than threshold

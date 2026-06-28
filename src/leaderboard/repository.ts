@@ -1,10 +1,12 @@
 // ══════════════════════════════════════════════════════════════════════
 // repository.ts — Repository pattern for the experiments leaderboard
+// MIGRATED TO PRISMA — no raw SQL
 // ══════════════════════════════════════════════════════════════════════
 
-import type { DatabaseSync } from "node:sqlite";
+import { getPrisma } from "../database/prisma.js";
+import type { PrismaClient } from "@prisma/client";
 
-// ── Row types ────────────────────────────────────────────────────────
+// ── Row types ────────────────────────────────────────────────────
 
 export interface ExperimentRow {
   experiment_id: number;
@@ -36,47 +38,27 @@ export interface NewExperiment {
   artifact_path: string;
 }
 
-// ── Repository interfaces (ISP) ──────────────────────────────────────
+// ── Repository interfaces (ISP) ──────────────────────────────────────────────
 
 export interface LeaderboardReadonly {
-  getBestByMetric(runId: string, limit?: number): ExperimentRow[];
-  getByRound(runId: string, round: number): ExperimentRow[];
-  getByAgent(agentName: string, runId: string): ExperimentRow[];
-  getValidated(runId: string): ExperimentRow[];
-  getFailedConfigs(agentName: string): ExperimentRow[];
-  getBestByDatasetSignature(signature: string, limit?: number): ExperimentRow[];
-  getBestInRun(runId: string): ExperimentRow | undefined;
+  getBestByMetric(runId: string, limit?: number): Promise<ExperimentRow[]>;
+  getByRound(runId: string, round: number): Promise<ExperimentRow[]>;
+  getByAgent(agentName: string, runId: string): Promise<ExperimentRow[]>;
+  getValidated(runId: string): Promise<ExperimentRow[]>;
+  getFailedConfigs(agentName: string): Promise<ExperimentRow[]>;
+  getBestByDatasetSignature(signature: string, limit?: number): Promise<ExperimentRow[]>;
+  getBestInRun(runId: string): Promise<ExperimentRow | null>;
 }
 
 export interface LeaderboardRepository extends LeaderboardReadonly {
-  register(entry: NewExperiment): number;
-  updateTestMetric(experimentId: number, testMetric: number, status: "AUDITED" | "OVERFITTED"): void;
-  reject(experimentId: number, reason: string): void;
-  autoAudit(experimentId: number): void;
-  setDatasetSignature(experimentId: number, signature: string): void;
+  register(entry: NewExperiment): Promise<number>;
+  updateTestMetric(experimentId: number, testMetric: number, status: "AUDITED" | "OVERFITTED"): Promise<void>;
+  reject(experimentId: number, reason: string): Promise<void>;
+  autoAudit(experimentId: number): Promise<void>;
+  setDatasetSignature(experimentId: number, signature: string): Promise<void>;
 }
 
-// ── Implementation ───────────────────────────────────────────────────
-
-function deserializeRow(raw: Record<string, unknown>): ExperimentRow {
-  return {
-    experiment_id: Number(raw.experiment_id),
-    run_id: raw.run_id as string,
-    round_number: Number(raw.round_number),
-    agent_name: raw.agent_name as string,
-    model_type: raw.model_type as string,
-    hyperparameters: safeJsonParse(raw.hyperparameters as string),
-    train_metric: Number(raw.train_metric),
-    val_metric: Number(raw.val_metric),
-    test_metric: raw.test_metric != null ? Number(raw.test_metric) : null,
-    metric_name: raw.metric_name as string,
-    artifact_path: raw.artifact_path as string,
-    status: raw.status as ExperimentRow["status"],
-    error_message: raw.error_message != null ? (raw.error_message as string) : null,
-    dataset_signature: raw.dataset_signature != null ? (raw.dataset_signature as string) : null,
-    created_at: raw.created_at as string,
-  };
-}
+// ── Serialization helpers ──────────────────────────────────────────────────
 
 function safeJsonParse(raw: string): Record<string, unknown> {
   try {
@@ -86,113 +68,178 @@ function safeJsonParse(raw: string): Record<string, unknown> {
   }
 }
 
+function toExperimentRow(model: {
+  experiment_id: number;
+  run_id: string;
+  round_number: number;
+  agent_name: string;
+  model_type: string;
+  hyperparameters: string;
+  train_metric: number;
+  val_metric: number;
+  test_metric: number | null;
+  metric_name: string;
+  artifact_path: string;
+  status: string;
+  error_message: string | null;
+  dataset_signature: string | null;
+  created_at: Date;
+}): ExperimentRow {
+  return {
+    experiment_id: model.experiment_id,
+    run_id: model.run_id,
+    round_number: model.round_number,
+    agent_name: model.agent_name,
+    model_type: model.model_type,
+    hyperparameters: safeJsonParse(model.hyperparameters),
+    train_metric: model.train_metric,
+    val_metric: model.val_metric,
+    test_metric: model.test_metric,
+    metric_name: model.metric_name,
+    artifact_path: model.artifact_path,
+    status: model.status as ExperimentRow["status"],
+    error_message: model.error_message,
+    dataset_signature: model.dataset_signature,
+    created_at: model.created_at.toISOString(),
+  };
+}
+
+function fromNewExperiment(entry: NewExperiment) {
+  return {
+    run_id: entry.run_id,
+    round_number: entry.round_number,
+    agent_name: entry.agent_name,
+    model_type: entry.model_type,
+    hyperparameters: JSON.stringify(entry.hyperparameters),
+    train_metric: entry.train_metric,
+    val_metric: entry.val_metric,
+    metric_name: entry.metric_name,
+    artifact_path: entry.artifact_path,
+  };
+}
+
+// ── Implementation ──────────────────────────────────────────────────────
+
 export class LeaderboardRepositoryImpl implements LeaderboardRepository {
-  constructor(private db: DatabaseSync) {}
-
-  register(entry: NewExperiment): number {
-    const result = this.db
-      .prepare(
-        `INSERT INTO experiments
-         (run_id, round_number, agent_name, model_type, hyperparameters,
-          train_metric, val_metric, metric_name, artifact_path)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        entry.run_id,
-        entry.round_number,
-        entry.agent_name,
-        entry.model_type,
-        JSON.stringify(entry.hyperparameters),
-        entry.train_metric,
-        entry.val_metric,
-        entry.metric_name,
-        entry.artifact_path,
-      );
-    return Number(result.lastInsertRowid);
+  private get prisma(): PrismaClient {
+    return getPrisma();
   }
 
-  getBestByMetric(runId: string, limit = 10): ExperimentRow[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM experiments
-         WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
-         ORDER BY val_metric DESC LIMIT ?`,
-      )
-      .all(runId, limit) as Record<string, unknown>[];
-    return rows.map(deserializeRow);
+  async register(entry: NewExperiment): Promise<number> {
+    const created = await this.prisma.experiment.create({
+      data: fromNewExperiment(entry),
+    });
+    return created.experiment_id;
   }
 
-  getByRound(runId: string, round: number): ExperimentRow[] {
-    const rows = this.db
-      .prepare("SELECT * FROM experiments WHERE run_id = ? AND round_number = ? ORDER BY created_at ASC")
-      .all(runId, round) as Record<string, unknown>[];
-    return rows.map(deserializeRow);
+  async getBestByMetric(runId: string, limit = 10): Promise<ExperimentRow[]> {
+    const rows = await this.prisma.experiment.findMany({
+      where: {
+        run_id: runId,
+        status: { in: ["SUCCESS", "AUDITED"] },
+      },
+      orderBy: { val_metric: "desc" },
+      take: limit,
+    });
+    return rows.map(toExperimentRow);
   }
 
-  getByAgent(agentName: string, runId: string): ExperimentRow[] {
-    const rows = this.db
-      .prepare("SELECT * FROM experiments WHERE agent_name = ? AND run_id = ? ORDER BY created_at DESC")
-      .all(agentName, runId) as Record<string, unknown>[];
-    return rows.map(deserializeRow);
+  async getByRound(runId: string, round: number): Promise<ExperimentRow[]> {
+    const rows = await this.prisma.experiment.findMany({
+      where: { run_id: runId, round_number: round },
+      orderBy: { created_at: "asc" },
+    });
+    return rows.map(toExperimentRow);
   }
 
-  getValidated(runId: string): ExperimentRow[] {
-    const rows = this.db
-      .prepare("SELECT * FROM experiments WHERE run_id = ? AND status IN ('SUCCESS','AUDITED') ORDER BY val_metric DESC")
-      .all(runId) as Record<string, unknown>[];
-    return rows.map(deserializeRow);
+  async getByAgent(agentName: string, runId: string): Promise<ExperimentRow[]> {
+    const rows = await this.prisma.experiment.findMany({
+      where: { agent_name: agentName, run_id: runId },
+      orderBy: { created_at: "desc" },
+    });
+    return rows.map(toExperimentRow);
   }
 
-  getFailedConfigs(agentName: string): ExperimentRow[] {
-    const rows = this.db
-      .prepare("SELECT * FROM experiments WHERE agent_name = ? AND status IN ('FAILED','OVERFITTED') ORDER BY created_at DESC")
-      .all(agentName) as Record<string, unknown>[];
-    return rows.map(deserializeRow);
+  async getValidated(runId: string): Promise<ExperimentRow[]> {
+    const rows = await this.prisma.experiment.findMany({
+      where: {
+        run_id: runId,
+        status: { in: ["SUCCESS", "AUDITED"] },
+      },
+      orderBy: { val_metric: "desc" },
+    });
+    return rows.map(toExperimentRow);
   }
 
-  updateTestMetric(experimentId: number, testMetric: number, status: "AUDITED" | "OVERFITTED"): void {
-    this.db
-      .prepare("UPDATE experiments SET test_metric = ?, status = ? WHERE experiment_id = ?")
-      .run(testMetric, status, experimentId);
+  async getFailedConfigs(agentName: string): Promise<ExperimentRow[]> {
+    const rows = await this.prisma.experiment.findMany({
+      where: {
+        agent_name: agentName,
+        status: { in: ["FAILED", "OVERFITTED"] },
+      },
+      orderBy: { created_at: "desc" },
+    });
+    return rows.map(toExperimentRow);
   }
 
-  reject(experimentId: number, reason: string): void {
-    this.db
-      .prepare("UPDATE experiments SET status = 'FAILED', error_message = ? WHERE experiment_id = ?")
-      .run(reason, experimentId);
+  async getBestByDatasetSignature(
+    signature: string,
+    limit = 5,
+  ): Promise<ExperimentRow[]> {
+    const rows = await this.prisma.experiment.findMany({
+      where: {
+        dataset_signature: signature,
+        status: { in: ["SUCCESS", "AUDITED"] },
+      },
+      orderBy: { val_metric: "desc" },
+      take: limit,
+    });
+    return rows.map(toExperimentRow);
   }
 
-  autoAudit(experimentId: number): void {
-    this.db
-      .prepare("UPDATE experiments SET status = 'AUDITED' WHERE experiment_id = ? AND status = 'SUCCESS'")
-      .run(experimentId);
+  async getBestInRun(runId: string): Promise<ExperimentRow | null> {
+    const row = await this.prisma.experiment.findFirst({
+      where: {
+        run_id: runId,
+        status: { in: ["SUCCESS", "AUDITED"] },
+      },
+      orderBy: { val_metric: "desc" },
+    });
+    return row ? toExperimentRow(row) : null;
   }
 
-  setDatasetSignature(experimentId: number, signature: string): void {
-    this.db
-      .prepare("UPDATE experiments SET dataset_signature = ? WHERE experiment_id = ?")
-      .run(signature, experimentId);
+  async updateTestMetric(
+    experimentId: number,
+    testMetric: number,
+    status: "AUDITED" | "OVERFITTED",
+  ): Promise<void> {
+    await this.prisma.experiment.update({
+      where: { experiment_id: experimentId },
+      data: { test_metric: testMetric, status },
+    });
   }
 
-  getBestByDatasetSignature(signature: string, limit = 5): ExperimentRow[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM experiments
-         WHERE dataset_signature = ? AND status IN ('SUCCESS','AUDITED')
-         ORDER BY val_metric DESC LIMIT ?`,
-      )
-      .all(signature, limit) as Record<string, unknown>[];
-    return rows.map(deserializeRow);
+  async reject(experimentId: number, reason: string): Promise<void> {
+    await this.prisma.experiment.update({
+      where: { experiment_id: experimentId },
+      data: { status: "FAILED", error_message: reason },
+    });
   }
 
-  getBestInRun(runId: string): ExperimentRow | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT * FROM experiments
-         WHERE run_id = ? AND status IN ('SUCCESS','AUDITED')
-         ORDER BY val_metric DESC LIMIT 1`,
-      )
-      .get(runId) as Record<string, unknown> | undefined;
-    return row ? deserializeRow(row) : undefined;
+  async autoAudit(experimentId: number): Promise<void> {
+    await this.prisma.experiment.updateMany({
+      where: { experiment_id: experimentId, status: "SUCCESS" },
+      data: { status: "AUDITED" },
+    });
+  }
+
+  async setDatasetSignature(
+    experimentId: number,
+    signature: string,
+  ): Promise<void> {
+    await this.prisma.experiment.update({
+      where: { experiment_id: experimentId },
+      data: { dataset_signature: signature },
+    });
   }
 }
