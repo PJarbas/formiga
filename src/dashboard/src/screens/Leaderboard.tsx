@@ -10,6 +10,7 @@ import {
   useCompareExperiments,
 } from "../api/api";
 import { ComparePanel } from "../components/ComparePanel";
+import { addToast } from "../components/Toast";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
 
 type SortKey = "cvMean" | "trainMean" | "trainValGap" | "roundNumber";
@@ -36,7 +37,6 @@ export default function Leaderboard() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filterAgent, setFilterAgent] = useState<string>("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const { data, isLoading } = useLeaderboard({
     agentName: filterAgent || undefined,
@@ -137,7 +137,7 @@ export default function Leaderboard() {
   }, []);
 
   function onPanelAction(id: string) {
-    setActionMsg(`"${id}" not yet wired`);
+    addToast("info", `"${id}" not yet wired`);
   }
 
   if (isLoading) {
@@ -188,15 +188,6 @@ export default function Leaderboard() {
           </select>
         </div>
       </div>
-
-      {actionMsg && (
-        <div
-          data-testid="arena-toast"
-          className="text-xs text-[var(--text-secondary)] bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded px-3 py-1.5"
-        >
-          {actionMsg}
-        </div>
-      )}
 
       {/* Scatter */}
       {sortedEntries.length > 0 && (

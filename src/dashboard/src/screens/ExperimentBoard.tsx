@@ -17,6 +17,7 @@ import {
 import { TraceTimeline } from "../components/TraceTimeline";
 import { InteractiveChecklist } from "../components/InteractiveChecklist";
 import { ActionBar } from "../components/ActionBar";
+import { addToast } from "../components/Toast";
 import { getStatusConfig } from "../lib/status-config";
 import type {
   Action,
@@ -132,7 +133,6 @@ export default function ExperimentBoard() {
   const { data: kanban, isLoading } = useKanbanSnapshot(runId);
   const [view, setView] = useState<ViewMode>("status");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
 
   const { approve: approveSpec, reject: rejectSpec } = useSpecActions();
 
@@ -177,7 +177,6 @@ export default function ExperimentBoard() {
   }
 
   function dispatch(card: MLKanbanCard, actionId: string) {
-    setToast(null);
     const kind = cardKind(card);
     if (kind === "spec") {
       const specId = `${runId}:${AGENT_INFO_REGISTRY[card.agentName]?.stepId ?? card.agentName}`;
@@ -185,8 +184,8 @@ export default function ExperimentBoard() {
         approveSpec.mutate(
           { specId },
           {
-            onSuccess: () => setToast(`Approved ${specId}`),
-            onError: (e) => setToast(`Approve failed: ${(e as Error).message}`),
+            onSuccess: () => addToast("success", `Approved ${specId}`),
+            onError: (e) => addToast("error", `Approve failed: ${(e as Error).message}`),
           },
         );
         return;
@@ -196,20 +195,20 @@ export default function ExperimentBoard() {
         rejectSpec.mutate(
           { specId, reason },
           {
-            onSuccess: () => setToast(`Rejected ${specId}`),
-            onError: (e) => setToast(`Reject failed: ${(e as Error).message}`),
+            onSuccess: () => addToast("success", `Rejected ${specId}`),
+            onError: (e) => addToast("error", `Reject failed: ${(e as Error).message}`),
           },
         );
         return;
       }
-      setToast(`"${actionId}" not yet wired`);
+      addToast("info", `"${actionId}" not yet wired`);
       return;
     }
     if (kind === "trial") {
-      setToast(`"${actionId}" not yet wired`);
+      addToast("info", `"${actionId}" not yet wired`);
       return;
     }
-    setToast(`"${actionId}" not yet wired`);
+    addToast("info", `"${actionId}" not yet wired`);
   }
 
   return (
@@ -247,15 +246,6 @@ export default function ExperimentBoard() {
           ))}
         </div>
       </div>
-
-      {toast && (
-        <div
-          data-testid="board-toast"
-          className="text-xs text-[var(--text-secondary)] bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded px-3 py-1.5"
-        >
-          {toast}
-        </div>
-      )}
 
       {/* Lanes */}
       <div

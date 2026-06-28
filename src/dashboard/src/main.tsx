@@ -11,6 +11,7 @@ import CommandCenter from "./screens/CommandCenter";
 import ExperimentBoard from "./screens/ExperimentBoard";
 import Leaderboard from "./screens/Leaderboard";
 import AgentDetail from "./screens/AgentDetail";
+import { ToastContainer } from "./components/Toast";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -44,6 +45,7 @@ if (root) {
     <StrictMode>
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
+        <ToastContainer />
       </QueryClientProvider>
     </StrictMode>,
   );
