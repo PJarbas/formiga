@@ -109,11 +109,16 @@ async function incrementRunTokenSpend(runId: string, tokenUsage: number): Promis
 // ── Auto-complete + orphan recovery ───────────────────────────────────
 
 /**
- * Auto-complete fallback. Invoked when output classifies as `work_done`
- * but the agent never explicitly called `step complete`.
+ * Auto-complete fallback (safety net). Invoked when output classifies as
+ * `work_done` but the agent never explicitly called `step complete`.
  *
- * In the run-scoped world we still pass the run id through so orphan
- * recovery is run-scoped on failures.
+ * The proper flow is: agent calls `formiga step complete` during execution,
+ * which sets step.status = "done" via the API. This fallback only fires when
+ * the agent didn't self-report — e.g. the output contains STATUS: done markers
+ * but the agent forgot to call the CLI.
+ *
+ * By checking step.status first, we avoid double-completion and make the
+ * full stdout content unnecessary when the agent behaved correctly.
  */
 export async function autoCompleteStepIfRunning(
   context: Record<string, unknown>,
@@ -147,8 +152,11 @@ export async function autoCompleteStepIfRunning(
     return;
   }
 
+  // Primary check: if the agent already reported via `formiga step complete`,
+  // the step won't be "running" anymore. This is the happy path — no need
+  // to parse or use the stdout content at all.
   if (row.status !== "running") {
-    logger.debug("Auto-complete fallback skipped — step not running (agent likely reported via CLI)", {
+    logger.debug("Auto-complete fallback skipped — step not running (agent reported via CLI)", {
       ...context,
       stepId: metadata.stepId,
       stepStatus: row.status,

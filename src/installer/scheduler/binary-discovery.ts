@@ -111,16 +111,35 @@ export interface ParsePiResult {
   assistantText: string;
   textFallback: string | null;
   events: unknown[];
+  /** True if the output exceeded the buffer capacity and was truncated. */
+  truncated: boolean;
+  /** Total bytes produced by pi (including evicted). */
+  totalBytesIngested: number;
+  /** Lines dropped due to buffer capacity. */
+  linesDropped: number;
 }
 
 export async function parsePiOutputStream(rl: ReadlineInterface): Promise<ParsePiResult> {
-  const lines: string[] = [];
+  const { OutputRingBuffer } = await import("./output-buffer.js");
+
+  // 1 MB ring buffer — retains only the tail of pi's output.
+  // Agents should report results via `formiga step complete` (API/CLI).
+  // The scheduler only needs the tail for:
+  //   - JSON metadata extraction (token usage, stepId)
+  //   - Outcome classification (heartbeat vs work_done)
+  //   - Fallback auto-complete (safety net)
+  const buffer = new OutputRingBuffer(1024 * 1024);
+
   for await (const line of rl) {
-    lines.push(line);
+    buffer.push(line);
   }
+
   return {
-    assistantText: lines.join("\n"),
+    assistantText: buffer.toString(),
     textFallback: null,
     events: [],
+    truncated: buffer.wasTruncated,
+    totalBytesIngested: buffer.totalBytesIngested,
+    linesDropped: buffer.linesDropped,
   };
 }

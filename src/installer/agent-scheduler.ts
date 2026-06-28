@@ -51,6 +51,9 @@ export {
 // ── Direct spawn (event-driven sequential scheduling) ──────────────────
 export { spawnAgentsForPendingSteps } from "./scheduler/direct-spawn.js";
 
+// ── Output buffer ──────────────────────────────────────────────────────
+export { OutputRingBuffer } from "./scheduler/output-buffer.js";
+
 // ── Cron job lifecycle ─────────────────────────────────────────────────
 export {
   _getJobIntervalsForRun,
