@@ -23,6 +23,7 @@ import {
   startReconciler,
 } from "./control-server.js";
 import { shutdownAllCrons } from "../installer/agent-scheduler.js";
+import { findPiBinary } from "../installer/scheduler/binary-discovery.js";
 
 const PID_FILE = path.join(os.homedir(), ".formiga", "formiga.pid");
 const PORT_FILE = path.join(os.homedir(), ".formiga", "port");
@@ -162,7 +163,47 @@ process.on("uncaughtException", (err) => {
 
 process.on("exit", cleanupPidFile);
 
+// --- Event Loop Watchdog ---
+// Detects when the event loop is blocked (stuck daemon) and self-terminates.
+const HEARTBEAT_INTERVAL_MS = 10_000;
+const MAX_EVENT_LOOP_LAG_MS = 30_000;
+
+function startEventLoopWatchdog(): void {
+  let lastHeartbeat = Date.now();
+
+  const timer = setInterval(() => {
+    const now = Date.now();
+    const lag = now - lastHeartbeat - HEARTBEAT_INTERVAL_MS;
+    lastHeartbeat = now;
+
+    if (lag > MAX_EVENT_LOOP_LAG_MS) {
+      console.error(
+        `[watchdog] Event loop blocked for ${lag}ms (threshold: ${MAX_EVENT_LOOP_LAG_MS}ms). Daemon is stuck — self-terminating.`,
+      );
+      cleanupPidFile();
+      process.exit(2);
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+
+  timer.unref();
+}
+
 async function bootstrap(): Promise<void> {
+  // Validate harness availability before anything else.
+  // The daemon cannot function without a harness to run agents.
+  try {
+    const piPath = findPiBinary();
+    console.log(`Harness available: ${piPath}`);
+  } catch (err) {
+    console.error(
+      `FATAL: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    console.error(
+      "Daemon cannot function without a harness (pi). Exiting.",
+    );
+    process.exit(1);
+  }
+
   writePidFile();
 
   dashboardServer = createDashboardServer(dashboardPort, {
@@ -193,6 +234,9 @@ async function bootstrap(): Promise<void> {
     process.exit(1);
     return;
   }
+
+  // Start event loop watchdog to detect stuck daemon.
+  startEventLoopWatchdog();
 
   console.log(
     `Formiga dashboard daemon started on port ${dashboardPort} (pid ${process.pid})`,

@@ -193,6 +193,11 @@ export default function CommandCenter() {
                 { id: "compare", label: "Compare" },
               ]}
               onAction={(actionId) => {
+                if (actionId === "details" || actionId === "compare") {
+                  window.location.hash = "";
+                  window.location.pathname = "/leaderboard";
+                  return;
+                }
                 addToast("info", `"${actionId}" not yet wired`);
               }}
             />

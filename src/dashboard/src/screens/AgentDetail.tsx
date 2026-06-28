@@ -36,14 +36,19 @@ export default function AgentDetail() {
   const { data: detail, isLoading } = useAgentDetail(name);
   const { data: pipeline } = usePipelineStatus();
   const [logOffset, setLogOffset] = useState(0);
-  const { data: logs } = useAgentLogs(name, logOffset, LOG_PAGE_SIZE);
+  const isAgentRunning = detail?.currentStatus === "running";
+  const { data: logs } = useAgentLogs(name, logOffset, LOG_PAGE_SIZE, {
+    refetchInterval: isAgentRunning ? 3000 : false,
+  });
 
   const latestRoundNumber = useMemo(() => {
     if (!detail?.rounds || detail.rounds.length === 0) return null;
     return Math.max(...detail.rounds.map((r) => r.roundNumber));
   }, [detail]);
 
-  const { data: trace } = useTrace(name, latestRoundNumber ?? undefined);
+  const { data: trace } = useTrace(name, latestRoundNumber ?? undefined, {
+    refetchInterval: isAgentRunning ? 3000 : false,
+  });
   const { data: checklist } = useChecklist(
     name === "feature-engineer" ? pipeline?.runId ?? undefined : undefined,
     name === "feature-engineer" ? "feat-eng" : undefined,
@@ -139,9 +144,16 @@ export default function AgentDetail() {
 
       {/* Trace timeline */}
       <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
-        <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
-          Trace {latestRoundNumber != null && `(Round ${latestRoundNumber})`}
-        </h3>
+        <div className="flex items-center gap-2 mb-3">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+            Trace {latestRoundNumber != null && `(Round ${latestRoundNumber})`}
+          </h3>
+          {isAgentRunning && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-green)]/20 text-[var(--accent-green)] animate-pulse">
+              LIVE
+            </span>
+          )}
+        </div>
         <TraceTimeline entries={trace ?? []} />
       </div>
 
