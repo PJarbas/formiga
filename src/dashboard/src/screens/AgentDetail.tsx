@@ -42,11 +42,11 @@ export default function AgentDetail() {
   });
 
   const latestRoundNumber = useMemo(() => {
-    if (!detail?.rounds || detail.rounds.length === 0) return null;
+    if (!detail?.rounds || detail.rounds.length === 0) return 0;
     return Math.max(...detail.rounds.map((r) => r.roundNumber));
   }, [detail]);
 
-  const { data: trace } = useTrace(name, latestRoundNumber ?? undefined, {
+  const { data: trace } = useTrace(name, latestRoundNumber, {
     refetchInterval: isAgentRunning ? 3000 : false,
   });
   const { data: checklist } = useChecklist(
