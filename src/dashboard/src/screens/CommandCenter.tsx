@@ -1,21 +1,24 @@
 // ══════════════════════════════════════════════════════════════════════
 // CommandCenter.tsx — Tela 1 / front-specs §3
 // Aggregated header + PipelineStepper + Pending Decisions + Quick Stats
-// + Best Model card (with sparkline) + Agent Strip.
+// + Best Model card (with sparkline) + Activity Feed + Agent Strip.
 // Powered by GET /api/command-center (3s poll inside useCommandCenter).
 // ══════════════════════════════════════════════════════════════════════
 
+import { Link } from "react-router-dom";
 import {
   useCommandCenter,
-  useSpecActions,
 } from "../api/api";
 import { PipelineStepper } from "../components/PipelineStepper";
 import { StatusCard } from "../components/StatusCard";
 import { ActionBar } from "../components/ActionBar";
 import { Sparkline } from "../components/Sparkline";
+import { ActivityFeed } from "../components/ActivityFeed";
 import { addToast } from "../components/Toast";
 import { useHumanStatus } from "../hooks/useHumanStatus";
+import { useSpecDispatch } from "../hooks/useSpecDispatch";
 import { getStatusConfig } from "../lib/status-config";
+import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
 import type { Action, PendingDecision } from "@shared/dashboard-types";
 
 function decisionToActions(d: PendingDecision): Action[] {
@@ -34,7 +37,7 @@ function decisionToActions(d: PendingDecision): Action[] {
 
 export default function CommandCenter() {
   const { data, isLoading, error } = useCommandCenter();
-  const { approve: approveSpec, reject: rejectSpec } = useSpecActions();
+  const specDispatch = useSpecDispatch();
   const humanStatus = useHumanStatus();
 
   if (isLoading) {
@@ -72,30 +75,9 @@ export default function CommandCenter() {
   function dispatchDecision(d: PendingDecision, actionId: string) {
     if (d.type === "spec_approval") {
       const specId = d.id.startsWith("spec:") ? d.id.slice(5) : d.id;
-      if (actionId.startsWith("approve")) {
-        approveSpec.mutate(
-          { specId },
-          {
-            onSuccess: () => addToast("success", `Approved ${specId}`),
-            onError: (e) => addToast("error", `Approve failed: ${(e as Error).message}`),
-          },
-        );
-      } else if (actionId.startsWith("reject")) {
-        const reason = window.prompt("Reject reason (optional):") ?? undefined;
-        rejectSpec.mutate(
-          { specId, reason },
-          {
-            onSuccess: () => addToast("success", `Rejected ${specId}`),
-            onError: (e) => addToast("error", `Reject failed: ${(e as Error).message}`),
-          },
-        );
-      } else {
-        addToast("info", `"${actionId}" not yet wired`);
-      }
-      return;
-    }
-    if (d.type === "overfitting_warning") {
-      addToast("info", `"${actionId}" not yet wired`);
+      if (actionId.startsWith("approve")) specDispatch.approve(specId);
+      else if (actionId.startsWith("reject")) specDispatch.reject(specId);
+      else addToast("info", `"${actionId}" not yet wired`);
       return;
     }
     addToast("info", `"${actionId}" not yet wired`);
@@ -160,6 +142,9 @@ export default function CommandCenter() {
         )}
       </div>
 
+      {/* Activity Feed */}
+      <ActivityFeed />
+
       {/* Quick stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {([
@@ -215,17 +200,23 @@ export default function CommandCenter() {
         )}
       </div>
 
-      {/* Agent strip */}
+      {/* Agent strip — clickable cards */}
       <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
         <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Agents</h3>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {agentStrip.map((a) => {
             const config = getStatusConfig(a.status);
+            const isRunning = a.status === "running";
             return (
-              <div
+              <Link
                 key={a.name}
+                to={`/agents/${a.name}`}
+                className={`block border rounded p-3 transition-colors ${
+                  isRunning
+                    ? `${config.borderClass} ${config.bgClass}`
+                    : "border-[var(--border-default)] hover:border-[var(--accent-blue)] hover:bg-[var(--bg-tertiary)]"
+                }`}
                 data-testid={`agent-${a.name}`}
-                className={`border rounded p-3 ${a.status === "running" ? `${config.borderClass} ${config.bgClass}` : "border-[var(--border-default)]"}`}
               >
                 <div className="flex items-center gap-1.5 mb-2">
                   <span className="text-sm" aria-hidden="true">{config.emoji}</span>
@@ -239,7 +230,7 @@ export default function CommandCenter() {
                     best {a.bestCvMean.toFixed(4)}
                   </p>
                 )}
-              </div>
+              </Link>
             );
           })}
         </div>

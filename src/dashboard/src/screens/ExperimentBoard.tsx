@@ -13,7 +13,6 @@ import {
   useKanbanCardDetail,
   useTrace,
   useChecklist,
-  useSpecActions,
 } from "../api/api";
 import { TraceTimeline } from "../components/TraceTimeline";
 import { InteractiveChecklist } from "../components/InteractiveChecklist";
@@ -21,6 +20,7 @@ import { ActionBar } from "../components/ActionBar";
 import { EmptyState } from "../components/EmptyState";
 import { addToast } from "../components/Toast";
 import { getStatusConfig } from "../lib/status-config";
+import { useSpecDispatch } from "../hooks/useSpecDispatch";
 import type {
   Action,
   AgentStatus,
@@ -154,7 +154,7 @@ export default function ExperimentBoard() {
   const [view, setView] = useState<ViewMode>("status");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
 
-  const { approve: approveSpec, reject: rejectSpec } = useSpecActions();
+  const specDispatch = useSpecDispatch();
 
   const lanes = useMemo(() => buildLanes(view, kanban?.lanes ?? []), [view, kanban]);
   const pipelineRunning = status?.status === "running";
@@ -202,24 +202,11 @@ export default function ExperimentBoard() {
     if (kind === "spec") {
       const specId = `${runId}:${AGENT_INFO_REGISTRY[card.agentName]?.stepId ?? card.agentName}`;
       if (actionId === "approve") {
-        approveSpec.mutate(
-          { specId },
-          {
-            onSuccess: () => addToast("success", `Approved ${specId}`),
-            onError: (e) => addToast("error", `Approve failed: ${(e as Error).message}`),
-          },
-        );
+        specDispatch.approve(specId);
         return;
       }
       if (actionId === "reject") {
-        const reason = window.prompt("Reject reason (optional):") ?? undefined;
-        rejectSpec.mutate(
-          { specId, reason },
-          {
-            onSuccess: () => addToast("success", `Rejected ${specId}`),
-            onError: (e) => addToast("error", `Reject failed: ${(e as Error).message}`),
-          },
-        );
+        specDispatch.reject(specId);
         return;
       }
       addToast("info", `"${actionId}" not yet wired`);

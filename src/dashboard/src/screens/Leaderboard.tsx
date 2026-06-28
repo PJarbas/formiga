@@ -4,6 +4,7 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import ReactECharts from "echarts-for-react";
 import {
   useLeaderboard,
@@ -12,6 +13,7 @@ import {
 import { ComparePanel } from "../components/ComparePanel";
 import { addToast } from "../components/Toast";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
+import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
 
 type SortKey = "cvMean" | "trainMean" | "trainValGap" | "roundNumber";
 
@@ -140,6 +142,11 @@ export default function Leaderboard() {
     addToast("info", `"${id}" not yet wired`);
   }
 
+  const bestEntry = useMemo(
+    () => sortedEntries.find((e) => e.id === bestId) ?? null,
+    [sortedEntries, bestId],
+  );
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64 text-[var(--text-muted)]">
@@ -188,6 +195,26 @@ export default function Leaderboard() {
           </select>
         </div>
       </div>
+
+      {/* Best Model Banner */}
+      {bestEntry && data?.bestCvMean != null && (
+        <div className="bg-[var(--accent-green)]/10 border border-[var(--accent-green)]/30 rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl" aria-hidden="true">🏆</span>
+            <div>
+              <h3 className="font-semibold text-[var(--accent-green)]">Best Model</h3>
+              <p className="text-sm text-[var(--text-secondary)]">
+                <span className="font-mono text-[var(--accent-blue)]">{data.bestCvMean.toFixed(4)}</span>
+                {" · "}{bestEntry.modelType}
+                {" · Round "}{bestEntry.roundNumber}
+              </p>
+            </div>
+          </div>
+          <Link to={`/agents/${bestEntry.agentName}`} className="text-sm text-[var(--accent-blue)] hover:underline">
+            {AGENT_INFO_REGISTRY[bestEntry.agentName]?.label ?? bestEntry.agentName} Detail →
+          </Link>
+        </div>
+      )}
 
       {/* Scatter */}
       {sortedEntries.length > 0 && (
