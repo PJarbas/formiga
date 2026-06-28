@@ -150,6 +150,13 @@ export const STATUS_CONFIG: Record<UIStatus, StatusConfig> = {
   },
 };
 
+// Normalize backend VisualStatus ("todo"|"done") to UIStatus equivalents.
+const STATUS_ALIASES: Record<string, UIStatus> = {
+  todo: "idle",
+  done: "completed",
+};
+
 export function getStatusConfig(status: string): StatusConfig {
-  return STATUS_CONFIG[status as UIStatus] ?? STATUS_CONFIG.idle;
+  const normalized = STATUS_ALIASES[status] ?? status;
+  return STATUS_CONFIG[normalized as UIStatus] ?? STATUS_CONFIG.idle;
 }
