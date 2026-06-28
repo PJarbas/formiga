@@ -34,11 +34,11 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getDb, getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession } from "../db.js";
+import { getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession } from "../db.js";
 import { getPrisma } from "../database/prisma.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
-import { buildKanbanSnapshot, buildKanbanCardDetail } from "./kanban-data.js";
+import { getKanbanSnapshot, getKanbanCardDetail } from "./kanban-data.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 import { runWorkflow } from "../installer/run.js";
 import { stopWorkflow, deleteWorkflow, getWorkflowStatus } from "../installer/status.js";
@@ -294,16 +294,17 @@ function handleRunKanbanCardDetail(
       return;
     }
 
-    const db = getDb();
-    const events = getRunEvents(runId);
-    const detail = buildKanbanCardDetail(db, runId, cardId, events);
+    (async () => {
+      const events = getRunEvents(runId);
+      const detail = await getKanbanCardDetail(runId, cardId, events);
 
-    if (!detail) {
-      errorResponse(res, `Card not found: ${cardId} in run ${runId}`, 404);
-      return;
-    }
+      if (!detail) {
+        errorResponse(res, `Card not found: ${cardId} in run ${runId}`, 404);
+        return;
+      }
 
-    jsonResponse(res, detail);
+      jsonResponse(res, detail);
+    })().catch((err) => errorResponse(res, `Failed to build card detail: ${(err as Error).message}`));
   } catch (err) {
     errorResponse(res, `Failed to build card detail: ${(err as Error).message}`);
   }
@@ -314,16 +315,14 @@ function handleRunKanban(
   res: http.ServerResponse,
   runId: string,
 ): void {
-  try {
-    const snapshot = buildKanbanSnapshot(getDb(), runId);
+  (async () => {
+    const snapshot = await getKanbanSnapshot(runId);
     if (!snapshot) {
       errorResponse(res, `Run not found: ${runId}`, 404);
       return;
     }
     jsonResponse(res, snapshot);
-  } catch (err) {
-    errorResponse(res, `Failed to build kanban snapshot: ${(err as Error).message}`);
-  }
+  })().catch((err) => errorResponse(res, `Failed to build kanban snapshot: ${(err as Error).message}`));
 }
 
 function handleRunAutoresearch(

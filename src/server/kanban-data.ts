@@ -20,6 +20,7 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import type { FormigaEvent } from "../installer/events.js";
+import { getPrisma } from "../database/prisma.js";
 
 export type VisualStatus = "todo" | "running" | "done" | "failed";
 
@@ -208,7 +209,7 @@ function stepCardSub(step: StepRow): string {
   return `updated ${step.updated_at}`;
 }
 
-// ── Helpers for buildKanbanCardDetail ──────────────────────────────
+// ── Helpers for buildKanbanCardDetail ──────────────────────────────────────────────────
 
 function parseEventIsoMs(ts: string | undefined): number {
   if (!ts) return 0;
@@ -258,6 +259,35 @@ function aggregateTokens(events: FormigaEvent[]): NonNullable<KanbanCardDetail["
   return { total: lastTotal, deltas };
 }
 
+function buildTiming(events: FormigaEvent[]): KanbanCardDetail["timing"] {
+  if (events.length === 0) return undefined;
+  const sorted = [...events].sort(
+    (a, b) => parseEventIsoMs(a.ts) - parseEventIsoMs(b.ts),
+  );
+  const first = parseEventIsoMs(sorted[0].ts);
+  const last = parseEventIsoMs(sorted[sorted.length - 1].ts);
+  if (first === 0 || last === 0) return undefined;
+  const durationMs = last - first;
+  return {
+    firstEvent: sorted[0].ts,
+    lastEvent: sorted[sorted.length - 1].ts,
+    durationMs: Math.max(0, durationMs),
+  };
+}
+
+function safeParseJsonArray(raw: string): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed as string[];
+  } catch {
+    // malformed JSON — treat as missing
+  }
+  return undefined;
+}
+
+// ── Legacy DatabaseSync path (used by tests) ───────────────────────────────────────────
+
 /**
  * Build enriched detail for a single kanban card (story or step).
  * Returns null if the run doesn't exist or the cardId doesn't match
@@ -272,13 +302,13 @@ export function buildKanbanCardDetail(
   cardId: string,
   runEvents?: FormigaEvent[],
 ): KanbanCardDetail | null {
-  // ── run existence check ─────────────────────────────────────────
+  // ── run existence check ─────────────────────────────────────
   const run = db.prepare(
     "SELECT id, task FROM runs WHERE id = ?",
   ).get(runId) as unknown as { id: string; task: string } | undefined;
   if (!run) return null;
 
-  // ── try matching a story first ─────────────────────────────────
+  // ── try matching a story first ───────────────────────────────
   const story = db.prepare(`
     SELECT story_id, story_index, title, description, acceptance_criteria,
            status, output, retry_count, max_retries
@@ -329,7 +359,7 @@ export function buildKanbanCardDetail(
     };
   }
 
-  // ── try matching a step ────────────────────────────────────────
+  // ── try matching a step ───────────────────────────────
   const step = db.prepare(`
     SELECT step_id, agent_id, input_template, output, status,
            retry_count, max_retries
@@ -361,64 +391,11 @@ export function buildKanbanCardDetail(
   };
 }
 
-function buildTiming(events: FormigaEvent[]): KanbanCardDetail["timing"] {
-  if (events.length === 0) return undefined;
-  const sorted = [...events].sort(
-    (a, b) => parseEventIsoMs(a.ts) - parseEventIsoMs(b.ts),
-  );
-  const first = parseEventIsoMs(sorted[0].ts);
-  const last = parseEventIsoMs(sorted[sorted.length - 1].ts);
-  if (first === 0 || last === 0) return undefined;
-  const durationMs = last - first;
-  return {
-    firstEvent: sorted[0].ts,
-    lastEvent: sorted[sorted.length - 1].ts,
-    durationMs: Math.max(0, durationMs),
-  };
-}
-
-function safeParseJsonArray(raw: string): string[] | undefined {
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed as string[];
-  } catch {
-    // malformed JSON — treat as missing
-  }
-  return undefined;
-}
-
-/**
- * Build a kanban snapshot for one run. Returns null if the run does not exist.
- *
- * Visible for testing: takes a DatabaseSync handle directly so tests can pass
- * a temp-home db without monkey-patching getDb().
- */
-export function buildKanbanSnapshot(
-  db: DatabaseSync,
-  runId: string,
-): KanbanSnapshot | null {
-  const run = db.prepare(`
-    SELECT id, run_number, workflow_id, task, status, tokens_spent, created_at, updated_at
-    FROM runs WHERE id = ?
-  `).get(runId) as unknown as RunRow | undefined;
-
-  if (!run) return null;
-
-  const steps = db.prepare(`
-    SELECT id, step_id, agent_id, step_index, status, retry_count, max_retries,
-           type, current_story_id, updated_at
-    FROM steps WHERE run_id = ?
-    ORDER BY step_index ASC
-  `).all(runId) as unknown as StepRow[];
-
-  const stories = db.prepare(`
-    SELECT story_id, story_index, title, status, retry_count, max_retries, updated_at
-    FROM stories WHERE run_id = ?
-    ORDER BY story_index ASC
-  `).all(runId) as unknown as StoryRow[];
-
-  // The current story is whichever story the (single) loop step claims.
+function _buildSnapshotFromRows(
+  run: RunRow,
+  steps: StepRow[],
+  stories: StoryRow[],
+): KanbanSnapshot {
   const loopStep = steps.find((s) => s.type === "loop");
   const currentStoryId = loopStep?.current_story_id ?? null;
 
@@ -482,5 +459,243 @@ export function buildKanbanSnapshot(
     lanes,
     currentStoryId,
     generatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Build a kanban snapshot for one run. Returns null if the run does not exist.
+ *
+ * Visible for testing: takes a DatabaseSync handle directly so tests can pass
+ * a temp-home db without monkey-patching getDb().
+ */
+export function buildKanbanSnapshot(
+  db: DatabaseSync,
+  runId: string,
+): KanbanSnapshot | null {
+  const run = db.prepare(`
+    SELECT id, run_number, workflow_id, task, status, tokens_spent, created_at, updated_at
+    FROM runs WHERE id = ?
+  `).get(runId) as unknown as RunRow | undefined;
+
+  if (!run) return null;
+
+  const steps = db.prepare(`
+    SELECT id, step_id, agent_id, step_index, status, retry_count, max_retries,
+           type, current_story_id, updated_at
+    FROM steps WHERE run_id = ?
+    ORDER BY step_index ASC
+  `).all(runId) as unknown as StepRow[];
+
+  const stories = db.prepare(`
+    SELECT story_id, story_index, title, status, retry_count, max_retries, updated_at
+    FROM stories WHERE run_id = ?
+    ORDER BY story_index ASC
+  `).all(runId) as unknown as StoryRow[];
+
+  return _buildSnapshotFromRows(run, steps, stories);
+}
+
+// ── Prisma path (used by the dashboard server) ──────────────────────────────────────────────
+
+function dateToIso(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  if (typeof d === "string") return d;
+  return d.toISOString();
+}
+
+/**
+ * Async Prisma-based kanban snapshot builder.
+ * Mirrors the shape returned by {@link buildKanbanSnapshot}.
+ */
+export async function getKanbanSnapshot(runId: string): Promise<KanbanSnapshot | null> {
+  const prisma = getPrisma();
+
+  const run = await prisma.run.findUnique({
+    where: { id: runId },
+    select: {
+      id: true,
+      run_number: true,
+      workflow_id: true,
+      task: true,
+      status: true,
+      tokens_spent: true,
+      created_at: true,
+      updated_at: true,
+    },
+  });
+  if (!run) return null;
+
+  const steps = await prisma.step.findMany({
+    where: { run_id: runId },
+    orderBy: { step_index: "asc" },
+    select: {
+      id: true,
+      step_id: true,
+      agent_id: true,
+      step_index: true,
+      status: true,
+      retry_count: true,
+      max_retries: true,
+      type: true,
+      current_story_id: true,
+      updated_at: true,
+    },
+  });
+
+  const stories = await prisma.story.findMany({
+    where: { run_id: runId },
+    orderBy: { story_index: "asc" },
+    select: {
+      story_id: true,
+      story_index: true,
+      title: true,
+      status: true,
+      retry_count: true,
+      max_retries: true,
+      updated_at: true,
+    },
+  });
+
+  const runRow: RunRow = {
+    id: run.id,
+    run_number: run.run_number,
+    workflow_id: run.workflow_id,
+    task: run.task,
+    status: run.status,
+    tokens_spent: run.tokens_spent ?? 0,
+    created_at: dateToIso(run.created_at),
+    updated_at: dateToIso(run.updated_at),
+  };
+
+  const stepRows: StepRow[] = steps.map((s) => ({
+    id: s.id,
+    step_id: s.step_id,
+    agent_id: s.agent_id,
+    step_index: s.step_index,
+    status: s.status,
+    retry_count: s.retry_count,
+    max_retries: s.max_retries,
+    type: s.type,
+    current_story_id: s.current_story_id,
+    updated_at: dateToIso(s.updated_at),
+  }));
+
+  const storyRows: StoryRow[] = stories.map((s) => ({
+    story_id: s.story_id,
+    story_index: s.story_index,
+    title: s.title,
+    status: s.status,
+    retry_count: s.retry_count,
+    max_retries: s.max_retries,
+    updated_at: dateToIso(s.updated_at),
+  }));
+
+  return _buildSnapshotFromRows(runRow, stepRows, storyRows);
+}
+
+/**
+ * Async Prisma-based kanban card detail builder.
+ * Mirrors the shape returned by {@link buildKanbanCardDetail}.
+ */
+export async function getKanbanCardDetail(
+  runId: string,
+  cardId: string,
+  runEvents?: FormigaEvent[],
+): Promise<KanbanCardDetail | null> {
+  const prisma = getPrisma();
+
+  const run = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { id: true, task: true },
+  });
+  if (!run) return null;
+
+  const story = await prisma.story.findFirst({
+    where: { run_id: runId, story_id: cardId },
+    select: {
+      story_id: true,
+      story_index: true,
+      title: true,
+      description: true,
+      acceptance_criteria: true,
+      status: true,
+      output: true,
+      retry_count: true,
+      max_retries: true,
+    },
+  });
+
+  if (story) {
+    const loopStep = await prisma.step.findFirst({
+      where: { run_id: runId, type: "loop" },
+      orderBy: { step_index: "asc" },
+      select: {
+        step_id: true,
+        input_template: true,
+        output: true,
+        retry_count: true,
+        max_retries: true,
+      },
+    });
+
+    const events = (runEvents ?? []).filter(
+      (e) =>
+        e.storyId === cardId ||
+        (loopStep &&
+          e.stepId === loopStep.step_id &&
+          !e.storyId),
+    );
+    const timing = buildTiming(events);
+    return {
+      runId,
+      cardId,
+      title: story.title,
+      status: story.status,
+      storyId: story.story_id,
+      description: story.description || undefined,
+      acceptanceCriteria: safeParseJsonArray(story.acceptance_criteria),
+      input_template: loopStep?.input_template ?? "",
+      output: story.output ?? loopStep?.output ?? undefined,
+      task: run.task,
+      events,
+      timing,
+      tokens: aggregateTokens(events),
+      failureDetail: extractFailureDetail(events),
+      retryCount: story.retry_count ?? 0,
+      maxRetries: story.max_retries ?? 4,
+    };
+  }
+
+  const step = await prisma.step.findFirst({
+    where: { run_id: runId, step_id: cardId },
+    select: {
+      step_id: true,
+      agent_id: true,
+      input_template: true,
+      output: true,
+      status: true,
+      retry_count: true,
+      max_retries: true,
+    },
+  });
+
+  if (!step) return null;
+
+  const events = (runEvents ?? []).filter((e) => e.stepId === cardId);
+  const timing = buildTiming(events);
+  return {
+    runId,
+    cardId,
+    title: `${step.agent_id.split("_").pop() ?? step.agent_id} step`,
+    status: step.status,
+    input_template: step.input_template ?? "",
+    output: step.output ?? undefined,
+    task: run.task,
+    events,
+    timing,
+    tokens: aggregateTokens(events),
+    failureDetail: extractFailureDetail(events),
+    retryCount: step.retry_count ?? 0,
+    maxRetries: step.max_retries ?? 4,
   };
 }
