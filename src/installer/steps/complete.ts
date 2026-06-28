@@ -477,7 +477,7 @@ async function handleVerifyEachCompletion(
     if (lastDoneStory) {
       const newRetry = lastDoneStory.retry_count + 1;
       if (newRetry > lastDoneStory.max_retries) {
-        const now = new Date();
+        now = new Date();
         await prisma.story.update({
           where: { id: lastDoneStory.id },
           data: {
@@ -508,7 +508,7 @@ async function handleVerifyEachCompletion(
         return { advanced: false, runCompleted: false };
       }
 
-      const now = new Date();
+      now = new Date();
       await prisma.story.update({
         where: { id: lastDoneStory.id },
         data: {
@@ -530,7 +530,7 @@ async function handleVerifyEachCompletion(
       });
     }
 
-    const now = new Date();
+    now = new Date();
     await prisma.step.update({
       where: { id: loopStepId },
       data: {

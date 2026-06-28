@@ -20,15 +20,7 @@ function resolveDbPath(): string {
 
 function createPrismaClient(): PrismaClient {
   const dbPath = resolveDbPath();
-  // Dynamic import to avoid bundling issues in environments that don't need it.
-  // Using require() for better-sqlite3 since it's a native C++ addon.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const Database = require("better-sqlite3");
-  const database = new Database(dbPath);
-  // Enable WAL mode and foreign keys for consistency with the legacy connection
-  database.pragma("journal_mode=WAL");
-  database.pragma("foreign_keys=ON");
-  const adapter = new PrismaBetterSqlite3(database);
+  const adapter = new PrismaBetterSqlite3({ url: dbPath });
   return new PrismaClient({
     adapter,
     log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
