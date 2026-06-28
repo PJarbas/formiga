@@ -115,7 +115,15 @@ export interface ParsePiResult {
 
 export async function parsePiOutputStream(rl: ReadlineInterface): Promise<ParsePiResult> {
   const lines: string[] = [];
+  let totalBytes = 0;
+  const MAX_OUTPUT_BYTES = 50 * 1024 * 1024; // 50 MB cap to prevent V8 string length overflow
+
   for await (const line of rl) {
+    totalBytes += line.length + 1;
+    if (totalBytes > MAX_OUTPUT_BYTES) {
+      lines.push("[… output truncated — exceeded 50 MB]");
+      break;
+    }
     lines.push(line);
   }
   return {
