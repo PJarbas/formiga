@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════════════
-// App.tsx — Shell layout: sidebar + <Outlet /> for child routes
+// App.tsx — Shell layout: header nav + <Outlet /> for child routes
 // ══════════════════════════════════════════════════════════════════════
 
 import { NavLink, Outlet, useLocation } from "react-router-dom";
@@ -7,12 +7,13 @@ import { usePipelineStatus } from "./api/api";
 import { useHumanStatus } from "./hooks/useHumanStatus";
 import { humanLabelToUIStatus } from "./lib/human-status";
 import { StatusBadge } from "./components/StatusBadge";
+import { AgentNavDropdown } from "./components/AgentNavDropdown";
+import { Breadcrumb } from "./components/Breadcrumb";
 
 const NAV_ITEMS = [
   { to: "/", label: "Command Center", end: true },
   { to: "/kanban", label: "Experiment Board" },
   { to: "/leaderboard", label: "Model Arena" },
-  { to: "/agents/data-analyst", label: "Agent Detail" },
 ];
 
 export default function App() {
@@ -45,10 +46,17 @@ export default function App() {
                 {item.label}
               </NavLink>
             ))}
+            <AgentNavDropdown />
           </nav>
         </div>
         {status?.runId && humanStatus && (
           <div className="flex items-center gap-3 text-sm">
+            <NavLink
+              to="/"
+              className="text-[var(--text-primary)] bg-[var(--bg-tertiary)] hover:bg-[var(--accent-blue)] hover:text-white px-1.5 py-0.5 rounded text-xs font-mono transition-colors"
+            >
+              {status.runId.slice(0, 8)}
+            </NavLink>
             <StatusBadge status={humanLabelToUIStatus(humanStatus.label)} size="sm" />
             <span className="text-[var(--text-muted)]">
               {humanStatus.description}
@@ -60,6 +68,7 @@ export default function App() {
       {/* Content area */}
       <main className="flex-1 overflow-auto p-6">
         <div className="max-w-screen-2xl mx-auto">
+          <Breadcrumb />
           <Outlet />
         </div>
       </main>
