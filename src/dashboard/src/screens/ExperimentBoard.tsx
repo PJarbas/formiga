@@ -6,6 +6,7 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   usePipelineStatus,
   useKanbanSnapshot,
@@ -17,6 +18,7 @@ import {
 import { TraceTimeline } from "../components/TraceTimeline";
 import { InteractiveChecklist } from "../components/InteractiveChecklist";
 import { ActionBar } from "../components/ActionBar";
+import { EmptyState } from "../components/EmptyState";
 import { addToast } from "../components/Toast";
 import { getStatusConfig } from "../lib/status-config";
 import type {
@@ -30,7 +32,6 @@ import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
 type ViewMode = "phase" | "agent" | "status";
 
 // Derive phase info from AGENT_INFO_REGISTRY — single source of truth.
-// Returns { id: phase, label: agent label } for the Phase view grouping.
 
 const STATUS_GROUPS: { id: AgentStatus | "all"; label: string }[] = [
   { id: "idle", label: "Pending" },
@@ -38,6 +39,24 @@ const STATUS_GROUPS: { id: AgentStatus | "all"; label: string }[] = [
   { id: "completed", label: "Done" },
   { id: "failed", label: "Failed" },
 ];
+
+const emptyLaneStates: Record<string, { icon: string; message: string; detail?: string; showProgress?: boolean }> = {
+  idle: { icon: "⚪", message: "No pending steps" },
+  running: { icon: getStatusConfig("running").emoji, message: "Steps in progress", showProgress: true },
+  completed: { icon: getStatusConfig("completed").emoji, message: "No completed steps yet" },
+  failed: { icon: getStatusConfig("failed").emoji, message: "No failures — all good!" },
+};
+
+function getLaneEmptyState(status: string, pipelineRunning: boolean) {
+  if (status === "idle" && pipelineRunning) {
+    return {
+      icon: "⏳",
+      message: "Waiting for pipeline to reach this step",
+      showProgress: true,
+    };
+  }
+  return emptyLaneStates[status] ?? emptyLaneStates.idle;
+}
 
 // Approximate card-kind heuristic. Cards that come from spec-producing
 // agents are treated as "spec"; others are "trial" except ml-critic = "audit".
@@ -79,13 +98,14 @@ function buildLanes(view: ViewMode, lanes: MLKanbanLane[]): BoardLane[] {
           summary: { done: 0, total: 0 },
         });
       }
-      const b = buckets.get(phase.id)!;
-      b.cards.push(...l.cards);
-      b.summary.done += l.summary.done;
-      b.summary.total += l.summary.total;
+      const bucket = buckets.get(phase.id)!;
+      bucket.cards.push(...l.cards);
+      bucket.summary.done += l.summary.done;
+      bucket.summary.total += l.summary.total;
     }
     return Array.from(buckets.values());
   }
+
   // status
   const buckets = new Map<string, BoardLane>();
   for (const g of STATUS_GROUPS) {
@@ -137,6 +157,7 @@ export default function ExperimentBoard() {
   const { approve: approveSpec, reject: rejectSpec } = useSpecActions();
 
   const lanes = useMemo(() => buildLanes(view, kanban?.lanes ?? []), [view, kanban]);
+  const pipelineRunning = status?.status === "running";
 
   const selectedCard = useMemo<MLKanbanCard | null>(() => {
     if (!selectedCardId || !kanban) return null;
@@ -204,10 +225,6 @@ export default function ExperimentBoard() {
       addToast("info", `"${actionId}" not yet wired`);
       return;
     }
-    if (kind === "trial") {
-      addToast("info", `"${actionId}" not yet wired`);
-      return;
-    }
     addToast("info", `"${actionId}" not yet wired`);
   }
 
@@ -258,32 +275,55 @@ export default function ExperimentBoard() {
             data-testid={`lane-${lane.key}`}
             className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] overflow-hidden"
           >
-            <div className="px-3 py-2 border-b border-[var(--border-default)] flex items-center justify-between">
-              <span className="text-sm font-medium text-[var(--text-primary)]">{lane.label}</span>
-              <span className="text-xs text-[var(--text-muted)]">
-                {lane.summary.done}/{lane.summary.total}
-              </span>
-            </div>
+            {(() => {
+              const headerConfig = getStatusConfig(lane.status);
+              return (
+                <div
+                  className={`px-3 py-2 border-b flex items-center justify-between ${headerConfig.borderClass} ${headerConfig.bgClass}`}
+                  style={{ color: `var(${headerConfig.colorVar})` }}
+                >
+                  <span className="text-sm font-medium">{lane.label}</span>
+                  <span className="text-xs">
+                    {lane.summary.done}/{lane.summary.total}
+                  </span>
+                </div>
+              );
+            })()}
             <div className="p-2 space-y-2 max-h-[500px] overflow-y-auto">
               {lane.cards.length === 0 ? (
-                <p className="text-xs text-[var(--text-muted)] text-center py-4">No cards</p>
+                <div className="p-4">
+                  <EmptyState {...getLaneEmptyState(lane.status, pipelineRunning)} />
+                </div>
               ) : (
                 lane.cards.map((card) => {
                   const acts = actionsForCard(card);
+                  const cardConfig = getStatusConfig(card.status);
+                  const isSelected = selectedCardId === card.id;
+                  const baseClasses = [
+                    "w-full text-left rounded p-2 border-l-3 transition-colors",
+                    isSelected
+                      ? `${cardConfig.borderClass} ${cardConfig.bgClass}`
+                      : "border-[var(--border-default)] hover:border-l-[var(--status-running)]",
+                    cardConfig.key === "idle"
+                      ? "opacity-60"
+                      : cardConfig.key === "completed"
+                        ? "opacity-80"
+                        : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
                   return (
                     <button
                       key={card.id}
                       data-testid={`card-${card.id}`}
                       data-kind={cardKind(card)}
                       onClick={() => setSelectedCardId(card.id)}
-                      className={`w-full text-left rounded p-2 border transition-colors ${
-                        selectedCardId === card.id
-                          ? "border-[var(--accent-blue)] bg-[var(--bg-tertiary)]"
-                          : "border-[var(--border-default)] hover:border-[var(--accent-blue)]"
-                      }`}
+                      className={baseClasses}
                     >
                       <div className="flex items-center gap-1.5 mb-1">
-                        <span className={`status-dot ${card.status}`} />
+                        <span className="text-sm" aria-hidden="true">
+                          {cardConfig.emoji}
+                        </span>
                         <span className="text-xs font-medium text-[var(--text-primary)] truncate">
                           {card.title}
                         </span>
@@ -321,6 +361,12 @@ export default function ExperimentBoard() {
               <p className="text-xs text-[var(--text-secondary)] mt-0.5">
                 {selectedCard.agentName} · {selectedCard.sub}
               </p>
+              <Link
+                to={`/agents/${selectedCard.agentName}`}
+                className="text-xs text-[var(--accent-blue)] hover:underline mt-1 inline-block"
+              >
+                {AGENT_INFO_REGISTRY[selectedCard.agentName]?.label ?? selectedCard.agentName} Detail →
+              </Link>
             </div>
             <ActionBar
               actions={actionsForCard(selectedCard)}

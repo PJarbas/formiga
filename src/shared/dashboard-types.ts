@@ -249,6 +249,7 @@ export interface ChecklistState {
   updatedAt: string;
 }
 
+
 export interface DiffHunk {
   type: "added" | "removed" | "unchanged";
   content: string;
