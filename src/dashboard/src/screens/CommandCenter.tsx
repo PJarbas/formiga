@@ -50,7 +50,7 @@ export default function CommandCenter() {
     );
   }
 
-  const { run, phases, rounds } = data;
+  const { run, phases, rounds = [] } = data;
 
   return (
     <div className="space-y-6" data-testid="command-center">
