@@ -1334,17 +1334,13 @@ function handleRounds(req: http.IncomingMessage, res: http.ServerResponse): void
       by: ["round_number"],
       where: { run_id: runId },
       _min: { created_at: true },
-      _max: { created_at: true },
+      _max: { created_at: true, val_metric: true },
+      _count: true,
       orderBy: { round_number: "asc" },
     });
 
     const rounds = await Promise.all(
       roundRows.map(async (r) => {
-        const stats = await prisma.experiment.aggregate({
-          where: { run_id: runId, round_number: r.round_number },
-          _count: true,
-        });
-
         const successCount = await prisma.experiment.count({
           where: { run_id: runId, round_number: r.round_number, status: { in: ["SUCCESS", "AUDITED"] } },
         });
@@ -1353,14 +1349,21 @@ function handleRounds(req: http.IncomingMessage, res: http.ServerResponse): void
           where: { run_id: runId, round_number: r.round_number, status: { in: ["FAILED", "OVERFITTED"] } },
         });
 
+        const startMs = r._min.created_at?.getTime() ?? null;
+        const endMs = r._max.created_at?.getTime() ?? null;
+
         return {
           runId,
           roundNumber: r.round_number,
-          status: stats._count > 0 ? "completed" : "pending",
+          status: r._count > 0 ? "completed" : "pending",
+          totalExperiments: r._count,
           experimentsRegistered: successCount,
           experimentsRejected: rejectedCount,
-          startedAt: r._min.created_at?.toISOString(),
-          completedAt: r._max.created_at?.toISOString(),
+          bestCvMean: r._max.val_metric ?? null,
+          currentPhase: null,
+          durationMs: startMs && endMs ? endMs - startMs : null,
+          startedAt: r._min.created_at?.toISOString() ?? null,
+          completedAt: r._max.created_at?.toISOString() ?? null,
         };
       }),
     );
@@ -1813,17 +1816,7 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
           updatedAt: null,
         },
         phases: derivePhases("idle"),
-        pendingDecisions: [],
-        bestModel: null,
-        bestModelTrend: [],
-        agentStrip: Object.values(AGENT_INFO_REGISTRY).map((info) => ({
-          name: info.name,
-          label: info.label,
-          status: "idle",
-          bestCvMean: null,
-          trials: 0,
-        })),
-        quickStats: { totalExperiments: 0, bestCvMean: null, roundsCompleted: 0, tokensSpent: 0 },
+        rounds: [],
       });
       return;
     }
@@ -1839,53 +1832,58 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
     });
     const currentRound = maxRoundRow._max.round_number ?? 0;
 
-    const agentRows = await prisma.experiment.findMany({
-      where: { run_id: runId, round_number: currentRound },
-      distinct: ["agent_name"],
-      select: { agent_name: true },
-    });
-    const agentNames = new Set(agentRows.map((a) => a.agent_name));
-
-    // Fallback: derive phase from step statuses when no experiments yet
-    const stepRows = await prisma.step.findMany({
-      where: { run_id: runId },
-      select: { step_id: true, status: true },
-    });
-    const stepStatus: Record<string, string> = {};
-    for (const s of stepRows) stepStatus[s.step_id] = s.status;
-
     const currentPhase = await getCurrentPhase(runId);
 
-    const stats = await getExperimentStats(runId);
-    const bestRow = await prisma.experiment.findFirst({
-      where: { run_id: runId, status: { in: ["SUCCESS", "AUDITED"] } },
-      orderBy: { val_metric: "desc" },
+    // Build rounds summary reusing the same groupBy pattern as GET /api/rounds
+    const roundRows = await prisma.experiment.groupBy({
+      by: ["round_number"],
+      where: { run_id: runId },
+      _min: { created_at: true },
+      _max: { created_at: true, val_metric: true },
+      _count: true,
+      orderBy: { round_number: "desc" },
     });
-    const bestModel = bestRow ? mapExperimentRow(bestRow as Record<string, unknown>) : null;
 
-    const trendRows = await prisma.experiment.findMany({
-      where: { run_id: runId, status: { in: ["SUCCESS", "AUDITED"] } },
-      orderBy: { created_at: "asc" },
-      take: 50,
-      select: { val_metric: true },
+    const rounds = roundRows.map((r) => {
+      const isRunning = r.round_number === currentRound && (run?.status === "running" || run?.status === "paused");
+      const startMs = r._min.created_at?.getTime() ?? null;
+      const endMs = r._max.created_at?.getTime() ?? null;
+      const durationMs = startMs && endMs ? endMs - startMs : null;
+
+      let status: "running" | "completed" | "failed" = "completed";
+      if (isRunning) status = "running";
+
+      return {
+        runId,
+        roundNumber: r.round_number,
+        status,
+        currentPhase: isRunning ? currentPhase : null,
+        bestCvMean: r._max.val_metric ?? null,
+        totalExperiments: r._count,
+        experimentsRegistered: r._count,
+        experimentsRejected: 0,
+        durationMs,
+        startedAt: r._min.created_at?.toISOString() ?? null,
+        completedAt: isRunning ? null : (r._max.created_at?.toISOString() ?? null),
+      };
     });
-    const bestModelTrend = trendRows.map((r) => r.val_metric);
 
-    const agentStrip = await Promise.all(
-      Object.values(AGENT_INFO_REGISTRY).map(async (info) => {
-        const unified = await getAgentUnifiedStatus(runId, info.name, currentRound);
-        const trialsCount = await prisma.experiment.count({
-          where: { run_id: runId, agent_name: info.name },
-        });
-        return {
-          name: info.name,
-          label: info.label,
-          status: unified.status as "idle" | "running" | "completed" | "failed" | "timed_out",
-          bestCvMean: unified.valMetric,
-          trials: trialsCount,
-        };
-      }),
-    );
+    // If pipeline is running but no experiments yet, show round 1 as running
+    if (rounds.length === 0 && run?.status === "running") {
+      rounds.push({
+        runId,
+        roundNumber: 1,
+        status: "running",
+        currentPhase,
+        bestCvMean: null,
+        totalExperiments: 0,
+        experimentsRegistered: 0,
+        experimentsRejected: 0,
+        durationMs: null,
+        startedAt: run.created_at?.toISOString() ?? null,
+        completedAt: null,
+      });
+    }
 
     jsonResponse(res, {
       run: {
@@ -1898,16 +1896,7 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
         updatedAt: run?.updated_at ?? null,
       },
       phases: derivePhases(currentPhase),
-      pendingDecisions: await derivePendingDecisions(runId),
-      bestModel,
-      bestModelTrend,
-      agentStrip,
-      quickStats: {
-        totalExperiments: stats.total,
-        bestCvMean: bestModel?.cvMean ?? null,
-        roundsCompleted: currentRound,
-        tokensSpent: run?.tokens_spent ?? 0,
-      },
+      rounds,
     });
   })().catch((err) => errorResponse(res, `Failed to build command-center snapshot: ${(err as Error).message}`));
 }

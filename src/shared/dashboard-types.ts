@@ -150,9 +150,13 @@ export interface RoundSummary {
   runId: string;
   roundNumber: number;
   status: string;
+  totalExperiments: number;
   experimentsRegistered: number;
   experimentsRejected: number;
-  startedAt: string;
+  bestCvMean: number | null;
+  currentPhase: PipelinePhase | null;
+  durationMs: number | null;
+  startedAt: string | null;
   completedAt: string | null;
 }
 
@@ -361,9 +365,5 @@ export interface CommandCenterSnapshot {
     updatedAt: string | null;
   };
   phases: PhaseInfo[];
-  pendingDecisions: PendingDecision[];
-  bestModel: LeaderboardEntry | null;
-  bestModelTrend: number[];
-  agentStrip: AgentStripItem[];
-  quickStats: PipelineStatus["quickStats"];
+  rounds: RoundSummary[];
 }
