@@ -192,7 +192,7 @@ async function bootstrap(): Promise<void> {
   // Validate harness availability before anything else.
   // The daemon cannot function without a harness to run agents.
   try {
-    const piPath = findPiBinary();
+    const piPath = await findPiBinary();
     console.log(`Harness available: ${piPath}`);
   } catch (err) {
     console.error(
