@@ -4,6 +4,9 @@
 
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { usePipelineStatus } from "./api/api";
+import { useHumanStatus } from "./hooks/useHumanStatus";
+import { humanLabelToUIStatus } from "./lib/human-status";
+import { StatusBadge } from "./components/StatusBadge";
 
 const NAV_ITEMS = [
   { to: "/", label: "Command Center", end: true },
@@ -14,6 +17,7 @@ const NAV_ITEMS = [
 
 export default function App() {
   const { data: status } = usePipelineStatus();
+  const humanStatus = useHumanStatus();
   const location = useLocation();
 
   return (
@@ -43,23 +47,11 @@ export default function App() {
             ))}
           </nav>
         </div>
-        {status?.runId && (
+        {status?.runId && humanStatus && (
           <div className="flex items-center gap-3 text-sm">
-            <span className="text-[var(--text-secondary)]">
-              Run{" "}
-              <code className="text-[var(--text-primary)] bg-[var(--bg-tertiary)] px-1.5 py-0.5 rounded text-xs">
-                {status.runId.slice(0, 8)}
-              </code>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className={`status-dot ${status.status}`} />
-              <span className="capitalize text-[var(--text-primary)]">{status.status}</span>
-            </span>
-            <span className="text-[var(--text-secondary)]">
-              Phase: <span className="text-[var(--text-primary)] capitalize">{status.currentPhase.replace(/_/g, " ")}</span>
-            </span>
-            <span className="text-[var(--text-secondary)]">
-              Round {status.currentRound}/{status.maxRounds}
+            <StatusBadge status={humanLabelToUIStatus(humanStatus.label)} size="sm" />
+            <span className="text-[var(--text-muted)]">
+              {humanStatus.description}
             </span>
           </div>
         )}

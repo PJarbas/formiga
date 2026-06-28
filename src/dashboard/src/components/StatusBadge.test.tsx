@@ -3,17 +3,19 @@ import { render, screen } from "@testing-library/react";
 import { StatusBadge } from "./StatusBadge.js";
 
 describe("StatusBadge", () => {
-  it("renders the status label in capitalized form by default", () => {
+  it("renders the status label from STATUS_CONFIG by default", () => {
     render(<StatusBadge status="running" />);
     const badge = screen.getByTestId("status-badge");
     expect(badge).toBeTruthy();
     expect(badge.getAttribute("data-status")).toBe("running");
-    expect(badge.textContent).toMatch(/running/i);
+    // STATUS_CONFIG maps "running" to label "RUNNING"
+    expect(badge.textContent).toContain("RUNNING");
   });
 
-  it("renders the custom label when provided", () => {
-    render(<StatusBadge status="promoted" label="Promoted" />);
-    expect(screen.getByText("Promoted")).toBeTruthy();
+  it("renders the STATUS_CONFIG label for promoted", () => {
+    render(<StatusBadge status="promoted" />);
+    // STATUS_CONFIG maps "promoted" to label "PROMOTED"
+    expect(screen.getByText("PROMOTED")).toBeTruthy();
   });
 
   it("supports the lg size variant", () => {
@@ -28,5 +30,29 @@ describe("StatusBadge", () => {
       expect(screen.getByTestId("status-badge").getAttribute("data-status")).toBe(s);
       unmount();
     }
+  });
+
+  it("renders emoji by default", () => {
+    render(<StatusBadge status="failed" />);
+    // STATUS_CONFIG maps "failed" to emoji "❌"
+    const badge = screen.getByTestId("status-badge");
+    expect(badge.textContent).toContain("❌");
+  });
+
+  it("allows custom content via children render prop", () => {
+    render(
+      <StatusBadge status="running">
+        {({ emoji, label }) => <span>{emoji} custom {label}</span>}
+      </StatusBadge>,
+    );
+    expect(screen.getByText(/custom RUNNING/)).toBeTruthy();
+  });
+
+  it("falls back to idle config for unknown status", () => {
+    render(<StatusBadge status="unknown_status" />);
+    const badge = screen.getByTestId("status-badge");
+    expect(badge.getAttribute("data-status")).toBe("unknown_status");
+    // Falls back to idle config → label "PENDING"
+    expect(badge.textContent).toContain("PENDING");
   });
 });

@@ -11,19 +11,12 @@ import {
   useSpecActions,
 } from "../api/api";
 import { PipelineStepper } from "../components/PipelineStepper";
+import { StatusCard } from "../components/StatusCard";
 import { ActionBar } from "../components/ActionBar";
 import { Sparkline } from "../components/Sparkline";
+import { useHumanStatus } from "../hooks/useHumanStatus";
+import { getStatusConfig } from "../lib/status-config";
 import type { Action, PendingDecision } from "@shared/dashboard-types";
-
-function formatElapsed(startedAt: string | null, updatedAt: string | null): string {
-  if (!startedAt) return "—";
-  const start = new Date(startedAt).getTime();
-  const end = updatedAt ? new Date(updatedAt).getTime() : Date.now();
-  const totalSec = Math.max(0, Math.floor((end - start) / 1000));
-  const m = Math.floor(totalSec / 60).toString().padStart(2, "0");
-  const s = (totalSec % 60).toString().padStart(2, "0");
-  return `${m}:${s}`;
-}
 
 function decisionToActions(d: PendingDecision): Action[] {
   return d.actions.map((a) => ({
@@ -42,6 +35,7 @@ function decisionToActions(d: PendingDecision): Action[] {
 export default function CommandCenter() {
   const { data, isLoading, error } = useCommandCenter();
   const { approve: approveSpec, reject: rejectSpec } = useSpecActions();
+  const humanStatus = useHumanStatus();
   const [toast, setToast] = useState<string | null>(null);
 
   if (isLoading) {
@@ -78,7 +72,6 @@ export default function CommandCenter() {
 
   function dispatchDecision(d: PendingDecision, actionId: string) {
     setToast(null);
-    // Decisions follow the convention id = "<kind>:<target>" — derive intent from action.
     if (d.type === "spec_approval") {
       const specId = d.id.startsWith("spec:") ? d.id.slice(5) : d.id;
       if (actionId.startsWith("approve")) {
@@ -112,31 +105,20 @@ export default function CommandCenter() {
 
   const { run, phases, pendingDecisions, bestModel, bestModelTrend, agentStrip, quickStats } = data;
 
+  // Find the currently-running agent for StatusCard
+  const runningAgent = agentStrip.find((a) => a.status === "running");
+
   return (
     <div className="space-y-6" data-testid="command-center">
-      {/* Header strip */}
-      <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-[var(--text-primary)]">
-              Run{" "}
-              <code className="text-sm bg-[var(--bg-tertiary)] px-2 py-0.5 rounded">
-                {run.runId ?? "—"}
-              </code>
-            </h2>
-            <p className="text-[var(--text-secondary)] text-sm mt-1">
-              Round {run.currentRound}/{run.maxRounds} · Phase {run.currentPhase} · Elapsed{" "}
-              {formatElapsed(run.startedAt, run.updatedAt)}
-            </p>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className={`status-dot ${run.status}`} />
-            <span className="text-sm font-medium capitalize text-[var(--text-primary)]">
-              {run.status}
-            </span>
-          </div>
-        </div>
-      </div>
+      {/* Status Card — hero element */}
+      {humanStatus && (
+        <StatusCard
+          status={humanStatus}
+          startedAt={run.startedAt}
+          updatedAt={run.updatedAt}
+          currentAgent={runningAgent?.name}
+        />
+      )}
 
       {toast && (
         <div
@@ -248,26 +230,29 @@ export default function CommandCenter() {
       <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
         <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Agents</h3>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          {agentStrip.map((a) => (
-            <div
-              key={a.name}
-              data-testid={`agent-${a.name}`}
-              className="border border-[var(--border-default)] rounded p-3"
-            >
-              <div className="flex items-center gap-1.5 mb-2">
-                <span className={`status-dot ${a.status}`} />
-                <span className="text-xs font-medium text-[var(--text-primary)] truncate">
-                  {a.label}
-                </span>
+          {agentStrip.map((a) => {
+            const config = getStatusConfig(a.status);
+            return (
+              <div
+                key={a.name}
+                data-testid={`agent-${a.name}`}
+                className={`border rounded p-3 ${a.status === "running" ? `${config.borderClass} ${config.bgClass}` : "border-[var(--border-default)]"}`}
+              >
+                <div className="flex items-center gap-1.5 mb-2">
+                  <span className="text-sm" aria-hidden="true">{config.emoji}</span>
+                  <span className="text-xs font-medium text-[var(--text-primary)] truncate">
+                    {a.label}
+                  </span>
+                </div>
+                <p className="text-[10px] text-[var(--text-muted)]">{a.trials} trial(s)</p>
+                {a.bestCvMean != null && (
+                  <p className="text-[10px] text-[var(--accent-blue)] font-mono">
+                    best {a.bestCvMean.toFixed(4)}
+                  </p>
+                )}
               </div>
-              <p className="text-[10px] text-[var(--text-muted)]">{a.trials} trial(s)</p>
-              {a.bestCvMean != null && (
-                <p className="text-[10px] text-[var(--accent-blue)] font-mono">
-                  best {a.bestCvMean.toFixed(4)}
-                </p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
