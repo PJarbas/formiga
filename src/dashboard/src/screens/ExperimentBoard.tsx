@@ -17,23 +17,19 @@ import {
 import { TraceTimeline } from "../components/TraceTimeline";
 import { InteractiveChecklist } from "../components/InteractiveChecklist";
 import { ActionBar } from "../components/ActionBar";
+import { getStatusConfig } from "../lib/status-config";
 import type {
   Action,
   AgentStatus,
   MLKanbanCard,
   MLKanbanLane,
 } from "@shared/dashboard-types";
+import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
 
 type ViewMode = "phase" | "agent" | "status";
 
-// Map agent name to logical phase id (for the "Phase" view).
-const AGENT_PHASE: Record<string, { id: string; label: string }> = {
-  "data-analyst": { id: "eda", label: "EDA" },
-  "feature-engineer": { id: "feat-eng", label: "Feature Eng." },
-  "modeler-classic": { id: "modeling", label: "Modeling" },
-  "modeler-advanced": { id: "modeling", label: "Modeling" },
-  "ml-critic": { id: "audit", label: "Audit" },
-};
+// Derive phase info from AGENT_INFO_REGISTRY — single source of truth.
+// Returns { id: phase, label: agent label } for the Phase view grouping.
 
 const STATUS_GROUPS: { id: AgentStatus | "all"; label: string }[] = [
   { id: "idle", label: "Pending" },
@@ -71,7 +67,8 @@ function buildLanes(view: ViewMode, lanes: MLKanbanLane[]): BoardLane[] {
   if (view === "phase") {
     const buckets = new Map<string, BoardLane>();
     for (const l of lanes) {
-      const phase = AGENT_PHASE[l.agent] ?? { id: l.agent, label: l.label };
+      const agentInfo = AGENT_INFO_REGISTRY[l.agent];
+      const phase = agentInfo ? { id: agentInfo.phase, label: agentInfo.label } : { id: l.agent, label: l.label };
       if (!buckets.has(phase.id)) {
         buckets.set(phase.id, {
           key: phase.id,
@@ -133,7 +130,7 @@ export default function ExperimentBoard() {
   const { data: status } = usePipelineStatus();
   const runId = status?.runId ?? undefined;
   const { data: kanban, isLoading } = useKanbanSnapshot(runId);
-  const [view, setView] = useState<ViewMode>("phase");
+  const [view, setView] = useState<ViewMode>("status");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -183,7 +180,7 @@ export default function ExperimentBoard() {
     setToast(null);
     const kind = cardKind(card);
     if (kind === "spec") {
-      const specId = `${runId}:${AGENT_PHASE[card.agentName]?.id ?? card.agentName}`;
+      const specId = `${runId}:${AGENT_INFO_REGISTRY[card.agentName]?.stepId ?? card.agentName}`;
       if (actionId === "approve") {
         approveSpec.mutate(
           { specId },

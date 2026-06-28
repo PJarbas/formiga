@@ -4,6 +4,7 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { getPrisma } from "../database/prisma.js";
+import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
 
 /** Unified status label used by the dashboard. */
 export type DashboardAgentStatus =
@@ -28,23 +29,18 @@ export interface UnifiedAgentStatus {
   errorMessage: string | null;
 }
 
-/** Map from step_id to the agent_name that owns it. */
-const STEP_AGENT_MAP: Record<string, string> = {
-  eda: "data-analyst",
-  features: "feature-engineer",
-  "model-classic": "modeler-classic",
-  "model-advanced": "modeler-advanced",
-  audit: "ml-critic",
-};
+/** Derive stepId for an agent from AGENT_INFO_REGISTRY */
+function getStepIdForAgent(agentName: string): string | undefined {
+  return AGENT_INFO_REGISTRY[agentName]?.stepId;
+}
 
-/** Reverse map: agent_name -> step_id (for exact matches). */
-const AGENT_STEP_MAP: Record<string, string> = {
-  "data-analyst": "eda",
-  "feature-engineer": "features",
-  "modeler-classic": "model-classic",
-  "modeler-advanced": "model-advanced",
-  "ml-critic": "audit",
-};
+/** Derive agentName from stepId by searching AGENT_INFO_REGISTRY */
+function getAgentNameForStepId(stepId: string): string | undefined {
+  for (const [name, info] of Object.entries(AGENT_INFO_REGISTRY)) {
+    if (info.stepId === stepId) return name;
+  }
+  return undefined;
+}
 
 // ── Low-level queries ───────────────────────────────────────────────────────
 
@@ -103,7 +99,7 @@ export async function getAgentUnifiedStatus(
   agentName: string,
   roundNumber?: number,
 ): Promise<UnifiedAgentStatus> {
-  const stepId = AGENT_STEP_MAP[agentName];
+  const stepId = getStepIdForAgent(agentName);
   const [step, exp] = await Promise.all([
     stepId ? getStepStatus(runId, stepId) : Promise.resolve(null),
     getLatestExperiment(runId, agentName, roundNumber),

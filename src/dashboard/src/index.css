@@ -14,6 +14,30 @@
   --accent-orange: #d2991d;
   --accent-red: #f85149;
   --accent-purple: #a371f7;
+
+  /* Status system colors — single source consumed via STATUS_CONFIG */
+  --status-idle: #6e7681;
+  --status-pending: #6e7681;
+  --status-running: #0969da;
+  --status-completed: #1a7f37;
+  --status-failed: #da3633;
+}
+
+/* ── Animations ─────────────────────────────────────────────────────── */
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+@keyframes slide-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.animate-slide-in {
+  animation: slide-in 0.2s ease-out;
 }
 
 /* ── Base overrides ───────────────────────────────────────────────── */
@@ -53,8 +77,3 @@ body {
   border-radius: 50%;
   margin-right: 6px;
 }
-.status-dot.idle { background: var(--text-muted); }
-.status-dot.running { background: var(--accent-blue); }
-.status-dot.completed { background: var(--accent-green); }
-.status-dot.failed { background: var(--accent-red); }
-.status-dot.timed_out { background: var(--accent-orange); }

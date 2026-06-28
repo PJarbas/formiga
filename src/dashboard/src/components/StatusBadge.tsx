@@ -1,63 +1,45 @@
 // ══════════════════════════════════════════════════════════════════════
-// StatusBadge.tsx — Visual badge for experiment/spec/agent status states
-// ──────────────────────────────────────────────────────────────────────
-// Wraps the base AgentStatus + ExperimentStatus values plus the extended
-// promoted/rejected decision states. Pure presentational.
+// StatusBadge.tsx — Composition-based status indicator
+// ══════════════════════════════════════════════════════════════════════
+// Renders emoji + label by default. Consumer overrides via `children`
+// render prop for custom layouts. All visual data from STATUS_CONFIG.
 // ══════════════════════════════════════════════════════════════════════
 
-import type { AgentStatus } from "@shared/dashboard-types";
-
-export type BadgeStatus =
-  | AgentStatus
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "promoted"
-  | "overfitted"
-  | "success";
+import type { ReactNode } from "react";
+import { getStatusConfig, type UIStatus } from "../lib/status-config.js";
 
 export interface StatusBadgeProps {
-  status: BadgeStatus;
-  label?: string;
+  status: UIStatus | string;
   size?: "sm" | "md" | "lg";
+  /** Override default content (emoji + label). Receives the resolved config. */
+  children?: (config: { emoji: string; label: string }) => ReactNode;
 }
 
-const STATUS_TO_COLOR: Record<BadgeStatus, string> = {
-  idle: "var(--text-muted)",
-  running: "var(--accent-blue)",
-  completed: "var(--accent-green)",
-  failed: "var(--accent-red)",
-  timed_out: "var(--accent-orange)",
-  pending: "var(--accent-orange)",
-  approved: "var(--accent-green)",
-  rejected: "var(--accent-red)",
-  promoted: "var(--accent-green)",
-  overfitted: "var(--accent-orange)",
-  success: "var(--accent-green)",
-};
-
-const SIZE_CLASSES: Record<NonNullable<StatusBadgeProps["size"]>, string> = {
+const SIZE_CLASSES = {
   sm: "text-xs px-1.5 py-0.5",
   md: "text-sm px-2 py-0.5",
   lg: "text-base px-3 py-1",
-};
+} as const;
 
-export function StatusBadge({ status, label, size = "md" }: StatusBadgeProps) {
-  const color = STATUS_TO_COLOR[status] ?? "var(--text-muted)";
+export function StatusBadge({ status, size = "md", children }: StatusBadgeProps) {
+  const config = getStatusConfig(status);
   const sizeClass = SIZE_CLASSES[size];
+
   return (
     <span
       data-testid="status-badge"
       data-status={status}
-      className={`inline-flex items-center gap-1.5 rounded-full font-medium border ${sizeClass}`}
-      style={{ borderColor: color, color }}
+      className={`inline-flex items-center gap-1.5 rounded-full font-medium border ${sizeClass} ${config.borderClass} ${config.bgClass}`}
+      style={{ color: `var(${config.colorVar})` }}
     >
-      <span
-        aria-hidden="true"
-        className="inline-block rounded-full"
-        style={{ width: 8, height: 8, background: color }}
-      />
-      <span className="capitalize">{label ?? status.replace(/_/g, " ")}</span>
+      {children
+        ? children({ emoji: config.emoji, label: config.label })
+        : (
+          <>
+            <span aria-hidden="true" className="text-sm">{config.emoji}</span>
+            <span>{config.label}</span>
+          </>
+        )}
     </span>
   );
 }
