@@ -32,29 +32,29 @@ type ViewMode = "phase" | "agent" | "status";
 
 // Derive phase info from AGENT_INFO_REGISTRY — single source of truth.
 
-const STATUS_GROUPS: { id: AgentStatus | "all"; label: string }[] = [
-  { id: "idle", label: "Pending" },
+const STATUS_GROUPS: { id: string; label: string }[] = [
+  { id: "todo", label: "Pending" },
   { id: "running", label: "Running" },
-  { id: "completed", label: "Done" },
+  { id: "done", label: "Done" },
   { id: "failed", label: "Failed" },
 ];
 
 const emptyLaneStates: Record<string, { icon: string; message: string; detail?: string; showProgress?: boolean }> = {
-  idle: { icon: "⚪", message: "No pending steps" },
+  todo: { icon: "⚪", message: "No pending steps" },
   running: { icon: getStatusConfig("running").emoji, message: "Steps in progress", showProgress: true },
-  completed: { icon: getStatusConfig("completed").emoji, message: "No completed steps yet" },
+  done: { icon: getStatusConfig("completed").emoji, message: "No completed steps yet" },
   failed: { icon: getStatusConfig("failed").emoji, message: "No failures — all good!" },
 };
 
 function getLaneEmptyState(status: string, pipelineRunning: boolean) {
-  if (status === "idle" && pipelineRunning) {
+  if (status === "todo" && pipelineRunning) {
     return {
       icon: "⏳",
       message: "Waiting for pipeline to reach this step",
       showProgress: true,
     };
   }
-  return emptyLaneStates[status] ?? emptyLaneStates.idle;
+  return emptyLaneStates[status] ?? emptyLaneStates.todo;
 }
 
 // Card-kind heuristic for display styling.
@@ -116,11 +116,11 @@ function buildLanes(view: ViewMode, lanes: MLKanbanLane[]): BoardLane[] {
   }
   for (const l of lanes) {
     for (const c of l.cards) {
-      const key = (buckets.has(c.status) ? c.status : "idle") as string;
+      const key = (buckets.has(c.status) ? c.status : "todo") as string;
       const b = buckets.get(key)!;
       b.cards.push(c);
       b.summary.total += 1;
-      if (c.status === "completed") b.summary.done += 1;
+      if (c.status === "done") b.summary.done += 1;
     }
   }
   return Array.from(buckets.values());
