@@ -190,7 +190,19 @@ export async function runPi(
     stdoutTruncated: stdoutMeta.truncated,
     stderrBytes: stderrMeta.bytes,
     hasStderr: stderrMeta.bytes > 0,
+    outputTruncatedByBuffer: parseResult.truncated,
+    totalBytesIngested: parseResult.totalBytesIngested,
+    linesDropped: parseResult.linesDropped,
   });
+
+  if (parseResult.truncated) {
+    logger.warn("pi output exceeded ring buffer capacity — only tail retained", {
+      pid: childPid ?? null,
+      totalBytesIngested: parseResult.totalBytesIngested,
+      linesDropped: parseResult.linesDropped,
+      retainedBytes: stdoutMeta.bytes,
+    });
+  }
 
   return filteredStdout.trim();
 }
