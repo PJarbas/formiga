@@ -27,6 +27,8 @@ export type VisualStatus = "todo" | "running" | "done" | "failed";
 export interface KanbanCard {
   /** Card identifier shown in the chip (story_id for stories, step_id for steps). */
   id: string;
+  /** Agent persona name (e.g. "data-analyst", "feature-engineer"). */
+  agentName: string;
   /** Card body title. */
   title: string;
   /** Collapsed visual status. */
@@ -418,6 +420,7 @@ function _buildSnapshotFromRows(
         }
         return {
           id: story.story_id,
+          agentName: agent,
           title: story.title,
           status: cardStatus,
           sub: storyCardSub(story),
@@ -426,6 +429,7 @@ function _buildSnapshotFromRows(
     } else {
       cards = [{
         id: step.step_id,
+        agentName: agent,
         title: `${label} step`,
         status: normaliseStatus(step.status),
         sub: stepCardSub(step),
