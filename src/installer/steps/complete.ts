@@ -1,4 +1,4 @@
-import { getDb } from "../../db.js";
+import { getDb, getPrisma } from "../../db.js";
 import { emitEvent } from "../events.js";
 import { logger } from "../../lib/logger.js";
 import type { LoopConfig } from "../types.js";
@@ -180,34 +180,30 @@ export function completeStep(stepId: string, output: string): { status: string; 
 
   // After leaderboard ingest, if this is the critic step, parse audit verdicts
   if (step.agent_id === "ml-critic") {
-    try {
-      const repo = new LeaderboardRepositoryImpl(db);
-
-      // 1. Apply rejections from critic output
-      const result = processCriticOutput(output, repo);
-
-      // 2. Auto-audit every remaining SUCCESS experiment for this run
-      const successRows = db
-        .prepare(
-          "SELECT experiment_id FROM experiments WHERE run_id = ? AND status = 'SUCCESS'",
-        )
-        .all(runId) as Array<{ experiment_id: number }>;
-      for (const row of successRows) {
-        repo.autoAudit(row.experiment_id);
+    // Fire-and-forget async audit since the outer orchestration path is sync
+    (async () => {
+      try {
+        const repo = new LeaderboardRepositoryImpl();
+        const result = await processCriticOutput(output, repo);
+        const successRows = await getPrisma().experiment.findMany({
+          where: { run_id: runId, status: "SUCCESS" },
+          select: { experiment_id: true },
+        });
+        for (const row of successRows) {
+          await repo.autoAudit(row.experiment_id);
+        }
+        logger.info("Critic audit processed", {
+          runId,
+          rejected: result.rejected,
+          audited: successRows.length,
+        });
+      } catch (err) {
+        logger.warn("Critic audit processing failed", {
+          runId,
+          error: (err as Error).message,
+        });
       }
-      result.audited = successRows.length;
-
-      logger.info("Critic audit processed", {
-        runId,
-        rejected: result.rejected,
-        audited: result.audited,
-      });
-    } catch (err) {
-      logger.warn("Critic audit processing failed", {
-        runId,
-        error: (err as Error).message,
-      });
-    }
+    })();
   }
 
   // Parse STORIES_JSON from output (any step, typically the planner)

@@ -1,13 +1,9 @@
 // ══════════════════════════════════════════════════════════════════════
 // pipeline-status.ts — Unified pipeline status helpers
-//
-// These helpers query the canonical source-of-truth (`steps` table) first,
-// then enrich with `experiments` data.  This prevents the visual "idle"
-// state when an agent is actually running but hasn't submitted an experiment
-// to the leaderboard yet.
+// MIGRATED TO PRISMA — no raw SQL
 // ══════════════════════════════════════════════════════════════════════
 
-import type { DatabaseSync } from "node:sqlite";
+import { getPrisma } from "../database/prisma.js";
 
 /** Unified status label used by the dashboard. */
 export type DashboardAgentStatus =
@@ -50,44 +46,48 @@ const AGENT_STEP_MAP: Record<string, string> = {
   "ml-critic": "audit",
 };
 
-// ── Low-level queries ─────────────────────────────────────────────────
+// ── Low-level queries ───────────────────────────────────────────────────────
 
-function getStepStatus(
-  db: DatabaseSync,
+async function getStepStatus(
   runId: string,
   stepId: string,
-): { status: string; updated_at: string } | null {
-  const row = db
-    .prepare(
-      "SELECT status, updated_at FROM steps WHERE run_id = ? AND step_id = ? LIMIT 1",
-    )
-    .get(runId, stepId) as {
-      status: string;
-      updated_at: string;
-    } | undefined;
-  return row ?? null;
+): Promise<{ status: string; updated_at: Date | null } | null> {
+  const prisma = getPrisma();
+  const row = await prisma.step.findFirst({
+    where: { run_id: runId, step_id: stepId },
+    select: { status: true, updated_at: true },
+  });
+  return row
+    ? { status: row.status.toString(), updated_at: row.updated_at }
+    : null;
 }
 
-function getLatestExperiment(
-  db: DatabaseSync,
+async function getLatestExperiment(
   runId: string,
   agentName: string,
   roundNumber?: number,
 ) {
-  let sql =
-    "SELECT status, val_metric, error_message FROM experiments WHERE run_id = ? AND agent_name = ?";
-  const params: (string | number)[] = [runId, agentName];
+  const prisma = getPrisma();
+  const where: {
+    run_id: string;
+    agent_name: string;
+    round_number?: number;
+  } = { run_id: runId, agent_name: agentName };
   if (typeof roundNumber === "number") {
-    sql += " AND round_number = ?";
-    params.push(roundNumber);
+    where.round_number = roundNumber;
   }
-  sql += " ORDER BY experiment_id DESC LIMIT 1";
-  return db.prepare(sql).get(...params) as
-    | { status: string; val_metric: number; error_message: string | null }
-    | undefined;
+  return prisma.experiment.findFirst({
+    where,
+    orderBy: { experiment_id: "desc" },
+    select: {
+      status: true,
+      val_metric: true,
+      error_message: true,
+    },
+  });
 }
 
-// ── Public API ────────────────────────────────────────────────────────
+// ── Public API ─────────────────────────────────────────────────────────────
 
 /**
  * Resolve the dashboard-visible status for a single agent in a run.
@@ -98,16 +98,16 @@ function getLatestExperiment(
  *
  * This guarantees "idle" is never returned while a step is `running`.
  */
-export function getAgentUnifiedStatus(
-  db: DatabaseSync,
+export async function getAgentUnifiedStatus(
   runId: string,
   agentName: string,
   roundNumber?: number,
-): UnifiedAgentStatus {
+): Promise<UnifiedAgentStatus> {
   const stepId = AGENT_STEP_MAP[agentName];
-  const step = stepId ? getStepStatus(db, runId, stepId) : null;
-
-  const exp = getLatestExperiment(db, runId, agentName, roundNumber);
+  const [step, exp] = await Promise.all([
+    stepId ? getStepStatus(runId, stepId) : Promise.resolve(null),
+    getLatestExperiment(runId, agentName, roundNumber),
+  ]);
 
   if (exp) {
     const s = exp.status;
@@ -122,7 +122,7 @@ export function getAgentUnifiedStatus(
     return {
       status,
       stepStatus: step?.status ?? null,
-      experimentStatus: s,
+      experimentStatus: s.toString(),
       hasExperiment: true,
       valMetric: exp.val_metric ?? null,
       errorMessage: exp.error_message ?? null,
@@ -169,24 +169,25 @@ export function getAgentUnifiedStatus(
  *   2. Fallback to the `steps` table for early stages before any
  *      experiment exists.
  */
-export function getCurrentPhase(
-  db: DatabaseSync,
-  runId: string,
-): string {
+export async function getCurrentPhase(runId: string): Promise<string> {
+  const prisma = getPrisma();
+
   // Step 1: experiments are the preferred source when they exist
-  const maxRoundRow = db
-    .prepare("SELECT MAX(round_number) AS max_round FROM experiments WHERE run_id = ?")
-    .get(runId) as { max_round: number | null } | undefined;
+  const maxAgg = await prisma.experiment.aggregate({
+    where: { run_id: runId },
+    _max: { round_number: true },
+  });
+  const currentRound = maxAgg._max.round_number ?? 0;
 
-  const currentRound = maxRoundRow?.max_round ?? 0;
-
-  const agentNames = new Set<string>();
-  const expAgents = db
-    .prepare(
-      "SELECT DISTINCT agent_name FROM experiments WHERE run_id = ? AND round_number = ?",
-    )
-    .all(runId, currentRound) as Array<{ agent_name: string }>;
-  for (const a of expAgents) agentNames.add(a.agent_name);
+  const expAgents = await prisma.experiment.findMany({
+    where: {
+      run_id: runId,
+      round_number: currentRound,
+    },
+    distinct: ["agent_name"],
+    select: { agent_name: true },
+  });
+  const agentNames = new Set(expAgents.map((a) => a.agent_name));
 
   if (agentNames.has("ml-critic")) return "audit";
   if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) return "modeling";
@@ -195,11 +196,12 @@ export function getCurrentPhase(
   if (agentNames.size > 0) return "complete";
 
   // Step 2: no experiments yet — read from steps
-  const steps = db
-    .prepare("SELECT step_id, status FROM steps WHERE run_id = ?")
-    .all(runId) as Array<{ step_id: string; status: string }>;
+  const steps = await prisma.step.findMany({
+    where: { run_id: runId },
+    select: { step_id: true, status: true },
+  });
   const stepStatus: Record<string, string> = {};
-  for (const s of steps) stepStatus[s.step_id] = s.status;
+  for (const s of steps) stepStatus[s.step_id] = s.status.toString();
 
   if (
     stepStatus["audit"] === "running" ||
@@ -227,13 +229,16 @@ export function getCurrentPhase(
  * Return the most-recently-started run that is still `running` or `paused`.
  * Uses the `runs` table directly (the canonical source of truth).
  */
-export function findActivePipelineRunId(db: DatabaseSync): string | null {
+export async function findActivePipelineRunId(): Promise<string | null> {
   try {
-    const row = db
-      .prepare(
-        "SELECT id FROM runs WHERE status IN ('running', 'paused') ORDER BY created_at DESC LIMIT 1",
-      )
-      .get() as { id: string } | undefined;
+    const prisma = getPrisma();
+    const row = await prisma.run.findFirst({
+      where: {
+        status: { in: ["running", "paused"] },
+      },
+      orderBy: { created_at: "desc" },
+      select: { id: true },
+    });
     return row?.id ?? null;
   } catch {
     return null;
@@ -245,32 +250,32 @@ export function findActivePipelineRunId(db: DatabaseSync): string | null {
  * Each row from `experiments` becomes one round entry.
  * Falls back to an empty list when the agent hasn't produced experiments yet.
  */
-export function getAgentRoundSummaries(
-  db: DatabaseSync,
+export async function getAgentRoundSummaries(
   runId: string,
   agentName: string,
-): Array<{
-  roundNumber: number;
-  status: string;
-  cvMean: number | null;
-  modelType: string | null;
-}> {
-  const rows = db
-    .prepare(
-      `SELECT round_number, status, val_metric, model_type
-       FROM experiments WHERE run_id = ? AND agent_name = ?
-       ORDER BY round_number ASC`,
-    )
-    .all(runId, agentName) as Array<{
-      round_number: number;
-      status: string;
-      val_metric: number;
-      model_type: string;
-    }>;
+): Promise<
+  Array<{
+    roundNumber: number;
+    status: string;
+    cvMean: number | null;
+    modelType: string | null;
+  }>
+> {
+  const prisma = getPrisma();
+  const rows = await prisma.experiment.findMany({
+    where: { run_id: runId, agent_name: agentName },
+    orderBy: { round_number: "asc" },
+    select: {
+      round_number: true,
+      status: true,
+      val_metric: true,
+      model_type: true,
+    },
+  });
 
   return rows.map((r) => ({
     roundNumber: r.round_number,
-    status: r.status,
+    status: r.status.toString(),
     cvMean: r.val_metric ?? null,
     modelType: r.model_type ?? null,
   }));

@@ -5,6 +5,8 @@ export {
   resetPrisma,
   disconnectPrisma,
   initDatabase,
+  getDb,
+  getDbPath,
   nextRunNumber,
   getSystemTokenSpend,
   incrementSystemTokenSpend,

@@ -17,10 +17,15 @@ function resolveDbUrl(): string {
   return `file:${dbPath}`;
 }
 
+function ensureEnvDbUrl(): void {
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = resolveDbUrl();
+  }
+}
+
 function createPrismaClient(): PrismaClient {
-  const url = resolveDbUrl();
+  ensureEnvDbUrl();
   return new PrismaClient({
-    datasourceUrl: url,
     log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
   });
 }
