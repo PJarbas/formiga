@@ -5,7 +5,6 @@
 // Powered by GET /api/command-center (3s poll inside useCommandCenter).
 // ══════════════════════════════════════════════════════════════════════
 
-import { useState } from "react";
 import {
   useCommandCenter,
   useSpecActions,
@@ -14,6 +13,7 @@ import { PipelineStepper } from "../components/PipelineStepper";
 import { StatusCard } from "../components/StatusCard";
 import { ActionBar } from "../components/ActionBar";
 import { Sparkline } from "../components/Sparkline";
+import { addToast } from "../components/Toast";
 import { useHumanStatus } from "../hooks/useHumanStatus";
 import { getStatusConfig } from "../lib/status-config";
 import type { Action, PendingDecision } from "@shared/dashboard-types";
@@ -36,7 +36,6 @@ export default function CommandCenter() {
   const { data, isLoading, error } = useCommandCenter();
   const { approve: approveSpec, reject: rejectSpec } = useSpecActions();
   const humanStatus = useHumanStatus();
-  const [toast, setToast] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -71,15 +70,14 @@ export default function CommandCenter() {
   }
 
   function dispatchDecision(d: PendingDecision, actionId: string) {
-    setToast(null);
     if (d.type === "spec_approval") {
       const specId = d.id.startsWith("spec:") ? d.id.slice(5) : d.id;
       if (actionId.startsWith("approve")) {
         approveSpec.mutate(
           { specId },
           {
-            onSuccess: () => setToast(`Approved ${specId}`),
-            onError: (e) => setToast(`Approve failed: ${(e as Error).message}`),
+            onSuccess: () => addToast("success", `Approved ${specId}`),
+            onError: (e) => addToast("error", `Approve failed: ${(e as Error).message}`),
           },
         );
       } else if (actionId.startsWith("reject")) {
@@ -87,20 +85,20 @@ export default function CommandCenter() {
         rejectSpec.mutate(
           { specId, reason },
           {
-            onSuccess: () => setToast(`Rejected ${specId}`),
-            onError: (e) => setToast(`Reject failed: ${(e as Error).message}`),
+            onSuccess: () => addToast("success", `Rejected ${specId}`),
+            onError: (e) => addToast("error", `Reject failed: ${(e as Error).message}`),
           },
         );
       } else {
-        setToast(`"${actionId}" not yet wired`);
+        addToast("info", `"${actionId}" not yet wired`);
       }
       return;
     }
     if (d.type === "overfitting_warning") {
-      setToast(`"${actionId}" not yet wired`);
+      addToast("info", `"${actionId}" not yet wired`);
       return;
     }
-    setToast(`"${actionId}" not yet wired`);
+    addToast("info", `"${actionId}" not yet wired`);
   }
 
   const { run, phases, pendingDecisions, bestModel, bestModelTrend, agentStrip, quickStats } = data;
@@ -118,15 +116,6 @@ export default function CommandCenter() {
           updatedAt={run.updatedAt}
           currentAgent={runningAgent?.name}
         />
-      )}
-
-      {toast && (
-        <div
-          data-testid="cc-toast"
-          className="text-xs text-[var(--text-secondary)] bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded px-3 py-1.5"
-        >
-          {toast}
-        </div>
       )}
 
       {/* Stepper */}
@@ -219,7 +208,7 @@ export default function CommandCenter() {
                 { id: "compare", label: "Compare" },
               ]}
               onAction={(actionId) => {
-                setToast(`"${actionId}" not yet wired`);
+                addToast("info", `"${actionId}" not yet wired`);
               }}
             />
           </div>
