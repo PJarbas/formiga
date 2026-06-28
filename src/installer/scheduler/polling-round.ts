@@ -244,7 +244,7 @@ async function attributePollingRoundTokenUsage(
   if (outputSummary.outcome === "heartbeat") {
     try {
 
-      const newSystemTotal = incrementSystemTokenSpend(metadata.tokenUsage);
+      const newSystemTotal = await incrementSystemTokenSpend(metadata.tokenUsage);
       emitEvent({
         ts: new Date().toISOString(),
         event: "system.tokens.updated",
@@ -283,7 +283,7 @@ async function attributePollingRoundTokenUsage(
     // Attribute to system spend instead of silently discarding.
     try {
 
-      const newSystemTotal = incrementSystemTokenSpend(metadata.tokenUsage);
+      const newSystemTotal = await incrementSystemTokenSpend(metadata.tokenUsage);
 
       emitEvent({
         ts: new Date().toISOString(),

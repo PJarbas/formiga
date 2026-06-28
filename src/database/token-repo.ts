@@ -1,26 +1,33 @@
-import { getDb } from "./connection.js";
+// ══════════════════════════════════════════════════════════════════════
+// token-repo.ts — Global accounting helpers
+// MIGRATED TO PRISMA — no raw SQL
+// ══════════════════════════════════════════════════════════════════════
 
-export function nextRunNumber(): number {
-  const db = getDb();
-  const row = db.prepare("SELECT COALESCE(MAX(run_number), 0) + 1 AS next FROM runs").get() as { next: number };
-  return row.next;
+import { getPrisma } from "./prisma.js";
+
+export async function nextRunNumber(): Promise<number> {
+  const prisma = getPrisma();
+  const agg = await prisma.run.aggregate({
+    _max: { run_number: true },
+  });
+  return (agg._max.run_number ?? 0) + 1;
 }
 
-export function getSystemTokenSpend(): number {
-  const db = getDb();
-  const row = db.prepare(
-    "SELECT system_tokens_spent FROM formiga_stats WHERE id = 1",
-  ).get() as { system_tokens_spent: number } | undefined;
-  return row?.system_tokens_spent ?? 0;
+export async function getSystemTokenSpend(): Promise<number> {
+  const prisma = getPrisma();
+  const stat = await prisma.formigaStat.findUnique({
+    where: { id: 1 },
+    select: { system_tokens_spent: true },
+  });
+  return stat?.system_tokens_spent ?? 0;
 }
 
-export function incrementSystemTokenSpend(amount: number): number {
-  const db = getDb();
-  const row = db.prepare(`
-    UPDATE formiga_stats
-    SET system_tokens_spent = system_tokens_spent + ?
-    WHERE id = 1
-    RETURNING system_tokens_spent
-  `).get(amount) as { system_tokens_spent: number } | undefined;
-  return row?.system_tokens_spent ?? 0;
+export async function incrementSystemTokenSpend(amount: number): Promise<number> {
+  const prisma = getPrisma();
+  const updated = await prisma.formigaStat.update({
+    where: { id: 1 },
+    data: { system_tokens_spent: { increment: amount } },
+    select: { system_tokens_spent: true },
+  });
+  return updated.system_tokens_spent;
 }

@@ -1,18 +1,10 @@
 // ══════════════════════════════════════════════════════════════════════
 // ingest.ts — Bridge from step output (KEY: value protocol) → leaderboard
+// MIGRATED TO PRISMA — no raw SQL, no getDb() dependency
 // ══════════════════════════════════════════════════════════════════════
-//
-// When an ML pipeline step completes, the scheduler parses the agent's
-// STATUS-line protocol (e.g. CV_MEAN, MODEL_TYPE, ARTIFACT_PATH …) into a
-// flat string→string map. This module converts that map into a
-// NewExperiment and registers it with the leaderboard.
-//
-// Only steps whose agent_id ends in one of the ML modeler/baseline agent
-// ids contribute experiments; other steps (eda, audit) are skipped.
 
 import fs from "node:fs";
 import path from "node:path";
-import { getDb } from "../db.js";
 import { LeaderboardRepositoryImpl } from "./repository.js";
 import type { NewExperiment } from "./repository.js";
 import { logger } from "../lib/logger.js";
@@ -128,14 +120,17 @@ export interface IngestResult {
  * Map a parsed KEY:value record to a NewExperiment and register it.
  * Returns the new experiment_id, or null with a reason if the entry was
  * skipped (e.g., wrong agent, missing required fields).
+ *
+ * NOTE: now async because it goes through Prisma. Callers should `.catch()`
+ * if they cannot await (e.g. synchronous step-completion paths).
  */
-export function ingestStepOutput(params: {
+export async function ingestStepOutput(params: {
   agentId: string;
   runId: string;
   parsedKv: Record<string, string>;
   roundNumber?: number;
   workspace?: string;
-}): IngestResult {
+}): Promise<IngestResult> {
   const { agentId, runId } = params;
   const roundNumber = params.roundNumber ?? 1;
 
@@ -187,8 +182,8 @@ export function ingestStepOutput(params: {
   };
 
   try {
-    const repo = new LeaderboardRepositoryImpl(getDb());
-    const experimentId = repo.register(entry);
+    const repo = new LeaderboardRepositoryImpl();
+    const experimentId = await repo.register(entry);
     logger.info("Leaderboard experiment registered", {
       runId,
       agentId,

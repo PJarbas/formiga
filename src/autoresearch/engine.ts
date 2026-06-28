@@ -73,7 +73,7 @@ export class FormigaEngine {
     }
 
     // Collect best result
-    const best = this.repository.getBestByMetric(runId, 1);
+    const best = await this.repository.getBestByMetric(runId, 1);
     const bestModel = best[0] ?? null;
 
     return {

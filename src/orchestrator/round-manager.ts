@@ -99,7 +99,7 @@ export class RoundManager {
       timedOut: mr.timedOut,
     }));
 
-    const fanIn = collectAndRegister(allFanOut, this.repository, config.runId, config.roundNumber);
+    const fanIn = await collectAndRegister(allFanOut, this.repository, config.runId, config.roundNumber);
 
     return this.buildResult(config, phaseResults, fanIn.registered, fanIn.failed);
   }

@@ -1,8 +1,10 @@
 // Thin re-export shim. The implementation lives in ./database/.
 // Existing callers can keep `import ... from "./db.js"` without churn.
 export {
-  getDb,
-  getDbPath,
+  getPrisma,
+  resetPrisma,
+  disconnectPrisma,
+  initDatabase,
   nextRunNumber,
   getSystemTokenSpend,
   incrementSystemTokenSpend,

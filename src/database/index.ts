@@ -1,4 +1,13 @@
-export { getDb, getDbPath } from "./connection.js";
+// ══════════════════════════════════════════════════════════════════════
+// database/index.ts — Main database entrypoint
+// Exports Prisma-based helpers (migrated from raw SQLite)
+// ══════════════════════════════════════════════════════════════════════
+
+// Prisma client singleton and initializer
+export { getPrisma, resetPrisma, disconnectPrisma } from "./prisma.js";
+export { initDatabase } from "./init.js";
+
+// Legacy compat exports — now return Promises (callers must await)
 export { nextRunNumber, getSystemTokenSpend, incrementSystemTokenSpend } from "./token-repo.js";
 export {
   upsertAutoresearchSession,
