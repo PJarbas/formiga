@@ -249,6 +249,29 @@ export function isRunning(opts?: DaemonctlPathOptions): { running: true; pid: nu
 }
 
 /**
+ * Check if the daemon is healthy by verifying the control plane responds.
+ * Returns true only if the daemon PID is alive AND the control plane is reachable.
+ */
+export async function isDaemonHealthy(opts?: DaemonctlPathOptions): Promise<boolean> {
+  const status = isRunning(opts);
+  if (!status.running) return false;
+
+  try {
+    const controlPort = parseInt(
+      process.env.FORMIGA_CONTROL_PORT || String(DEFAULT_CONTROL_PORT),
+      10,
+    );
+    const res = await fetch(
+      `http://127.0.0.1:${controlPort}/control/health`,
+      { signal: AbortSignal.timeout(5000) },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get daemon status (dashboard only — control plane is independently managed).
  */
 export function getDaemonStatus(opts?: DaemonctlPathOptions): { running: false; pid: null; port: number } | { running: true; pid: number; port: number } {
@@ -308,15 +331,35 @@ export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ p
 
   const status = checkPidFile(pidFile);
   if (status.running) {
-    let existingPort = port;
-    try {
-      const raw = fs.readFileSync(portFile, "utf-8").trim();
-      const p = parseInt(raw, 10);
-      if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
-    } catch {
-      // File missing or unreadable — use the requested port
+    // Check if the existing daemon is actually healthy (not a zombie).
+    const healthy = await isDaemonHealthy(opts);
+    if (healthy) {
+      let existingPort = port;
+      try {
+        const raw = fs.readFileSync(portFile, "utf-8").trim();
+        const p = parseInt(raw, 10);
+        if (!isNaN(p) && p > 0 && p < 65536) existingPort = p;
+      } catch {
+        // File missing or unreadable — use the requested port
+      }
+      return { pid: status.pid, port: existingPort };
     }
-    return { pid: status.pid, port: existingPort };
+
+    // Daemon PID exists but is unresponsive — kill the zombie.
+    console.warn(
+      `[daemonctl] Daemon PID ${status.pid} is unresponsive — killing zombie process.`,
+    );
+    try {
+      process.kill(status.pid, "SIGKILL");
+    } catch {
+      // Process may have already exited
+    }
+    await sleep(1000);
+    try {
+      fs.unlinkSync(pidFile);
+    } catch {
+      // Best effort
+    }
   }
 
   fs.mkdirSync(formigaDir, { recursive: true });

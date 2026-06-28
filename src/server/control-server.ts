@@ -895,6 +895,53 @@ export function startReconciler(): { stop: () => void } {
         }
       }
 
+      // Detect orphaned steps: "running" with a dead claim_pid.
+      // This catches cases where the daemon crashed or pi was killed externally.
+      const ORPHAN_STEP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+      const orphanCutoff = new Date(Date.now() - ORPHAN_STEP_THRESHOLD_MS);
+      const orphanedSteps = await prisma.step.findMany({
+        where: {
+          status: "running",
+          claim_pid: { not: null },
+          updated_at: { lt: orphanCutoff },
+          run: { status: "running" },
+        },
+        select: {
+          id: true,
+          step_id: true,
+          agent_id: true,
+          run_id: true,
+          claim_pid: true,
+        },
+      });
+
+      for (const step of orphanedSteps) {
+        if (!step.claim_pid) continue;
+        // Check if the claiming process is still alive.
+        let alive = false;
+        try {
+          process.kill(step.claim_pid, 0);
+          alive = true;
+        } catch {
+          // Process is dead
+        }
+        if (!alive) {
+          logger.warn(
+            `control-server: step ${step.step_id} (agent ${step.agent_id}, run ${step.run_id.slice(0, 8)}) has dead claim_pid ${step.claim_pid} — resetting to pending`,
+          );
+          await prisma.step.update({
+            where: { id: step.id },
+            data: {
+              status: "pending",
+              claim_pid: null,
+              claim_job_id: null,
+              claim_pgid: null,
+              claim_updated_at: null,
+            },
+          });
+        }
+      }
+
       await admitQueuedRuns();
     } catch (err) {
       logger.warn("control-server: reconciler tick failed", { error: String(err) });

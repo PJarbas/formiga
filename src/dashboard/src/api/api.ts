@@ -60,7 +60,12 @@ export function useAgentDetail(agentName: string | undefined) {
   });
 }
 
-export function useAgentLogs(agentName: string | undefined, offset = 0, limit = 50) {
+export function useAgentLogs(
+  agentName: string | undefined,
+  offset = 0,
+  limit = 50,
+  opts?: { refetchInterval?: number | false },
+) {
   return useQuery({
     queryKey: ["agents", agentName, "logs", offset, limit],
     queryFn: () =>
@@ -68,6 +73,7 @@ export function useAgentLogs(agentName: string | undefined, offset = 0, limit = 
         `${BASE}/agents/${encodeURIComponent(agentName ?? "")}/logs?offset=${offset}&limit=${limit}`,
       ),
     enabled: !!agentName,
+    refetchInterval: opts?.refetchInterval,
   });
 }
 
@@ -257,7 +263,11 @@ export function useChecklistMutation(runId: string, phase: string) {
 
 // ── Trace ───────────────────────────────────────────────────────────
 
-export function useTrace(agentName: string | undefined, roundNumber: number | undefined) {
+export function useTrace(
+  agentName: string | undefined,
+  roundNumber: number | undefined,
+  opts?: { refetchInterval?: number | false },
+) {
   return useQuery({
     queryKey: ["trace", agentName, roundNumber],
     queryFn: () =>
@@ -265,6 +275,7 @@ export function useTrace(agentName: string | undefined, roundNumber: number | un
         `${BASE}/trace/${encodeURIComponent(agentName ?? "")}/${roundNumber ?? 0}`,
       ),
     enabled: !!agentName && roundNumber !== undefined,
+    refetchInterval: opts?.refetchInterval,
   });
 }
 

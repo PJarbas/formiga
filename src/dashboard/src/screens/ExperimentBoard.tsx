@@ -198,6 +198,12 @@ export default function ExperimentBoard() {
   }
 
   function dispatch(card: MLKanbanCard, actionId: string) {
+    // "details" selects the card to open the detail panel.
+    if (actionId === "details") {
+      setSelectedCardId(card.id);
+      return;
+    }
+
     const kind = cardKind(card);
     if (kind === "spec") {
       const specId = `${runId}:${AGENT_INFO_REGISTRY[card.agentName]?.stepId ?? card.agentName}`;
@@ -209,8 +215,6 @@ export default function ExperimentBoard() {
         specDispatch.reject(specId);
         return;
       }
-      addToast("info", `"${actionId}" not yet wired`);
-      return;
     }
     addToast("info", `"${actionId}" not yet wired`);
   }
