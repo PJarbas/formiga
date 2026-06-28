@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
-import { getDb } from "../../db.js";
+import { getPrisma } from "../../db.js";
 import { emitEvent } from "../events.js";
 import { logger } from "../../lib/logger.js";
 import type { Story } from "../types.js";
@@ -29,19 +29,22 @@ export function getAgentWorkspacePath(agentId: string): string | null {
   }
 }
 
-function runHasStories(runId: string): boolean {
-  const db = getDb();
-  const total = db.prepare(
-    "SELECT COUNT(*) as cnt FROM stories WHERE run_id = ?"
-  ).get(runId) as { cnt: number } | undefined;
-  return (total?.cnt ?? 0) > 0;
+async function runHasStories(runId: string): Promise<boolean> {
+  const prisma = getPrisma();
+  const count = await prisma.story.count({
+    where: { run_id: runId },
+  });
+  return count > 0;
 }
 
-function getWorkflowId(runId: string): string | undefined {
+async function getWorkflowId(runId: string): Promise<string | undefined> {
   try {
-    const db = getDb();
-    const row = db.prepare("SELECT workflow_id FROM runs WHERE id = ?").get(runId) as { workflow_id: string } | undefined;
-    return row?.workflow_id;
+    const prisma = getPrisma();
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { workflow_id: true },
+    });
+    return run?.workflow_id;
   } catch {
     return undefined;
   }
@@ -54,11 +57,12 @@ function getWorkflowId(runId: string): string | undefined {
 /**
  * Read progress.txt from the loop step's agent workspace.
  */
-export function readProgressFile(runId: string): string {
-  const db = getDb();
-  const loopStep = db.prepare(
-    "SELECT agent_id FROM steps WHERE run_id = ? AND type = 'loop' LIMIT 1"
-  ).get(runId) as { agent_id: string } | undefined;
+export async function readProgressFile(runId: string): Promise<string> {
+  const prisma = getPrisma();
+  const loopStep = await prisma.step.findFirst({
+    where: { run_id: runId, type: "loop" },
+    select: { agent_id: true },
+  });
   if (!loopStep) return "(no progress file)";
   const workspace = getAgentWorkspacePath(loopStep.agent_id);
   if (!workspace) return "(no progress file)";
@@ -131,14 +135,15 @@ export function mergeStoryPlanIntoProgress(existingContent: string, storyPlanSec
  * section in progress-{runId}.txt, preserving any existing Codebase Patterns or
  * other sections. Emits a 'stories.planned' event on success.
  */
-export function writeStoryPlanToProgress(runId: string): void {
-  if (!runHasStories(runId)) return;
+export async function writeStoryPlanToProgress(runId: string): Promise<void> {
+  if (!(await runHasStories(runId))) return;
 
   try {
-    const db = getDb();
-    const loopStep = db.prepare(
-      "SELECT agent_id FROM steps WHERE run_id = ? AND type = 'loop' LIMIT 1"
-    ).get(runId) as { agent_id: string } | undefined;
+    const prisma = getPrisma();
+    const loopStep = await prisma.step.findFirst({
+      where: { run_id: runId, type: "loop" },
+      select: { agent_id: true },
+    });
 
     if (!loopStep) {
       logger.warn("writeStoryPlanToProgress: no loop step found for run", { runId });
@@ -151,7 +156,7 @@ export function writeStoryPlanToProgress(runId: string): void {
       return;
     }
 
-    const stories = getStories(runId);
+    const stories = await getStories(runId);
     if (stories.length === 0) return;
 
     const storyPlanSection = buildStoryPlanSection(stories);
@@ -170,7 +175,7 @@ export function writeStoryPlanToProgress(runId: string): void {
     fs.mkdirSync(path.dirname(scopedPath), { recursive: true });
     fs.writeFileSync(scopedPath, newContent, "utf-8");
 
-    const wfId = getWorkflowId(runId);
+    const wfId = await getWorkflowId(runId);
     emitEvent({
       ts: new Date().toISOString(),
       event: "stories.planned",
@@ -195,11 +200,12 @@ export function writeStoryPlanToProgress(runId: string): void {
 /**
  * Get all stories for a run, ordered by story_index.
  */
-export function getStories(runId: string): Story[] {
-  const db = getDb();
-  const rows = db.prepare(
-    "SELECT * FROM stories WHERE run_id = ? ORDER BY story_index ASC"
-  ).all(runId) as any[];
+export async function getStories(runId: string): Promise<Story[]> {
+  const prisma = getPrisma();
+  const rows = await prisma.story.findMany({
+    where: { run_id: runId },
+    orderBy: { story_index: "asc" },
+  });
   return rows.map((r) => ({
     id: r.id,
     runId: r.run_id,
@@ -208,7 +214,7 @@ export function getStories(runId: string): Story[] {
     title: r.title,
     description: r.description,
     acceptanceCriteria: JSON.parse(r.acceptance_criteria),
-    status: r.status,
+    status: r.status as Story["status"],
     output: r.output ?? undefined,
     retryCount: r.retry_count,
     maxRetries: r.max_retries,
@@ -218,13 +224,16 @@ export function getStories(runId: string): Story[] {
 /**
  * Get the story currently being worked on by a loop step.
  */
-export function getCurrentStory(stepId: string): Story | null {
-  const db = getDb();
-  const step = db.prepare(
-    "SELECT current_story_id FROM steps WHERE id = ?"
-  ).get(stepId) as { current_story_id: string | null } | undefined;
+export async function getCurrentStory(stepId: string): Promise<Story | null> {
+  const prisma = getPrisma();
+  const step = await prisma.step.findUnique({
+    where: { id: stepId },
+    select: { current_story_id: true },
+  });
   if (!step?.current_story_id) return null;
-  const row = db.prepare("SELECT * FROM stories WHERE id = ?").get(step.current_story_id) as any;
+  const row = await prisma.story.findUnique({
+    where: { id: step.current_story_id },
+  });
   if (!row) return null;
   return {
     id: row.id,
@@ -234,7 +243,7 @@ export function getCurrentStory(stepId: string): Story | null {
     title: row.title,
     description: row.description,
     acceptanceCriteria: JSON.parse(row.acceptance_criteria),
-    status: row.status,
+    status: row.status as Story["status"],
     output: row.output ?? undefined,
     retryCount: row.retry_count,
     maxRetries: row.max_retries,
@@ -265,7 +274,7 @@ export function formatCompletedStories(stories: Story[]): string {
 /**
  * Parse STORIES_JSON from step output and insert stories into the DB.
  */
-export function parseAndInsertStories(output: string, runId: string): void {
+export async function parseAndInsertStories(output: string, runId: string): Promise<void> {
   const lines = output.split("\n");
   const startIdx = lines.findIndex((l) => l.startsWith("STORIES_JSON:"));
   if (startIdx === -1) return;
@@ -292,11 +301,8 @@ export function parseAndInsertStories(output: string, runId: string): void {
     throw new Error(`STORIES_JSON has ${stories.length} stories, max is 20`);
   }
 
-  const db = getDb();
-  const now = new Date().toISOString();
-  const insert = db.prepare(
-    "INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status, retry_count, max_retries, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, 4, ?, ?)"
-  );
+  const prisma = getPrisma();
+  const now = new Date();
 
   const seenIds = new Set<string>();
   for (let i = 0; i < stories.length; i++) {
@@ -309,6 +315,22 @@ export function parseAndInsertStories(output: string, runId: string): void {
       throw new Error(`STORIES_JSON has duplicate story id "${s.id}"`);
     }
     seenIds.add(s.id);
-    insert.run(crypto.randomUUID(), runId, i, s.id, s.title, s.description, JSON.stringify(ac), now, now);
+
+    await prisma.story.create({
+      data: {
+        id: crypto.randomUUID(),
+        run_id: runId,
+        story_index: i,
+        story_id: s.id,
+        title: s.title,
+        description: s.description,
+        acceptance_criteria: JSON.stringify(ac),
+        status: "pending",
+        retry_count: 0,
+        max_retries: 4,
+        created_at: now,
+        updated_at: now,
+      },
+    });
   }
 }

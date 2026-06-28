@@ -95,7 +95,7 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
             data: { status: "failed", updated_at: now },
           }),
         ]);
-        const wfId = getWorkflowId(step.run_id);
+        const wfId = await getWorkflowId(step.run_id);
         emitEvent({ ts: now.toISOString(), event: "story.failed", runId: step.run_id, workflowId: wfId, stepId, storyId: story.story_id, storyTitle: story.title, detail: error });
         emitEvent({ ts: now.toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId, detail: error });
         emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Story retries exhausted" });
@@ -146,7 +146,7 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
         data: { status: "failed", updated_at: now },
       }),
     ]);
-    const wfId2 = getWorkflowId(step.run_id);
+    const wfId2 = await getWorkflowId(step.run_id);
     emitEvent({ ts: now.toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId2, stepId, detail: error });
     emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId2, detail: "Step retries exhausted" });
     scheduleRunCronTeardown(step.run_id);

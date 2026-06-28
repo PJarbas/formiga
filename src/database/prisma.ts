@@ -4,28 +4,25 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { PrismaClient } from "@prisma/client";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 
-function resolveDbUrl(): string {
+function resolveDbPath(): string {
   const explicit = process.env.FORMIGA_DB_PATH?.trim();
   const dbPath = explicit
     ? path.resolve(explicit)
     : path.join(os.homedir(), ".formiga", "formiga.db");
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  return `file:${dbPath}`;
-}
-
-function ensureEnvDbUrl(): void {
-  if (!process.env.DATABASE_URL) {
-    process.env.DATABASE_URL = resolveDbUrl();
-  }
+  return dbPath;
 }
 
 function createPrismaClient(): PrismaClient {
-  ensureEnvDbUrl();
+  const dbPath = resolveDbPath();
+  const adapter = new PrismaBetterSqlite3({ url: dbPath });
   return new PrismaClient({
+    adapter,
     log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
   });
 }

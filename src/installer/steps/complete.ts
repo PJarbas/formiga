@@ -1,4 +1,4 @@
-import { getDb, getPrisma } from "../../db.js";
+import { getPrisma } from "../../db.js";
 import { emitEvent } from "../events.js";
 import { logger } from "../../lib/logger.js";
 import type { LoopConfig } from "../types.js";
@@ -90,62 +90,84 @@ function postAdvanceNudge(runId: string): void {
 /**
  * Complete a step: validate expects, save output, merge context, advance pipeline.
  */
-export function completeStep(stepId: string, output: string): { status: string; detail?: string } {
-  const db = getDb();
+export async function completeStep(stepId: string, output: string): Promise<{ status: string; detail?: string }> {
+  const prisma = getPrisma();
+  let now = new Date();
 
-  const step = db.prepare(
-    "SELECT id, run_id, step_id, agent_id, step_index, type, loop_config, current_story_id, expects, input_template FROM steps WHERE id = ?"
-  ).get(stepId) as {
-    id: string; run_id: string; step_id: string; agent_id: string; step_index: number; type: string;
-    loop_config: string | null; current_story_id: string | null; expects: string;
-    input_template: string | null;
-  } | undefined;
+  const step = await prisma.step.findUnique({
+    where: { id: stepId },
+  });
 
   if (!step) throw new Error(`Step not found: ${stepId}`);
 
   // Guard: don't process completions for failed runs
   const runId = step.run_id;
-  const runCheck = db.prepare("SELECT status FROM runs WHERE id = ?").get(runId) as { status: string } | undefined;
+  const runCheck = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { status: true },
+  });
   if (runCheck?.status === "failed" || runCheck?.status === "canceled") {
     return { status: "blocked" };
   }
 
   // Validate output against the expects column before accepting the step
-  const validationError = validateExpects(output, step.expects);
+  const validationError = validateExpects(output, step.expects ?? "");
   if (validationError) {
-    const meta = db.prepare(
-      "SELECT retry_count, max_retries FROM steps WHERE id = ?"
-    ).get(stepId) as { retry_count: number; max_retries: number } | undefined;
+    const meta = await prisma.step.findUnique({
+      where: { id: stepId },
+      select: { retry_count: true, max_retries: true },
+    });
     const newRetry = (meta?.retry_count ?? 0) + 1;
     const maxRetries = meta?.max_retries ?? 0;
-    const wfId = getWorkflowId(step.run_id);
+    const wfId = await getWorkflowId(step.run_id);
 
     if (newRetry > maxRetries) {
-      db.prepare(
-        "UPDATE steps SET status = 'failed', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
-      ).run(validationError, newRetry, stepId);
-      db.prepare(
-        "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
-      ).run(step.run_id);
+      const now = new Date();
+      await prisma.step.update({
+        where: { id: stepId },
+        data: {
+          status: "failed",
+          output: validationError,
+          retry_count: newRetry,
+          updated_at: now,
+        },
+      });
+      await prisma.run.update({
+        where: { id: step.run_id },
+        data: {
+          status: "failed",
+          updated_at: now,
+        },
+      });
       emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: validationError });
-      emitRunTerminalEvent({ event: "run.failed", runId, workflowId: wfId, detail: "Expects validation failed and retries exhausted" });
-      scheduleRunCronTeardown(runId);
-      finalizeDrainingPause(runId);
+      await emitRunTerminalEvent({ event: "run.failed", runId, workflowId: wfId, detail: "Expects validation failed and retries exhausted" });
+      await scheduleRunCronTeardown(runId);
+      await finalizeDrainingPause(runId);
       return { status: "failed" };
     }
 
-    db.prepare(
-      "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(validationError, newRetry, stepId);
+    const now = new Date();
+    await prisma.step.update({
+      where: { id: stepId },
+      data: {
+        status: "pending",
+        output: validationError,
+        retry_count: newRetry,
+        updated_at: now,
+      },
+    });
     emitEvent({ ts: new Date().toISOString(), event: "step.retry", runId, workflowId: wfId, stepId: step.step_id, detail: validationError });
     logger.warn(validationError, { runId, stepId: step.step_id });
-    finalizeDrainingPause(runId);
+    await finalizeDrainingPause(runId);
     return { status: "retrying", detail: validationError };
   }
 
   // Merge KEY: value lines into run context
-  const run = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string };
-  const context: Record<string, string> = JSON.parse(run.context);
+  const run = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { context: true },
+  });
+  const context: Record<string, string> = run?.context ? JSON.parse(run.context as string) : {};
 
   const parsed = parseOutputKeyValues(output);
   for (const [key, value] of Object.entries(parsed)) {
@@ -154,9 +176,14 @@ export function completeStep(stepId: string, output: string): { status: string; 
     }
   }
 
-  db.prepare(
-    "UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(JSON.stringify(context), runId);
+  now = new Date();
+  await prisma.run.update({
+    where: { id: runId },
+    data: {
+      context: JSON.stringify(context),
+      updated_at: now,
+    },
+  });
 
   // Leaderboard ingest hook — for ML modeler/baseline agents only.
   // Gated by agent suffix inside ingestStepOutput so non-ML steps no-op.
@@ -180,7 +207,7 @@ export function completeStep(stepId: string, output: string): { status: string; 
 
   // After leaderboard ingest, if this is the critic step, parse audit verdicts
   if (step.agent_id === "ml-critic") {
-    // Fire-and-forget async audit since the outer orchestration path is sync
+    // Fire-and-forget async audit since the outer orchestration path is async now
     (async () => {
       try {
         const repo = new LeaderboardRepositoryImpl();
@@ -207,10 +234,10 @@ export function completeStep(stepId: string, output: string): { status: string; 
   }
 
   // Parse STORIES_JSON from output (any step, typically the planner)
-  parseAndInsertStories(output, runId);
+  await parseAndInsertStories(output, runId);
 
   // Write story plan to progress log after STORIES_JSON is parsed
-  writeStoryPlanToProgress(runId);
+  await writeStoryPlanToProgress(runId);
 
   // Robustness: if a downstream loop-over-stories exists but no stories were
   // produced, force a retry. Story-producers (template mentions STORIES_JSON)
@@ -219,46 +246,78 @@ export function completeStep(stepId: string, output: string): { status: string; 
   // broken planner still escalates.
   if (step.type !== "loop") {
     const stepMentionsStories = step.input_template?.includes("STORIES_JSON");
-    let downstreamLoopExpectingStories = db.prepare(
-      "SELECT id, step_id, loop_config FROM steps WHERE run_id = ? AND step_index = ? AND type = 'loop'"
-    ).get(step.run_id, step.step_index + 1) as { id: string; step_id: string; loop_config: string | null } | undefined;
+    let downstreamLoopExpectingStories = await prisma.step.findFirst({
+      where: {
+        run_id: step.run_id,
+        step_index: step.step_index + 1,
+        type: "loop",
+      },
+      select: { id: true, step_id: true, loop_config: true },
+    });
     if (!downstreamLoopExpectingStories && stepMentionsStories) {
-      downstreamLoopExpectingStories = db.prepare(
-        "SELECT id, step_id, loop_config FROM steps WHERE run_id = ? AND step_index > ? AND type = 'loop' ORDER BY step_index ASC LIMIT 1"
-      ).get(step.run_id, step.step_index) as { id: string; step_id: string; loop_config: string | null } | undefined;
+      downstreamLoopExpectingStories = await prisma.step.findFirst({
+        where: {
+          run_id: step.run_id,
+          step_index: { gt: step.step_index },
+          type: "loop",
+        },
+        orderBy: { step_index: "asc" },
+        select: { id: true, step_id: true, loop_config: true },
+      });
     }
     if (downstreamLoopExpectingStories?.loop_config) {
       try {
         const lc = JSON.parse(downstreamLoopExpectingStories.loop_config) as LoopConfig;
-        const storiesCount = (db.prepare("SELECT COUNT(*) as cnt FROM stories WHERE run_id = ?").get(step.run_id) as { cnt: number } | undefined)?.cnt ?? 0;
+        const storiesCount = await prisma.story.count({
+          where: { run_id: step.run_id },
+        });
         if (lc.over === "stories" && storiesCount === 0) {
-          const meta = db.prepare(
-            "SELECT retry_count, max_retries FROM steps WHERE id = ?"
-          ).get(step.id) as { retry_count: number; max_retries: number } | undefined;
+          const meta = await prisma.step.findUnique({
+            where: { id: step.id },
+            select: { retry_count: true, max_retries: true },
+          });
           const newRetry = (meta?.retry_count ?? 0) + 1;
           const maxRetries = meta?.max_retries ?? 0;
           const errorDetail =
             `Step output had no STORIES_JSON block, but the next step (${downstreamLoopExpectingStories.step_id}) is a loop over stories. ` +
             `The agent must emit a literal "STORIES_JSON: [ ... ]" line with at least one story. Resetting to pending for retry ${newRetry}/${maxRetries}.`;
-          const wfId = getWorkflowId(step.run_id);
+          const wfId = await getWorkflowId(step.run_id);
           if (newRetry > maxRetries) {
-            db.prepare(
-              "UPDATE steps SET status = 'failed', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
-            ).run(errorDetail, newRetry, step.id);
-            db.prepare(
-              "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
-            ).run(step.run_id);
+            const now = new Date();
+            await prisma.step.update({
+              where: { id: step.id },
+              data: {
+                status: "failed",
+                output: errorDetail,
+                retry_count: newRetry,
+                updated_at: now,
+              },
+            });
+            await prisma.run.update({
+              where: { id: step.run_id },
+              data: {
+                status: "failed",
+                updated_at: now,
+              },
+            });
             emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: errorDetail });
-            emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Plan step never produced STORIES_JSON" });
-            scheduleRunCronTeardown(step.run_id);
-            finalizeDrainingPause(step.run_id);
+            await emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Plan step never produced STORIES_JSON" });
+            await scheduleRunCronTeardown(step.run_id);
+            await finalizeDrainingPause(step.run_id);
             return { status: "failed" };
           }
-          db.prepare(
-            "UPDATE steps SET status = 'pending', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
-          ).run(errorDetail, newRetry, step.id);
+          const now = new Date();
+          await prisma.step.update({
+            where: { id: step.id },
+            data: {
+              status: "pending",
+              output: errorDetail,
+              retry_count: newRetry,
+              updated_at: now,
+            },
+          });
           logger.warn(errorDetail, { runId: step.run_id, stepId: step.step_id });
-          finalizeDrainingPause(step.run_id);
+          await finalizeDrainingPause(step.run_id);
           return { status: "retrying", detail: errorDetail };
         }
       } catch {
@@ -269,19 +328,33 @@ export function completeStep(stepId: string, output: string): { status: string; 
 
   // Loop step completion
   if (step.type === "loop" && step.current_story_id) {
-    const storyRow = db.prepare("SELECT story_id, title FROM stories WHERE id = ?").get(step.current_story_id) as { story_id: string; title: string } | undefined;
+    const storyRow = await prisma.story.findUnique({
+      where: { id: step.current_story_id },
+      select: { story_id: true, title: true },
+    });
 
     // Mark current story done
-    db.prepare(
-      "UPDATE stories SET status = 'done', output = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(output, step.current_story_id);
-    emitEvent({ ts: new Date().toISOString(), event: "story.done", runId: step.run_id, workflowId: getWorkflowId(step.run_id), stepId: step.step_id, storyId: storyRow?.story_id, storyTitle: storyRow?.title });
+    const now = new Date();
+    await prisma.story.update({
+      where: { id: step.current_story_id },
+      data: {
+        status: "done",
+        output,
+        updated_at: now,
+      },
+    });
+    emitEvent({ ts: new Date().toISOString(), event: "story.done", runId: step.run_id, workflowId: await getWorkflowId(step.run_id), stepId: step.step_id, storyId: storyRow?.story_id, storyTitle: storyRow?.title });
     logger.info(`Story done: ${storyRow?.story_id} — ${storyRow?.title}`, { runId: step.run_id, stepId: step.step_id });
 
     // Clear current_story_id, save output
-    db.prepare(
-      "UPDATE steps SET current_story_id = NULL, output = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(output, step.id);
+    await prisma.step.update({
+      where: { id: step.id },
+      data: {
+        current_story_id: null,
+        output,
+        updated_at: now,
+      },
+    });
 
     const loopConfig: LoopConfig | null = step.loop_config ? JSON.parse(step.loop_config) : null;
 
@@ -290,51 +363,74 @@ export function completeStep(stepId: string, output: string): { status: string; 
     const verifyEachOn = loopConfig?.verifyEach ?? loopConfig?.verify_each;
     const verifyStepId = loopConfig?.verifyStep ?? loopConfig?.verify_step;
     if (verifyEachOn && verifyStepId) {
-      const verifyStep = db.prepare(
-        "SELECT id FROM steps WHERE run_id = ? AND step_id = ? LIMIT 1"
-      ).get(step.run_id, verifyStepId) as { id: string } | undefined;
+      const verifyStep = await prisma.step.findFirst({
+        where: {
+          run_id: step.run_id,
+          step_id: verifyStepId,
+        },
+        select: { id: true },
+      });
 
       if (verifyStep) {
-        db.prepare(
-          "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
-        ).run(verifyStep.id);
+        const now = new Date();
+        await prisma.step.update({
+          where: { id: verifyStep.id },
+          data: {
+            status: "pending",
+            updated_at: now,
+          },
+        });
         // Loop step stays 'running'
-        db.prepare(
-          "UPDATE steps SET status = 'running', updated_at = datetime('now') WHERE id = ?"
-        ).run(step.id);
+        await prisma.step.update({
+          where: { id: step.id },
+          data: {
+            status: "running",
+            updated_at: now,
+          },
+        });
         return { status: "advanced" };
       }
     }
 
     // No verify_each: check for more stories
-    const loopResult = checkLoopContinuation(step.run_id, step.id);
+    const loopResult = await checkLoopContinuation(step.run_id, step.id);
     return { status: loopResult.runCompleted ? "completed" : "advanced" };
   }
 
   // Check if this is a verify step triggered by verify-each
-  const loopStepRow = db.prepare(
-    "SELECT id, loop_config, run_id FROM steps WHERE run_id = ? AND type = 'loop' LIMIT 1"
-  ).get(step.run_id) as { id: string; loop_config: string | null; run_id: string } | undefined;
+  const loopStepRow = await prisma.step.findFirst({
+    where: {
+      run_id: step.run_id,
+      type: "loop",
+    },
+    select: { id: true, loop_config: true, run_id: true },
+  });
 
   if (loopStepRow?.loop_config) {
     const lc: LoopConfig = JSON.parse(loopStepRow.loop_config);
     const lcVerifyEach = lc.verifyEach ?? lc.verify_each;
     const lcVerifyStep = lc.verifyStep ?? lc.verify_step;
     if (lcVerifyEach && lcVerifyStep === step.step_id) {
-      const verifyResult = handleVerifyEachCompletion(step, loopStepRow.id, output, context);
+      const verifyResult = await handleVerifyEachCompletion(step, loopStepRow.id, output, context);
       return { status: verifyResult.runCompleted ? "completed" : "advanced" };
     }
   }
 
   // Single step: mark done and advance
-  db.prepare(
-    "UPDATE steps SET status = 'done', output = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(output, stepId);
-  emitEvent({ ts: new Date().toISOString(), event: "step.done", runId: step.run_id, workflowId: getWorkflowId(step.run_id), stepId: step.step_id });
+  now = new Date();
+  await prisma.step.update({
+    where: { id: stepId },
+    data: {
+      status: "done",
+      output,
+      updated_at: now,
+    },
+  });
+  emitEvent({ ts: new Date().toISOString(), event: "step.done", runId: step.run_id, workflowId: await getWorkflowId(step.run_id), stepId: step.step_id });
   logger.info(`Step completed: ${step.step_id}`, { runId: step.run_id, stepId: step.step_id });
 
-  const pipelineResult = advancePipeline(step.run_id);
-  finalizeDrainingPause(step.run_id);
+  const pipelineResult = await advancePipeline(step.run_id);
+  await finalizeDrainingPause(step.run_id);
   if (pipelineResult.advanced) {
     postAdvanceNudge(step.run_id);
   }
@@ -344,64 +440,130 @@ export function completeStep(stepId: string, output: string): { status: string; 
 /**
  * Handle verify-each completion: pass or fail the story.
  */
-function handleVerifyEachCompletion(
+async function handleVerifyEachCompletion(
   verifyStep: { id: string; run_id: string; step_id: string; step_index: number },
   loopStepId: string,
   output: string,
   context: Record<string, string>
-): { advanced: boolean; runCompleted: boolean } {
-  const db = getDb();
+): Promise<{ advanced: boolean; runCompleted: boolean }> {
+  const prisma = getPrisma();
   const status = context["status"]?.toLowerCase();
 
   // Reset verify step to waiting for next use
-  db.prepare(
-    "UPDATE steps SET status = 'waiting', output = ?, updated_at = datetime('now') WHERE id = ?"
-  ).run(output, verifyStep.id);
+  let now = new Date();
+  await prisma.step.update({
+    where: { id: verifyStep.id },
+    data: {
+      status: "waiting",
+      output,
+      updated_at: now,
+    },
+  });
 
   if (status !== "retry") {
-    emitEvent({ ts: new Date().toISOString(), event: "story.verified", runId: verifyStep.run_id, workflowId: getWorkflowId(verifyStep.run_id), stepId: verifyStep.step_id });
+    emitEvent({ ts: new Date().toISOString(), event: "story.verified", runId: verifyStep.run_id, workflowId: await getWorkflowId(verifyStep.run_id), stepId: verifyStep.step_id });
   }
 
   if (status === "retry") {
-    const lastDoneStory = db.prepare(
-      "SELECT id, retry_count, max_retries FROM stories WHERE run_id = ? AND status = 'done' ORDER BY updated_at DESC LIMIT 1"
-    ).get(verifyStep.run_id) as { id: string; retry_count: number; max_retries: number } | undefined;
+    const lastDoneStory = await prisma.story.findFirst({
+      where: {
+        run_id: verifyStep.run_id,
+        status: "done",
+      },
+      orderBy: { updated_at: "desc" },
+      select: { id: true, retry_count: true, max_retries: true },
+    });
 
     if (lastDoneStory) {
       const newRetry = lastDoneStory.retry_count + 1;
       if (newRetry > lastDoneStory.max_retries) {
-        db.prepare("UPDATE stories SET status = 'failed', retry_count = ?, updated_at = datetime('now') WHERE id = ?").run(newRetry, lastDoneStory.id);
-        db.prepare("UPDATE steps SET status = 'failed', updated_at = datetime('now') WHERE id = ?").run(loopStepId);
-        db.prepare("UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?").run(verifyStep.run_id);
-        const wfId = getWorkflowId(verifyStep.run_id);
+        now = new Date();
+        await prisma.story.update({
+          where: { id: lastDoneStory.id },
+          data: {
+            status: "failed",
+            retry_count: newRetry,
+            updated_at: now,
+          },
+        });
+        await prisma.step.update({
+          where: { id: loopStepId },
+          data: {
+            status: "failed",
+            updated_at: now,
+          },
+        });
+        await prisma.run.update({
+          where: { id: verifyStep.run_id },
+          data: {
+            status: "failed",
+            updated_at: now,
+          },
+        });
+        const wfId = await getWorkflowId(verifyStep.run_id);
         emitEvent({ ts: new Date().toISOString(), event: "story.failed", runId: verifyStep.run_id, workflowId: wfId, stepId: verifyStep.step_id });
-        emitRunTerminalEvent({ event: "run.failed", runId: verifyStep.run_id, workflowId: wfId, detail: "Verification retries exhausted" });
-        scheduleRunCronTeardown(verifyStep.run_id);
-        finalizeDrainingPause(verifyStep.run_id);
+        await emitRunTerminalEvent({ event: "run.failed", runId: verifyStep.run_id, workflowId: wfId, detail: "Verification retries exhausted" });
+        await scheduleRunCronTeardown(verifyStep.run_id);
+        await finalizeDrainingPause(verifyStep.run_id);
         return { advanced: false, runCompleted: false };
       }
 
-      db.prepare("UPDATE stories SET status = 'pending', retry_count = ?, updated_at = datetime('now') WHERE id = ?").run(newRetry, lastDoneStory.id);
+      now = new Date();
+      await prisma.story.update({
+        where: { id: lastDoneStory.id },
+        data: {
+          status: "pending",
+          retry_count: newRetry,
+          updated_at: now,
+        },
+      });
 
       const issues = context["issues"] ?? output;
       context["verify_feedback"] = issues;
-      emitEvent({ ts: new Date().toISOString(), event: "story.retry", runId: verifyStep.run_id, workflowId: getWorkflowId(verifyStep.run_id), stepId: verifyStep.step_id, detail: issues });
-      db.prepare("UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(context), verifyStep.run_id);
+      emitEvent({ ts: new Date().toISOString(), event: "story.retry", runId: verifyStep.run_id, workflowId: await getWorkflowId(verifyStep.run_id), stepId: verifyStep.step_id, detail: issues });
+      await prisma.run.update({
+        where: { id: verifyStep.run_id },
+        data: {
+          context: JSON.stringify(context),
+          updated_at: now,
+        },
+      });
     }
 
-    db.prepare("UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?").run(loopStepId);
+    now = new Date();
+    await prisma.step.update({
+      where: { id: loopStepId },
+      data: {
+        status: "pending",
+        updated_at: now,
+      },
+    });
     return { advanced: false, runCompleted: false };
   }
 
   // Verify passed — clear feedback and continue
   delete context["verify_feedback"];
-  db.prepare("UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(context), verifyStep.run_id);
+  now = new Date();
+  await prisma.run.update({
+    where: { id: verifyStep.run_id },
+    data: {
+      context: JSON.stringify(context),
+      updated_at: now,
+    },
+  });
 
   try {
-    return checkLoopContinuation(verifyStep.run_id, loopStepId);
+    return await checkLoopContinuation(verifyStep.run_id, loopStepId);
   } catch (err) {
     logger.error(`checkLoopContinuation failed, recovering: ${String(err)}`, { runId: verifyStep.run_id });
-    db.prepare("UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?").run(loopStepId);
+    now = new Date();
+    await prisma.step.update({
+      where: { id: loopStepId },
+      data: {
+        status: "pending",
+        updated_at: now,
+      },
+    });
     return { advanced: false, runCompleted: false };
   }
 }
@@ -409,64 +571,104 @@ function handleVerifyEachCompletion(
 /**
  * Check if the loop has more stories; if so set loop step pending, otherwise done + advance.
  */
-function checkLoopContinuation(runId: string, loopStepId: string): { advanced: boolean; runCompleted: boolean } {
-  const db = getDb();
-  const pendingStory = db.prepare(
-    "SELECT id FROM stories WHERE run_id = ? AND status = 'pending' LIMIT 1"
-  ).get(runId) as { id: string } | undefined;
+async function checkLoopContinuation(runId: string, loopStepId: string): Promise<{ advanced: boolean; runCompleted: boolean }> {
+  const prisma = getPrisma();
+  const pendingStory = await prisma.story.findFirst({
+    where: {
+      run_id: runId,
+      status: "pending",
+    },
+    select: { id: true },
+  });
 
-  const loopStatus = db.prepare(
-    "SELECT status FROM steps WHERE id = ?"
-  ).get(loopStepId) as { status: string } | undefined;
+  const loopStatus = await prisma.step.findUnique({
+    where: { id: loopStepId },
+    select: { status: true },
+  });
 
   if (pendingStory) {
     if (loopStatus?.status === "failed") {
       return { advanced: false, runCompleted: false };
     }
-    db.prepare(
-      "UPDATE steps SET status = 'pending', updated_at = datetime('now') WHERE id = ?"
-    ).run(loopStepId);
+    const now = new Date();
+    await prisma.step.update({
+      where: { id: loopStepId },
+      data: {
+        status: "pending",
+        updated_at: now,
+      },
+    });
     return { advanced: false, runCompleted: false };
   }
 
-  const failedStory = db.prepare(
-    "SELECT id FROM stories WHERE run_id = ? AND status = 'failed' LIMIT 1"
-  ).get(runId) as { id: string } | undefined;
+  const failedStory = await prisma.story.findFirst({
+    where: {
+      run_id: runId,
+      status: "failed",
+    },
+    select: { id: true },
+  });
 
   if (failedStory) {
-    db.prepare(
-      "UPDATE steps SET status = 'failed', output = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run("Loop cannot continue because one or more stories failed", loopStepId);
-    db.prepare(
-      "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
-    ).run(runId);
-    const wfId = getWorkflowId(runId);
+    const now = new Date();
+    await prisma.step.update({
+      where: { id: loopStepId },
+      data: {
+        status: "failed",
+        output: "Loop cannot continue because one or more stories failed",
+        updated_at: now,
+      },
+    });
+    await prisma.run.update({
+      where: { id: runId },
+      data: {
+        status: "failed",
+        updated_at: now,
+      },
+    });
+    const wfId = await getWorkflowId(runId);
     emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId, workflowId: wfId, stepId: loopStepId, detail: "Loop has failed stories and no pending stories" });
-    emitRunTerminalEvent({ event: "run.failed", runId, workflowId: wfId, detail: "Loop has failed stories and no pending stories" });
-    scheduleRunCronTeardown(runId);
-    finalizeDrainingPause(runId);
+    await emitRunTerminalEvent({ event: "run.failed", runId, workflowId: wfId, detail: "Loop has failed stories and no pending stories" });
+    await scheduleRunCronTeardown(runId);
+    await finalizeDrainingPause(runId);
     return { advanced: false, runCompleted: false };
   }
 
   // All stories done — mark loop step done
-  db.prepare(
-    "UPDATE steps SET status = 'done', updated_at = datetime('now') WHERE id = ?"
-  ).run(loopStepId);
+  const now = new Date();
+  await prisma.step.update({
+    where: { id: loopStepId },
+    data: {
+      status: "done",
+      updated_at: now,
+    },
+  });
 
   // Also mark verify step done if it exists
-  const loopStep = db.prepare("SELECT loop_config, run_id FROM steps WHERE id = ?").get(loopStepId) as { loop_config: string | null; run_id: string } | undefined;
+  const loopStep = await prisma.step.findUnique({
+    where: { id: loopStepId },
+    select: { loop_config: true, run_id: true },
+  });
   if (loopStep?.loop_config) {
     const lc: LoopConfig = JSON.parse(loopStep.loop_config);
     const lcVerifyEach = lc.verifyEach ?? lc.verify_each;
     const lcVerifyStep = lc.verifyStep ?? lc.verify_step;
     if (lcVerifyEach && lcVerifyStep) {
-      db.prepare(
-        "UPDATE steps SET status = 'done', updated_at = datetime('now') WHERE run_id = ? AND step_id = ?"
-      ).run(runId, lcVerifyStep);
+      const now = new Date();
+      await prisma.step.updateMany({
+        where: {
+          run_id: runId,
+          step_id: lcVerifyStep,
+        },
+        data: {
+          status: "done",
+          updated_at: now,
+        },
+      });
     }
   }
 
-  const result = advancePipeline(runId);
+  const result = await advancePipeline(runId);
   if (result.advanced) {
     postAdvanceNudge(runId);
   }

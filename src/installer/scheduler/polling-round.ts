@@ -159,7 +159,7 @@ export async function autoCompleteStepIfRunning(
       : row.run_id;
 
   try {
-    const result = completeStep(metadata.stepId, metadata.assistantOutput);
+    const result = await completeStep(metadata.stepId, metadata.assistantOutput);
     logger.info("Auto-complete fallback invoked completeStep on work_done output", {
       ...context,
       stepId: metadata.stepId,
@@ -181,7 +181,7 @@ export async function autoCompleteStepIfRunning(
     try {
 
       const workerJobId = typeof context.jobId === "string" ? context.jobId : undefined;
-      const recoveryResult = recoverOrphanedStepsForAgent(
+      const recoveryResult = await recoverOrphanedStepsForAgent(
         context.agentId as string,
         recoveryRunId,
         undefined,
@@ -461,7 +461,7 @@ export async function executePollingRound(
   try {
     const staleThresholdMs = timeout * 1.5 * 1000;
     const { recoverOrphanedStepsForAgent } = await import("../step-ops.js");
-    const staleResult = recoverOrphanedStepsForAgent(
+    const staleResult = await recoverOrphanedStepsForAgent(
       job.agentId,
       job.runId,
       staleThresholdMs,
@@ -557,8 +557,8 @@ export async function executePollingRound(
       await autoCompleteStepIfRunning(context, metadata);
     } else if (outputSummary.outcome === "other_output") {
       try {
-  
-        const recoveryResult = recoverOrphanedStepsForAgent(
+
+        const recoveryResult = await recoverOrphanedStepsForAgent(
           job.agentId,
           job.runId,
           undefined,
@@ -597,7 +597,7 @@ export async function executePollingRound(
       const timeoutRetryReason = isTimeout ? errorMessage : undefined;
 
 
-      const recoveryResult = recoverOrphanedStepsForAgent(
+      const recoveryResult = await recoverOrphanedStepsForAgent(
         job.agentId,
         job.runId,
         undefined,

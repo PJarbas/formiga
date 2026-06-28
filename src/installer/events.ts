@@ -234,12 +234,13 @@ async function fireWebhook(evt: FormigaEvent): Promise<void> {
 
   // Try to look up notify_url from the DB
   try {
-    const { getDb } = await import("../db.js");
-    const db = getDb();
-    const row = db
-      .prepare("SELECT notify_url FROM runs WHERE id = ?")
-      .get(evt.runId) as { notify_url: string | null } | undefined;
-    notifyUrl = row?.notify_url ?? undefined;
+    const { getPrisma } = await import("../db.js");
+    const prisma = getPrisma();
+    const run = await prisma.run.findUnique({
+      where: { id: evt.runId },
+      select: { notify_url: true },
+    });
+    notifyUrl = run?.notify_url ?? undefined;
   } catch {
     // DB might not be available — skip webhook
     return;

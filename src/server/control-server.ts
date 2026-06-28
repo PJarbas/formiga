@@ -440,7 +440,7 @@ async function handleResumeRun(runId: string): Promise<JsonResponse> {
     if (orphanedAgents.length > 0) {
       const { recoverOrphanedStepsForAgent } = await import("../installer/step-ops.js");
       for (const { agent_id } of orphanedAgents) {
-        recoverOrphanedStepsForAgent(agent_id, runId);
+        await recoverOrphanedStepsForAgent(agent_id, runId);
       }
       logger.info("control-server: resume orphan recovery complete", {
         runId,
