@@ -1,39 +1,20 @@
-// ══════════════════════════════════════════════════════════════════════
-// status-config.ts — Single source of truth for all status display metadata
-// ══════════════════════════════════════════════════════════════════════
-// Every status in the system has exactly one entry here. Components
-// NEVER hardcode emoji, colors, or labels — they consume STATUS_CONFIG.
-// ══════════════════════════════════════════════════════════════════════
+import type { AgentStatus } from "@shared/dashboard-types";
 
-import type { AgentStatus, BadgeStatus } from "@shared/dashboard-types";
-
-/** Union of all UI-visible status keys */
-export type UIStatus = AgentStatus | Exclude<BadgeStatus, AgentStatus>;
+export type UIStatus = AgentStatus | "pending" | "approved" | "rejected" | "promoted" | "overfitted" | "success";
 
 export interface StatusConfig {
-  /** Machine-readable key — matches backend status value */
   key: UIStatus;
-  /** Display label — human-friendly, uppercase */
   label: string;
-  /** Emoji for icon representation */
   emoji: string;
-  /** CSS variable name for color (without var() wrapper) */
   colorVar: string;
-  /** Hex fallback — used where CSS vars aren't available (e.g. ECharts) */
   hex: string;
-  /** Tailwind classes for the status dot */
   dotClass: string;
-  /** Tailwind classes for the card/badge border */
   borderClass: string;
-  /** Tailwind classes for background tint (5-10% opacity) */
   bgClass: string;
-  /** Visual weight — used for ordering and prominence */
   priority: number;
-  /** Whether this status demands immediate user attention */
   isUrgent: boolean;
 }
 
-// ── Every status in the system — single source of truth ────────────
 export const STATUS_CONFIG: Record<UIStatus, StatusConfig> = {
   idle: {
     key: "idle",
@@ -169,7 +150,6 @@ export const STATUS_CONFIG: Record<UIStatus, StatusConfig> = {
   },
 };
 
-/** Lookup with fallback — unknown statuses map to idle config */
 export function getStatusConfig(status: string): StatusConfig {
-  return (STATUS_CONFIG as Record<string, StatusConfig>)[status] ?? STATUS_CONFIG.idle;
+  return STATUS_CONFIG[status as UIStatus] ?? STATUS_CONFIG.idle;
 }

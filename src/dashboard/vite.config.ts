@@ -5,6 +5,11 @@ import path from "node:path";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: [],
+  },
   base: "/",
   root: path.resolve(__dirname),
   build: {
