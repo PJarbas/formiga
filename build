@@ -15,10 +15,13 @@ if [ -z "$NODE_VERSION" ] || [ "$NODE_VERSION" -lt 22 ]; then
   exit 1
 fi
 
-echo "[1/2] npm install"
+echo "[1/3] Clean old build artifacts"
+rm -rf "$SCRIPT_DIR/dist"
+
+echo "[2/3] npm install"
 npm install
 
-echo "[2/2] npm run build"
+echo "[3/3] npm run build"
 npm run build
 
 echo ""

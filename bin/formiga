@@ -1,6 +1,14 @@
 #!/bin/sh
 # Formiga CLI entry point
-# Resolves the dist/cli/cli.js relative to the repo root and executes it.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Resolves symlinks to find the real repo root, then executes dist/cli/cli.js.
+SELF="$0"
+# Resolve symlinks (works on macOS and Linux)
+while [ -L "$SELF" ]; do
+  DIR="$(cd "$(dirname "$SELF")" && pwd)"
+  SELF="$(readlink "$SELF")"
+  # Handle relative symlinks
+  case "$SELF" in /*) ;; *) SELF="$DIR/$SELF" ;; esac
+done
+SCRIPT_DIR="$(cd "$(dirname "$SELF")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 exec node --disable-warning=ExperimentalWarning "$REPO_ROOT/dist/cli/cli.js" "$@"
