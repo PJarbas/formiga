@@ -7,7 +7,7 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   usePipelineStatus,
   useKanbanSnapshot,
@@ -116,6 +116,9 @@ function actionsForCard(_card: MLKanbanCard): Action[] {
 }
 
 export default function ExperimentBoard() {
+  const [searchParams] = useSearchParams();
+  const roundFromUrl = searchParams.get("round") ? Number(searchParams.get("round")) : null;
+
   const { data: status } = usePipelineStatus();
   const runId = status?.runId ?? undefined;
   const { data: kanban, isLoading } = useKanbanSnapshot(runId);
@@ -208,9 +211,16 @@ export default function ExperimentBoard() {
       {/* Header + view toggle */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-[var(--text-primary)]">
-            Round {kanban?.roundNumber ?? "—"} Experiment Board
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-[var(--text-primary)]">
+              Round {roundFromUrl ?? kanban?.roundNumber ?? "—"} Experiment Board
+            </h2>
+            {roundFromUrl && roundFromUrl !== kanban?.roundNumber && (
+              <span className="text-[10px] bg-[var(--bg-tertiary)] text-[var(--text-muted)] px-1.5 py-0.5 rounded">
+                viewing historical round
+              </span>
+            )}
+          </div>
           <p className="text-xs text-[var(--text-muted)] mt-0.5">
             Snapshot at{" "}
             {kanban?.generatedAt ? new Date(kanban.generatedAt).toLocaleTimeString() : "—"}
