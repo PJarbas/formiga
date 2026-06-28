@@ -8,6 +8,7 @@ import type {
   AgentDetail,
   AgentLogsResponse,
   MLKanbanSnapshot,
+  KanbanCardDetail,
   LeaderboardResponse,
   LeaderboardEntry,
   RoundSummary,
@@ -77,6 +78,17 @@ export function useKanbanSnapshot(runId: string | undefined) {
     queryKey: ["kanban", runId],
     queryFn: () => fetchJSON<MLKanbanSnapshot>(`${BASE}/runs/${encodeURIComponent(runId ?? "")}/kanban`),
     enabled: !!runId,
+  });
+}
+
+export function useKanbanCardDetail(runId: string | undefined, cardId: string | undefined) {
+  return useQuery({
+    queryKey: ["kanban", "card-detail", runId, cardId],
+    queryFn: () =>
+      fetchJSON<KanbanCardDetail>(
+        `${BASE}/runs/${encodeURIComponent(runId ?? "")}/kanban/card-detail?cardId=${encodeURIComponent(cardId ?? "")}`,
+      ),
+    enabled: !!runId && !!cardId,
   });
 }
 

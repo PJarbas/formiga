@@ -9,6 +9,7 @@ import { useMemo, useState } from "react";
 import {
   usePipelineStatus,
   useKanbanSnapshot,
+  useKanbanCardDetail,
   useTrace,
   useChecklist,
   useSpecActions,
@@ -147,6 +148,8 @@ export default function ExperimentBoard() {
     }
     return null;
   }, [selectedCardId, kanban]);
+
+  const { data: cardDetail } = useKanbanCardDetail(runId, selectedCardId);
 
   const { data: trace } = useTrace(
     selectedCard?.agentName,
@@ -357,6 +360,19 @@ export default function ExperimentBoard() {
             </h4>
             <TraceTimeline entries={trace ?? []} />
           </div>
+
+          {cardDetail?.output && (
+            <div>
+              <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
+                Output
+              </h4>
+              <div className="rounded border border-[var(--border-default)] bg-[var(--bg-tertiary)] p-3 max-h-[400px] overflow-y-auto">
+                <pre className="text-[11px] text-[var(--text-secondary)] whitespace-pre-wrap break-words font-mono leading-relaxed">
+                  {cardDetail.output}
+                </pre>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

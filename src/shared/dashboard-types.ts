@@ -247,6 +247,37 @@ export interface SpecDiff {
   changes: DiffHunk[];
 }
 
+// ── Kanban Card Detail (enriched panel data) ──────────────────────────
+
+export interface KanbanCardDetail {
+  runId: string;
+  cardId: string;
+  title: string;
+  status: string;
+  storyId?: string;
+  description?: string;
+  acceptanceCriteria?: string[];
+  input_template: string;
+  /** Agent raw output text (summary / result). */
+  output?: string;
+  task: string;
+  events: Array<Record<string, unknown>>;
+  timing?: {
+    firstEvent: string;
+    lastEvent: string;
+    durationMs: number;
+  };
+  tokens?: {
+    total: number;
+    deltas: number[];
+  };
+  failureDetail?: string;
+  retryCount: number;
+  maxRetries: number;
+}
+
+// ── Trace ────────────────────────────────────────────────────────────
+
 export interface TraceEntry {
   timestamp: string;
   event: string;
