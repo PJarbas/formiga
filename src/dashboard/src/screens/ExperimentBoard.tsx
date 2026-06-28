@@ -20,7 +20,6 @@ import { ActionBar } from "../components/ActionBar";
 import { EmptyState } from "../components/EmptyState";
 import { addToast } from "../components/Toast";
 import { getStatusConfig } from "../lib/status-config";
-import { useSpecDispatch } from "../hooks/useSpecDispatch";
 import type {
   Action,
   AgentStatus,
@@ -58,12 +57,10 @@ function getLaneEmptyState(status: string, pipelineRunning: boolean) {
   return emptyLaneStates[status] ?? emptyLaneStates.idle;
 }
 
-// Approximate card-kind heuristic. Cards that come from spec-producing
-// agents are treated as "spec"; others are "trial" except ml-critic = "audit".
-function cardKind(card: MLKanbanCard): "spec" | "trial" | "audit" {
+// Card-kind heuristic for display styling.
+function cardKind(card: MLKanbanCard): "step" | "audit" {
   if (card.agentName === "ml-critic") return "audit";
-  if (card.agentName === "data-analyst" || card.agentName === "feature-engineer") return "spec";
-  return "trial";
+  return "step";
 }
 
 interface BoardLane {
@@ -129,22 +126,8 @@ function buildLanes(view: ViewMode, lanes: MLKanbanLane[]): BoardLane[] {
   return Array.from(buckets.values());
 }
 
-function actionsForCard(card: MLKanbanCard): Action[] {
-  const kind = cardKind(card);
-  if (kind === "spec") {
-    return [
-      { id: "approve", label: "Approve", primary: true, variant: "success" },
-      { id: "edit", label: "Edit" },
-      { id: "reject", label: "Reject", variant: "destructive" },
-    ];
-  }
-  if (kind === "audit") {
-    return [{ id: "details", label: "Details" }];
-  }
-  // trial
-  return [
-    { id: "details", label: "Details" },
-  ];
+function actionsForCard(_card: MLKanbanCard): Action[] {
+  return [{ id: "details", label: "Details" }];
 }
 
 export default function ExperimentBoard() {
@@ -153,8 +136,6 @@ export default function ExperimentBoard() {
   const { data: kanban, isLoading } = useKanbanSnapshot(runId);
   const [view, setView] = useState<ViewMode>("status");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-
-  const specDispatch = useSpecDispatch();
 
   const lanes = useMemo(() => buildLanes(view, kanban?.lanes ?? []), [view, kanban]);
   const pipelineRunning = status?.status === "running";
@@ -171,7 +152,7 @@ export default function ExperimentBoard() {
 
   const { data: trace } = useTrace(
     selectedCard?.agentName,
-    kanban?.roundNumber,
+    kanban?.roundNumber ?? 0,
   );
   const checklistEnabled = selectedCard?.agentName === "feature-engineer" && !!runId;
   const { data: checklist } = useChecklist(
@@ -198,23 +179,9 @@ export default function ExperimentBoard() {
   }
 
   function dispatch(card: MLKanbanCard, actionId: string) {
-    // "details" selects the card to open the detail panel.
     if (actionId === "details") {
       setSelectedCardId(card.id);
       return;
-    }
-
-    const kind = cardKind(card);
-    if (kind === "spec") {
-      const specId = `${runId}:${AGENT_INFO_REGISTRY[card.agentName]?.stepId ?? card.agentName}`;
-      if (actionId === "approve") {
-        specDispatch.approve(specId);
-        return;
-      }
-      if (actionId === "reject") {
-        specDispatch.reject(specId);
-        return;
-      }
     }
     addToast("info", `"${actionId}" not yet wired`);
   }
@@ -344,25 +311,19 @@ export default function ExperimentBoard() {
           data-testid="detail-panel"
           className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5 space-y-4"
         >
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <div>
-              <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-                {selectedCard.title}
-              </h3>
-              <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-                {selectedCard.agentName} · {selectedCard.sub}
-              </p>
-              <Link
-                to={`/agents/${selectedCard.agentName}`}
-                className="text-xs text-[var(--accent-blue)] hover:underline mt-1 inline-block"
-              >
-                {AGENT_INFO_REGISTRY[selectedCard.agentName]?.label ?? selectedCard.agentName} Detail →
-              </Link>
-            </div>
-            <ActionBar
-              actions={actionsForCard(selectedCard)}
-              onAction={(a) => dispatch(selectedCard, a)}
-            />
+          <div>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+              {selectedCard.title}
+            </h3>
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+              {selectedCard.agentName} · {selectedCard.sub}
+            </p>
+            <Link
+              to={`/agents/${selectedCard.agentName}`}
+              className="text-xs text-[var(--accent-blue)] hover:underline mt-1 inline-block"
+            >
+              {AGENT_INFO_REGISTRY[selectedCard.agentName]?.label ?? selectedCard.agentName} Detail →
+            </Link>
           </div>
 
           {checklistEnabled && (
