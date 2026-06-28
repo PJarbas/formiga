@@ -108,7 +108,7 @@ formiga workflow run ml-pipeline "dataset_path=data/train.csv" --pi-as-harness
 formiga workflow run ml-pipeline "dataset_path=data/train.csv" --hermes-as-harness
 ```
 
-- `--pi-as-harness` is the default and recommended choice. This is the default. Use pi for production workflows.
+- `--pi-as-harness` is the default and recommended choice. Use pi for production workflows.
 - `--hermes-as-harness` is **Alpha quality** — very slow, and has broken token accounting.
 - The two flags are **mutually exclusive** — only one can be passed at a time.
 - If Hermes is selected, Formiga searches for the binary in this order:
@@ -131,8 +131,7 @@ flowchart TB
     Agents -->|"pi --print"| Harness["pi harness"]
     Agents -->|claim / write| DB
     DB --> Server["HTTP server :3334"]
-    Server --> Dash["Workflow dashboard"]
-    Server --> ML["ML dashboard /"]
+    Server --> Dash["React dashboard"]
 ```
 
 Everything Formiga knows lives in a single SQLite database at `~/.formiga/formiga.db`:
@@ -146,15 +145,14 @@ Everything Formiga knows lives in a single SQLite database at `~/.formiga/formig
 
 ## Dashboard
 
-A React 19 SPA with real-time polling (TanStack Query, 3s) and ECharts visualization, served by the same HTTP server on **port 3334**. The ML dashboard is organized around the four things a scientist actually does during a run — watching the pipeline, triaging experiments, comparing models, and drilling into an agent.
+A React 19 SPA with real-time polling (TanStack Query, 3s), served by the same HTTP server on **port 3334**. The dashboard is organized around the four things a scientist actually does during a run — watching the pipeline, triaging experiments, comparing models, and drilling into an agent.
 
 | Path | Screen | What you do here |
 |------|--------|------------------|
-| `/` | Workflow Kanban | Swim-lane view of every workflow run |
-| `/` | **Command Center** | Single glance: stepper, pending decisions, best model, agent strip |
+| `/` | **Command Center** | Pipeline Runs table — status badge, stage dots, metrics, and duration per round (GitLab CI-style) |
 | `/kanban` | **Experiment Board** | Phase / Agent / Status lanes with inline Approve · Reject · Promote |
-| `/leaderboard` | **Model Arena** | Sortable table + scatter; select ≥2 rows to compare side-by-side |
-| `/agents/:name` | **Agent Detail** | Trace timeline, checklist (feature-engineer), spec diff, rounds, logs |
+| `/leaderboard` | **Model Arena** | Sortable table + scatter; select 2+ rows to compare side-by-side |
+| `/agents/:name` | **Agent Detail** | Trace timeline, checklist, spec diff, rounds history, and logs |
 
 <p align="center">
   <img src="docs/screenshots/experiment-board.png" alt="Experiment Board" width="48%">
@@ -170,22 +168,19 @@ A React 19 SPA with real-time polling (TanStack Query, 3s) and ECharts visualiza
 The ML endpoints all live under `/api/`:
 
 ```bash
-# Single aggregated payload powering the Command Center
+# Aggregated payload powering the Command Center
 curl http://localhost:3334/api/command-center
 
-# Pending decisions (spec approvals, overfitting warnings, …)
-curl http://localhost:3334/api/decisions/pending
-
-# Promote / reject experiments (orthogonal to status enum)
+# Promote / reject experiments
 curl -X POST http://localhost:3334/api/experiments/<id>/promote
 curl -X POST http://localhost:3334/api/experiments/<id>/reject \
   -H 'content-type: application/json' -d '{"reason":"…"}'
 
-# Approve or reject a phase spec (UPSERT into spec_approvals)
+# Approve or reject a phase spec
 curl -X PATCH http://localhost:3334/api/specs/<runId>:<phase>/approve
 curl -X PATCH http://localhost:3334/api/specs/<runId>:<phase>/reject
 
-# Interactive checklist per (run, phase) — UPSERT items_json
+# Interactive checklist per (run, phase)
 curl http://localhost:3334/api/checklist/<runId>/feat-eng
 curl -X PUT http://localhost:3334/api/checklist/<runId>/feat-eng \
   -H 'content-type: application/json' -d '{"items":[…]}'
@@ -315,7 +310,7 @@ Every command has `--help`.
 
 ## Requirements
 
-- **Node.js ≥ 22** (uses the native `node:sqlite` module)
+- **Node.js >= 22** (uses the native `node:sqlite` module)
 - **[pi](https://github.com/mariozechner/pi-coding-agent)** — the coding-agent harness Formiga drives
 - **`gh` CLI** — optional, for GitHub PR integration
 
