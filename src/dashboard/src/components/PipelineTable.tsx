@@ -1,8 +1,8 @@
 import { Link } from "react-router-dom";
 import { getStatusConfig } from "../lib/status-config";
-import { formatElapsedMs, formatElapsedBetween } from "../lib/format";
+import { formatElapsedMs } from "../lib/format";
 import { EmptyState } from "./EmptyState";
-import type { RoundSummary, PhaseInfo } from "@shared/dashboard-types";
+import type { PipelineRunRow } from "@shared/dashboard-types";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -40,41 +40,31 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function StageDots({ phases, roundStatus }: { phases: PhaseInfo[]; roundStatus: string }) {
-  const dots = phases.map((phase) => {
-    if (roundStatus === "completed") return "done" as const;
-    if (roundStatus === "failed") {
-      if (phase.status === "done") return "done" as const;
-      if (phase.status === "failed") return "failed" as const;
-      return "pending" as const;
-    }
-    return phase.status as "done" | "running" | "pending" | "failed";
-  });
-
+function StageDots({ phases }: { phases: PipelineRunRow["phases"] }) {
   return (
     <div className="flex items-center gap-1">
-      {dots.map((dot, i) => {
+      {phases.map((phase) => {
         const config = getStatusConfig(
-          dot === "done" ? "completed" : dot === "running" ? "running" : dot === "failed" ? "failed" : "idle",
+          phase.status === "done" ? "completed" : phase.status === "running" ? "running" : phase.status === "failed" ? "failed" : "idle",
         );
         return (
           <svg
-            key={phases[i]?.id ?? i}
+            key={phase.id}
             width="14"
             height="14"
             viewBox="0 0 14 14"
-            className={dot === "running" ? "animate-pulse" : ""}
-            aria-label={phases[i]?.label}
+            className={phase.status === "running" ? "animate-pulse" : ""}
+            aria-label={phase.label}
           >
-            {dot === "pending" ? (
+            {phase.status === "pending" ? (
               <circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--border-default)" strokeWidth="1.5" />
             ) : (
               <>
                 <circle cx="7" cy="7" r="6" fill={config.hex} />
-                {dot === "done" && (
+                {phase.status === "done" && (
                   <path d="M4 7.2L6 9.2L10 4.8" stroke="white" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
                 )}
-                {dot === "failed" && (
+                {phase.status === "failed" && (
                   <path d="M5 5L9 9M9 5L5 9" stroke="white" strokeWidth="1.3" strokeLinecap="round" />
                 )}
               </>
@@ -88,11 +78,13 @@ function StageDots({ phases, roundStatus }: { phases: PhaseInfo[]; roundStatus: 
 
 // ── Molecule ─────────────────────────────────────────────────────────
 
-function RoundRow({ round, isActive, phases }: { round: RoundSummary; isActive: boolean; phases: PhaseInfo[] }) {
+function RunRow({ run }: { run: PipelineRunRow }) {
+  const isActive = run.status === "running" || run.status === "paused";
+
   return (
     <Link
-      to={`/kanban?round=${round.roundNumber}`}
-      data-testid={`round-row-${round.roundNumber}`}
+      to={`/kanban?run=${run.runId}`}
+      data-testid={`run-row-${run.shortHash}`}
       className={[
         "flex items-center gap-4 px-5 py-3 transition-colors",
         isActive
@@ -100,33 +92,37 @@ function RoundRow({ round, isActive, phases }: { round: RoundSummary; isActive: 
           : "hover:bg-[var(--bg-tertiary)]",
       ].join(" ")}
     >
-      <StatusBadge status={round.status} />
+      <StatusBadge status={run.status} />
 
-      <div className="min-w-[80px]">
-        <span className="text-sm font-medium text-[var(--text-primary)]">Round {round.roundNumber}</span>
-        {isActive && round.currentPhase && (
+      <div className="min-w-[140px] shrink-0">
+        <span className="text-sm font-mono font-medium text-[var(--accent-blue)]">{run.shortHash}</span>
+        {isActive && run.currentPhase !== "idle" && (
           <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
-            {round.currentPhase.replace(/_/g, " ")}
+            {run.currentPhase.replace(/_/g, " ")}
           </p>
         )}
       </div>
 
-      <StageDots phases={phases} roundStatus={round.status} />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm text-[var(--text-primary)] truncate">{run.task}</p>
+      </div>
 
-      <div className="ml-auto flex items-center gap-4 text-xs text-[var(--text-muted)]">
+      <StageDots phases={run.phases} />
+
+      <div className="ml-auto flex items-center gap-4 text-xs text-[var(--text-muted)] shrink-0">
         <span>
-          {round.totalExperiments} exp{round.totalExperiments !== 1 ? "s" : ""}
+          {run.totalExperiments} exp{run.totalExperiments !== 1 ? "s" : ""}
         </span>
-        {round.bestCvMean != null && (
+        {run.bestCvMean != null && (
           <span className="font-mono text-[var(--accent-green)]">
-            CV {round.bestCvMean.toFixed(4)}
+            CV {run.bestCvMean.toFixed(4)}
           </span>
         )}
         <span className="font-mono w-14 text-right">
-          {round.durationMs != null ? formatElapsedMs(round.durationMs) : isActive ? "..." : "—"}
+          {run.durationMs != null ? formatElapsedMs(run.durationMs) : isActive ? "..." : "—"}
         </span>
-        {!isActive && round.completedAt && (
-          <span className="w-14 text-right">{formatRelativeTime(round.completedAt)}</span>
+        {!isActive && run.updatedAt && (
+          <span className="w-14 text-right">{formatRelativeTime(run.updatedAt)}</span>
         )}
       </div>
     </Link>
@@ -135,23 +131,18 @@ function RoundRow({ round, isActive, phases }: { round: RoundSummary; isActive: 
 
 // ── Organism ─────────────────────────────────────────────────────────
 
-export interface RoundsTableProps {
-  rounds: RoundSummary[];
-  currentRound: number;
-  runId: string;
-  phases: PhaseInfo[];
-  startedAt: string | null;
-  updatedAt: string | null;
+export interface PipelineTableProps {
+  runs: PipelineRunRow[];
 }
 
-export function RoundsTable({ rounds, currentRound, phases, startedAt, updatedAt }: RoundsTableProps) {
-  if (rounds.length === 0) {
+export function PipelineTable({ runs }: PipelineTableProps) {
+  if (runs.length === 0) {
     return (
       <section className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5">
         <EmptyState
           icon="⚙️"
-          message="No rounds yet"
-          detail="Pipeline will populate rounds as they progress."
+          message="No pipeline runs"
+          detail="Start a pipeline from the CLI to see runs here."
           showProgress
         />
       </section>
@@ -162,18 +153,13 @@ export function RoundsTable({ rounds, currentRound, phases, startedAt, updatedAt
     <section className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] overflow-hidden">
       <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border-default)]">
         <h3 className="text-sm font-semibold text-[var(--text-primary)]">Pipeline Runs</h3>
-        <span className="text-xs font-mono text-[var(--text-muted)]">
-          {formatElapsedBetween(startedAt, updatedAt)}
+        <span className="text-xs text-[var(--text-muted)]">
+          {runs.filter((r) => r.status === "running").length} active
         </span>
       </div>
       <div className="divide-y divide-[var(--border-default)]">
-        {rounds.map((round) => (
-          <RoundRow
-            key={round.roundNumber}
-            round={round}
-            isActive={round.roundNumber === currentRound && round.status === "running"}
-            phases={phases}
-          />
+        {runs.map((run) => (
+          <RunRow key={run.runId} run={run} />
         ))}
       </div>
     </section>

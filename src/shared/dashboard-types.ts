@@ -354,16 +354,20 @@ export interface AgentStripItem {
   trials: number;
 }
 
-export interface CommandCenterSnapshot {
-  run: {
-    runId: string | null;
-    status: PipelineStatus["status"];
-    currentPhase: PipelinePhase;
-    currentRound: number;
-    maxRounds: number;
-    startedAt: string | null;
-    updatedAt: string | null;
-  };
+export interface PipelineRunRow {
+  runId: string;
+  shortHash: string;
+  task: string;
+  status: string;
+  currentPhase: PipelinePhase;
   phases: PhaseInfo[];
-  rounds: RoundSummary[];
+  totalExperiments: number;
+  bestCvMean: number | null;
+  durationMs: number | null;
+  startedAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface CommandCenterSnapshot {
+  runs: PipelineRunRow[];
 }
