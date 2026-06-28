@@ -65,21 +65,29 @@ export function validateExpects(output: string, expects: string): string | null 
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Post-advance nudge
+// Post-advance: Direct agent spawn (event-driven sequential scheduling)
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Fire-and-forget in-process nudge of the run's scheduled jobs so the
- * next pending step is claimed within ~1s instead of waiting up to one
- * cron interval (1-15 min). Safe to call from any process: if the
- * daemon isn't running in this process, the nudge is a no-op because
- * jobMetadata is empty.
+ * After pipeline advances, directly spawn the agent(s) for the next
+ * pending step(s). This replaces the old nudge-based approach:
+ *
+ * Old: nudge all crons → hope one of them picks up the step (up to 5min delay)
+ * New: immediately spawn the exact agent needed (< 1s latency)
+ *
+ * Falls back to nudge if direct-spawn fails (e.g. workflow spec unresolvable).
  */
-function postAdvanceNudge(runId: string): void {
-  import("../scheduler/cron-manager.js")
-    .then((m) => m.nudgeScheduledRuns([runId]))
+function postAdvanceSpawn(runId: string): void {
+  import("../scheduler/direct-spawn.js")
+    .then((m) => m.spawnAgentsForPendingSteps(runId))
     .catch((err) => {
-      logger.warn("post-advance nudge failed", { runId, error: String(err) });
+      logger.warn("direct-spawn failed, falling back to nudge", { runId, error: String(err) });
+      // Fallback: try the old nudge path
+      import("../scheduler/cron-manager.js")
+        .then((m) => m.nudgeScheduledRuns([runId]))
+        .catch((nudgeErr) => {
+          logger.warn("post-advance nudge fallback also failed", { runId, error: String(nudgeErr) });
+        });
     });
 }
 
@@ -432,7 +440,7 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
   const pipelineResult = await advancePipeline(step.run_id);
   await finalizeDrainingPause(step.run_id);
   if (pipelineResult.advanced) {
-    postAdvanceNudge(step.run_id);
+    postAdvanceSpawn(step.run_id);
   }
   return { status: pipelineResult.runCompleted ? "completed" : "advanced" };
 }
@@ -670,7 +678,7 @@ async function checkLoopContinuation(runId: string, loopStepId: string): Promise
 
   const result = await advancePipeline(runId);
   if (result.advanced) {
-    postAdvanceNudge(runId);
+    postAdvanceSpawn(runId);
   }
   return result;
 }

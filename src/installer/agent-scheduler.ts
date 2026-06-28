@@ -48,6 +48,9 @@ export {
   executePollingRound,
 } from "./scheduler/polling-round.js";
 
+// ── Direct spawn (event-driven sequential scheduling) ──────────────────
+export { spawnAgentsForPendingSteps } from "./scheduler/direct-spawn.js";
+
 // ── Cron job lifecycle ─────────────────────────────────────────────────
 export {
   _getJobIntervalsForRun,
