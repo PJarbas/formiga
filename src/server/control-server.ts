@@ -24,7 +24,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { logger } from "../lib/logger.js";
-import { getDb } from "../db.js";
+import { getPrisma } from "../database/prisma.js";
 import { emitEvent } from "../installer/events.js";
 
 export const DEFAULT_CONTROL_PORT = 3339;
@@ -121,15 +121,29 @@ export interface RunRow {
   created_at?: string;
 }
 
-function getRun(runId: string): RunRow | null {
+async function getRun(runId: string): Promise<RunRow | null> {
   try {
-    const db = getDb();
-    const row = db
-      .prepare(
-        "SELECT id, workflow_id, status, scheduling_status, context, created_at FROM runs WHERE id = ?",
-      )
-      .get(runId) as RunRow | undefined;
-    return row ?? null;
+    const prisma = getPrisma();
+    const row = await prisma.run.findUnique({
+      where: { id: runId },
+      select: {
+        id: true,
+        workflow_id: true,
+        status: true,
+        scheduling_status: true,
+        context: true,
+        created_at: true,
+      },
+    });
+    if (!row) return null;
+    return {
+      id: row.id,
+      workflow_id: row.workflow_id,
+      status: row.status,
+      scheduling_status: row.scheduling_status,
+      context: row.context,
+      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    };
   } catch (err) {
     logger.warn("control-server: getRun failed", { runId, error: String(err) });
     return null;
@@ -140,15 +154,17 @@ function isTerminal(status: string): boolean {
   return status === "completed" || status === "failed" || status === "canceled";
 }
 
-function requiredTimersForRun(runId: string): number {
-  const row = getDb()
-    .prepare("SELECT COUNT(DISTINCT agent_id) AS cnt FROM steps WHERE run_id = ?")
-    .get(runId) as { cnt: number } | undefined;
-  return row?.cnt ?? 0;
+async function requiredTimersForRun(runId: string): Promise<number> {
+  const prisma = getPrisma();
+  const groups = await prisma.step.groupBy({
+    by: ["agent_id"],
+    where: { run_id: runId },
+  });
+  return groups.length;
 }
 
 async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
-  const requiredTimers = requiredTimersForRun(run.id);
+  const requiredTimers = await requiredTimersForRun(run.id);
   const maxActiveTimers = getMaxActiveTimers();
 
   const {
@@ -172,12 +188,16 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
   }
 
   const existingForRun = _scheduledJobCountForRun(run.id);
+  const prisma = getPrisma();
   if (requiredTimers > 0 && existingForRun >= requiredTimers) {
-    getDb()
-      .prepare(
-        "UPDATE runs SET scheduling_status = 'active', scheduling_error = NULL, updated_at = datetime('now') WHERE id = ?",
-      )
-      .run(run.id);
+    await prisma.run.update({
+      where: { id: run.id },
+      data: {
+        scheduling_status: "active",
+        scheduling_error: null,
+        updated_at: new Date(),
+      },
+    });
     return ok({ state: "active", requiredTimers, maxActiveTimers });
   }
 
@@ -188,11 +208,15 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
   if (requiredTimers > maxActiveTimers) {
     const message =
       `Run requires ${requiredTimers} scheduler timer(s), but FORMIGA_MAX_ACTIVE_TIMERS is ${maxActiveTimers}.`;
-    getDb()
-      .prepare(
-        "UPDATE runs SET status = 'failed', scheduling_status = NULL, scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
-      )
-      .run(message, run.id);
+    await prisma.run.update({
+      where: { id: run.id },
+      data: {
+        status: "failed",
+        scheduling_status: null,
+        scheduling_error: message,
+        updated_at: new Date(),
+      },
+    });
     logger.error("control-server: register-run unschedulable", {
       runId: run.id,
       requiredTimers,
@@ -203,16 +227,19 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
 
   const freeSlots = maxActiveTimers - _scheduledJobCount();
   if (requiredTimers > freeSlots) {
-    getDb()
-      .prepare(
-        `UPDATE runs
-         SET scheduling_status = 'queued',
-             scheduling_requested_at = COALESCE(scheduling_requested_at, ?),
-             scheduling_error = NULL,
-             updated_at = datetime('now')
-         WHERE id = ?`,
-      )
-      .run(new Date().toISOString(), run.id);
+    const existing = await prisma.run.findUnique({
+      where: { id: run.id },
+      select: { scheduling_requested_at: true },
+    });
+    await prisma.run.update({
+      where: { id: run.id },
+      data: {
+        scheduling_status: "queued",
+        scheduling_requested_at: existing?.scheduling_requested_at ?? new Date(),
+        scheduling_error: null,
+        updated_at: new Date(),
+      },
+    });
     logger.info("control-server: register-run queued", {
       runId: run.id,
       requiredTimers,
@@ -243,28 +270,49 @@ async function admitOrQueueRun(run: RunRow): Promise<JsonResponse> {
     throw err;
   }
 
-  getDb()
-    .prepare(
-      "UPDATE runs SET scheduling_status = 'active', scheduling_error = NULL, updated_at = datetime('now') WHERE id = ?",
-    )
-    .run(run.id);
+  await prisma.run.update({
+    where: { id: run.id },
+    data: {
+      scheduling_status: "active",
+      scheduling_error: null,
+      updated_at: new Date(),
+    },
+  });
 
   logger.info("control-server: register-run admitted", { runId: run.id, requiredTimers });
   return ok({ state: "active", requiredTimers, maxActiveTimers }, 202);
 }
 
 async function admitQueuedRuns(): Promise<void> {
-  const db = getDb();
-  const queued = db
-    .prepare(
-      `SELECT id, workflow_id, status, scheduling_status, context, created_at
-       FROM runs
-       WHERE status = 'running' AND scheduling_status = 'queued'
-       ORDER BY scheduling_requested_at ASC, created_at ASC`,
-    )
-    .all() as unknown as RunRow[];
+  const prisma = getPrisma();
+  const queued = await prisma.run.findMany({
+    where: {
+      status: "running",
+      scheduling_status: "queued",
+    },
+    orderBy: [
+      { scheduling_requested_at: "asc" },
+      { created_at: "asc" },
+    ],
+    select: {
+      id: true,
+      workflow_id: true,
+      status: true,
+      scheduling_status: true,
+      context: true,
+      created_at: true,
+    },
+  });
 
-  for (const run of queued) {
+  for (const row of queued) {
+    const run: RunRow = {
+      id: row.id,
+      workflow_id: row.workflow_id,
+      status: row.status,
+      scheduling_status: row.scheduling_status,
+      context: row.context,
+      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    };
     const result = await admitOrQueueRun(run).catch((err) => {
       logger.warn("control-server: queued admission failed", {
         runId: run.id,
@@ -278,7 +326,7 @@ async function admitQueuedRuns(): Promise<void> {
 }
 
 async function handleRegisterRun(runId: string): Promise<JsonResponse> {
-  const run = getRun(runId);
+  const run = await getRun(runId);
   if (!run) return notFound(`Run not found: ${runId}`);
   if (isTerminal(run.status)) return conflict(`Run is terminal: ${run.status}`);
   if (run.status === "paused" || run.scheduling_status === "paused") {
@@ -286,7 +334,7 @@ async function handleRegisterRun(runId: string): Promise<JsonResponse> {
   }
   if (run.scheduling_status === "active") {
     const { _scheduledJobCountForRun } = await import("../installer/agent-scheduler.js");
-    if (_scheduledJobCountForRun(run.id) >= requiredTimersForRun(run.id)) {
+    if (_scheduledJobCountForRun(run.id) >= await requiredTimersForRun(run.id)) {
       return ok({ state: "active" });
     }
   }
@@ -297,11 +345,15 @@ async function handleRegisterRun(runId: string): Promise<JsonResponse> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     try {
-      getDb()
-        .prepare(
-          "UPDATE runs SET scheduling_status = 'error', scheduling_error = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .run(message, runId);
+      const prisma = getPrisma();
+      await prisma.run.update({
+        where: { id: runId },
+        data: {
+          scheduling_status: "error",
+          scheduling_error: message,
+          updated_at: new Date(),
+        },
+      });
     } catch {
       /* best-effort */
     }
@@ -311,7 +363,7 @@ async function handleRegisterRun(runId: string): Promise<JsonResponse> {
 }
 
 async function handleTerminateRun(runId: string): Promise<JsonResponse> {
-  const run = getRun(runId);
+  const run = await getRun(runId);
   if (!run) return notFound(`Run not found: ${runId}`);
 
   try {
@@ -322,11 +374,14 @@ async function handleTerminateRun(runId: string): Promise<JsonResponse> {
   }
 
   try {
-    getDb()
-      .prepare(
-        "UPDATE runs SET scheduling_status = NULL, updated_at = datetime('now') WHERE id = ?",
-      )
-      .run(runId);
+    const prisma = getPrisma();
+    await prisma.run.update({
+      where: { id: runId },
+      data: {
+        scheduling_status: null,
+        updated_at: new Date(),
+      },
+    });
   } catch {
     /* best-effort */
   }
@@ -340,18 +395,21 @@ async function handleTerminateRun(runId: string): Promise<JsonResponse> {
 }
 
 async function handlePauseRun(runId: string, drain = false): Promise<JsonResponse> {
-  const run = getRun(runId);
+  const run = await getRun(runId);
   if (!run) return notFound(`Run not found: ${runId}`);
   if (isTerminal(run.status)) return conflict(`Run is terminal: ${run.status}`);
   if (run.status === "paused") return ok({ state: "paused" });
 
+  const prisma = getPrisma();
   if (drain) {
     try {
-      getDb()
-        .prepare(
-          "UPDATE runs SET scheduling_status = 'draining_pause', updated_at = datetime('now') WHERE id = ?",
-        )
-        .run(runId);
+      await prisma.run.update({
+        where: { id: runId },
+        data: {
+          scheduling_status: "draining_pause",
+          updated_at: new Date(),
+        },
+      });
     } catch (err) {
       logger.warn("control-server: drain pause db update failed", { runId, error: String(err) });
       return notFound(`Run not found: ${runId}`);
@@ -363,7 +421,7 @@ async function handlePauseRun(runId: string, drain = false): Promise<JsonRespons
       logger.warn("control-server: drain pause finalization check failed", { runId, error: String(err) });
     }
     logger.info("control-server: drain pause requested", { runId });
-    const updated = getRun(runId);
+    const updated = await getRun(runId);
     return ok({ state: updated?.scheduling_status ?? "draining_pause", drained: true });
   }
 
@@ -374,11 +432,14 @@ async function handlePauseRun(runId: string, drain = false): Promise<JsonRespons
     logger.warn("control-server: pause removeRunCrons threw", { runId, error: String(err) });
   }
   try {
-    getDb()
-      .prepare(
-        "UPDATE runs SET status = 'paused', scheduling_status = 'paused', updated_at = datetime('now') WHERE id = ?",
-      )
-      .run(runId);
+    await prisma.run.update({
+      where: { id: runId },
+      data: {
+        status: "paused",
+        scheduling_status: "paused",
+        updated_at: new Date(),
+      },
+    });
   } catch (err) {
     logger.warn("control-server: pause db update failed", { runId, error: String(err) });
   }
@@ -400,18 +461,24 @@ async function handlePauseRun(runId: string, drain = false): Promise<JsonRespons
 }
 
 async function handleResumeRun(runId: string): Promise<JsonResponse> {
-  const run = getRun(runId);
+  const run = await getRun(runId);
   if (!run) return notFound(`Run not found: ${runId}`);
   if (isTerminal(run.status)) return conflict(`Run is terminal: ${run.status}`);
   if (run.status === "running" && run.scheduling_status === "active") {
     return ok({ state: "active" });
   }
   try {
-    getDb()
-      .prepare(
-        "UPDATE runs SET status = 'running', scheduling_status = 'pending_register', scheduling_requested_at = ?, scheduling_error = NULL, updated_at = datetime('now') WHERE id = ?",
-      )
-      .run(new Date().toISOString(), runId);
+    const prisma = getPrisma();
+    await prisma.run.update({
+      where: { id: runId },
+      data: {
+        status: "running",
+        scheduling_status: "pending_register",
+        scheduling_requested_at: new Date(),
+        scheduling_error: null,
+        updated_at: new Date(),
+      },
+    });
   } catch {
     /* best-effort */
   }
@@ -420,8 +487,8 @@ async function handleResumeRun(runId: string): Promise<JsonResponse> {
   // paused, status=paused and getRun already loaded workflow_id. When
   // resume follows a failed/canceled path (future use), include whatever
   // workflow_id we have.
-  const wfId = run.workflow_id ||
-    (getRun(runId)?.workflow_id ?? undefined);
+  const currentRun = await getRun(runId);
+  const wfId = run.workflow_id || (currentRun?.workflow_id ?? undefined);
 
   emitEvent({
     ts: new Date().toISOString(),
@@ -434,17 +501,20 @@ async function handleResumeRun(runId: string): Promise<JsonResponse> {
   // Pause-without-drain kills the pi process, leaving steps status='running'.
   // On resume, reset those to 'pending' so peekStep finds them.
   try {
-    const orphanedAgents = getDb()
-      .prepare("SELECT DISTINCT agent_id FROM steps WHERE run_id = ? AND status = 'running'")
-      .all(runId) as { agent_id: string }[];
-    if (orphanedAgents.length > 0) {
+    const prisma = getPrisma();
+    const steps = await prisma.step.findMany({
+      where: { run_id: runId, status: "running" },
+      distinct: ["agent_id"],
+      select: { agent_id: true },
+    });
+    if (steps.length > 0) {
       const { recoverOrphanedStepsForAgent } = await import("../installer/step-ops.js");
-      for (const { agent_id } of orphanedAgents) {
+      for (const { agent_id } of steps) {
         await recoverOrphanedStepsForAgent(agent_id, runId);
       }
       logger.info("control-server: resume orphan recovery complete", {
         runId,
-        agents: orphanedAgents.map((a) => a.agent_id),
+        agents: steps.map((s) => s.agent_id),
       });
     }
   } catch (err) {
@@ -458,15 +528,29 @@ async function handleResumeRun(runId: string): Promise<JsonResponse> {
 }
 
 async function handleNudge(): Promise<JsonResponse> {
-  const db = getDb();
+  const prisma = getPrisma();
 
-  // Query SQLite for running runs only — excludes paused and terminal.
-  const runningRuns = db
-    .prepare(
-      `SELECT id, workflow_id, status, scheduling_status, context, created_at
-       FROM runs WHERE status = 'running'`,
-    )
-    .all() as unknown as RunRow[];
+  // Query Prisma for running runs only — excludes paused and terminal.
+  const rows = await prisma.run.findMany({
+    where: { status: "running" },
+    select: {
+      id: true,
+      workflow_id: true,
+      status: true,
+      scheduling_status: true,
+      context: true,
+      created_at: true,
+    },
+  });
+
+  const runningRuns: RunRow[] = rows.map((r) => ({
+    id: r.id,
+    workflow_id: r.workflow_id,
+    status: r.status,
+    scheduling_status: r.scheduling_status,
+    context: r.context,
+    created_at: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+  }));
 
   if (runningRuns.length === 0) {
     return ok({
@@ -756,16 +840,37 @@ export function startReconciler(): { stop: () => void } {
   async function tick(): Promise<void> {
     if (stopped) return;
     try {
-      const db = getDb();
-      const desired = db
-        .prepare(
-          `SELECT id, workflow_id, status, scheduling_status, context, created_at
-           FROM runs
-           WHERE status IN ('running')
-             AND (scheduling_status IS NULL OR scheduling_status IN ('pending_register', 'active', 'error'))
-           ORDER BY scheduling_requested_at ASC, created_at ASC`,
-        )
-        .all() as unknown as RunRow[];
+      const prisma = getPrisma();
+      const desiredRows = await prisma.run.findMany({
+        where: {
+          status: "running",
+          OR: [
+            { scheduling_status: null },
+            { scheduling_status: { in: ["pending_register", "active", "error"] } },
+          ],
+        },
+        orderBy: [
+          { scheduling_requested_at: "asc" },
+          { created_at: "asc" },
+        ],
+        select: {
+          id: true,
+          workflow_id: true,
+          status: true,
+          scheduling_status: true,
+          context: true,
+          created_at: true,
+        },
+      });
+
+      const desired: RunRow[] = desiredRows.map((r) => ({
+        id: r.id,
+        workflow_id: r.workflow_id,
+        status: r.status,
+        scheduling_status: r.scheduling_status,
+        context: r.context,
+        created_at: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+      }));
 
       const { _hasRunScheduled, removeRunCrons } = await import(
         "../installer/agent-scheduler.js"
@@ -781,9 +886,10 @@ export function startReconciler(): { stop: () => void } {
       const { _scheduledRunIds } = await import("../installer/agent-scheduler.js");
       const scheduledIds = _scheduledRunIds();
       for (const runId of scheduledIds) {
-        const row = db
-          .prepare("SELECT status FROM runs WHERE id = ?")
-          .get(runId) as { status: string } | undefined;
+        const row = await prisma.run.findUnique({
+          where: { id: runId },
+          select: { status: true },
+        });
         if (!row || row.status !== "running") {
           await removeRunCrons(runId);
         }
