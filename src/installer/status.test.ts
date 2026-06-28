@@ -13,7 +13,7 @@ describe("stopWorkflow", () => {
   let originalHome: string | undefined;
   let db: DatabaseSync;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalDbPath = process.env.FORMIGA_DB_PATH;
     originalHome = process.env.HOME;
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-stopwf-"));
@@ -26,15 +26,23 @@ describe("stopWorkflow", () => {
     db.exec("PRAGMA journal_mode=WAL");
     db.exec(`CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
+      run_number INTEGER,
       workflow_id TEXT NOT NULL DEFAULT 'test',
       task TEXT NOT NULL DEFAULT 'test',
       status TEXT NOT NULL DEFAULT 'running',
       context TEXT NOT NULL DEFAULT '{}',
       tokens_spent INTEGER NOT NULL DEFAULT 0,
+      notify_url TEXT,
       scheduling_status TEXT,
+      scheduling_requested_at TEXT,
+      scheduling_error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
+
+    // Force Prisma to re-bind to the new temp DB
+    const { resetPrisma } = await import("../../dist/db.js");
+    await resetPrisma();
     db.exec(`CREATE TABLE IF NOT EXISTS steps (
       id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL,

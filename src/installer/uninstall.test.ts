@@ -14,7 +14,7 @@ describe("uninstall", () => {
   let originalHome: string | undefined;
   let originalStateDir: string | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalDbPath = process.env.FORMIGA_DB_PATH;
     originalHome = process.env.HOME;
     originalStateDir = process.env.FORMIGA_STATE_DIR;
@@ -59,6 +59,10 @@ describe("uninstall", () => {
         updated_at TEXT NOT NULL
       );
     `);
+
+    // Force Prisma to re-bind to the new temp DB
+    const { resetPrisma } = await import("../../dist/db.js");
+    await resetPrisma();
   });
 
   afterEach(() => {
@@ -79,17 +83,19 @@ describe("uninstall", () => {
     });
 
     it("returns empty array for completed runs", async () => {
+      const now = new Date().toISOString();
       db.prepare(
-        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
-      ).run("r1", "wf1", "task1", "completed", "{}");
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run("r1", "wf1", "task1", "completed", "{}", now, now);
       const runs = await checkActiveRuns();
       assert.deepEqual(runs, []);
     });
 
     it("returns running runs", async () => {
+      const now = new Date().toISOString();
       db.prepare(
-        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
-      ).run("r1", "wf1", "task1", "running", "{}");
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run("r1", "wf1", "task1", "running", "{}", now, now);
       const runs = await checkActiveRuns();
       assert.equal(runs.length, 1);
       assert.equal(runs[0]!.id, "r1");
@@ -98,21 +104,24 @@ describe("uninstall", () => {
     });
 
     it("returns paused runs", async () => {
+      const now = new Date().toISOString();
       db.prepare(
-        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
-      ).run("r2", "wf2", "task2", "paused", "{}");
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run("r2", "wf2", "task2", "paused", "{}", now, now);
       const runs = await checkActiveRuns();
       assert.equal(runs.length, 1);
       assert.equal(runs[0]!.id, "r2");
     });
 
     it("filters active runs by workflow_id", async () => {
+      const nowA = new Date().toISOString();
       db.prepare(
-        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
-      ).run("r1", "wf-a", "task A", "running", "{}");
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run("r1", "wf-a", "task A", "running", "{}", nowA, nowA);
+      const nowB = new Date().toISOString();
       db.prepare(
-        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
-      ).run("r2", "wf-b", "task B", "running", "{}");
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run("r2", "wf-b", "task B", "running", "{}", nowB, nowB);
 
       const runsA = await checkActiveRuns("wf-a");
       assert.equal(runsA.length, 1);
@@ -125,9 +134,10 @@ describe("uninstall", () => {
       const wfDir = path.join(tempDir, ".formiga", "workflows", "wf-active");
       fs.mkdirSync(wfDir, { recursive: true });
 
+      const now = new Date().toISOString();
       db.prepare(
-        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
-      ).run("r-active-1", "wf-active", "active task", "running", "{}");
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run("r-active-1", "wf-active", "active task", "running", "{}", now, now);
 
       await assert.rejects(
         uninstallWorkflow("wf-active"),
@@ -139,9 +149,10 @@ describe("uninstall", () => {
       const wfDir = path.join(tempDir, ".formiga", "workflows", "wf-paused");
       fs.mkdirSync(wfDir, { recursive: true });
 
+      const now = new Date().toISOString();
       db.prepare(
-        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
-      ).run("r-paused-1", "wf-paused", "paused task", "paused", "{}");
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run("r-paused-1", "wf-paused", "paused task", "paused", "{}", now, now);
 
       await assert.rejects(
         uninstallWorkflow("wf-paused"),
@@ -267,9 +278,10 @@ describe("uninstall", () => {
       fs.mkdirSync(wfBad, { recursive: true });
 
       // Insert an active run for wf-bad so uninstallWorkflow throws
+      const now = new Date().toISOString();
       db.prepare(
-        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))"
-      ).run("r-bad-1", "wf-bad", "active", "running", "{}");
+        "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run("r-bad-1", "wf-bad", "active", "running", "{}", now, now);
 
       const results = await uninstallAllWorkflows();
       assert.equal(results.length, 2, "should return result for both workflows");
