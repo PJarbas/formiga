@@ -158,7 +158,7 @@ async function requiredTimersForRun(runId: string): Promise<number> {
   const prisma = getPrisma();
   const groups = await prisma.step.groupBy({
     by: ["agent_id"],
-    where: { run_id: runId },
+    where: { run_id: runId, status: "pending" },
   });
   return groups.length;
 }
