@@ -24,7 +24,6 @@ import { pauseRunWithDaemon, resumeRunWithDaemon, nudgeWithDaemon } from "../ser
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
 import { formatServiceStatus, formatFormigaInfo, formatRunsSummary, formatProcessList } from "./status-format.js";
-import { getWorkflowStatus as getWorkflowStatusFn } from "../installer/status.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -48,7 +47,7 @@ import {
   type RunLoopIterationOptions,
   type RunLoopIterationResult,
 } from "../autoresearch/autoresearch.js";
-import { getDb, upsertAutoresearchSession } from "../db.js";
+import { getPrisma, upsertAutoresearchSession } from "../db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -210,15 +209,18 @@ function printAutoresearchSummary(cwd?: string): void {
   console.log(summary.nextPrompt);
 }
 
-function resolveAutoresearchCwdForRun(runIdOrPrefix: string): { runId: string; cwd?: string } {
-  const detail = getWorkflowStatus(runIdOrPrefix);
-  const db = getDb();
-  const row = db.prepare("SELECT context FROM runs WHERE id = ?").get(detail.id) as { context?: string | null } | undefined;
-  if (!row?.context) return { runId: detail.id };
+async function resolveAutoresearchCwdForRun(runIdOrPrefix: string): Promise<{ runId: string; cwd?: string }> {
+  const detail = await getWorkflowStatus(runIdOrPrefix);
+  const prisma = getPrisma();
+  const run = await prisma.run.findUnique({
+    where: { id: detail.id },
+    select: { context: true },
+  });
+  if (!run?.context) return { runId: detail.id };
 
   let context: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(row.context) as unknown;
+    const parsed = JSON.parse(run.context) as unknown;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       context = parsed as Record<string, unknown>;
     }
@@ -255,10 +257,10 @@ function printAutoresearchTimeline(cwd: string): void {
   }
 }
 
-function printWorkflowAutoresearch(runIdOrPrefix: string): void {
+async function printWorkflowAutoresearch(runIdOrPrefix: string): Promise<void> {
   let resolved: { runId: string; cwd?: string };
   try {
-    resolved = resolveAutoresearchCwdForRun(runIdOrPrefix);
+    resolved = await resolveAutoresearchCwdForRun(runIdOrPrefix);
   } catch (err) {
     const message = err instanceof Error ? err.message : `No run found matching "${runIdOrPrefix}".`;
     console.log(message.startsWith("No run found matching") ? `No run found matching "${runIdOrPrefix}".` : message);
@@ -1552,7 +1554,7 @@ async function main() {
     }
     if (action === "complete") { if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); } let output = args.slice(3).join(" ").trim(); if (!output) { const chunks: Buffer[] = []; for await (const c of process.stdin) chunks.push(c); output = Buffer.concat(chunks).toString("utf-8").trim(); } console.log(JSON.stringify(await completeStep(target, output))); return; }
     if (action === "fail") { if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); } console.log(JSON.stringify(await failStep(target, args.slice(3).join(" ").trim() || "Unknown error"))); return; }
-    if (action === "stories") { if (!target) { process.stderr.write("Missing run-id.\n"); process.exit(1); } const fullRunId = getWorkflowStatus(target).id; const stories = await getStories(fullRunId); if (stories.length === 0) { console.log("No stories found."); return; } for (const s of stories) console.log(`${s.storyId.padEnd(8)} [${s.status.padEnd(7)}] ${s.title}${s.retryCount > 0 ? ` (retry ${s.retryCount})` : ""}`); return; }
+    if (action === "stories") { if (!target) { process.stderr.write("Missing run-id.\n"); process.exit(1); } const fullRunId = (await getWorkflowStatus(target)).id; const stories = await getStories(fullRunId); if (stories.length === 0) { console.log("No stories found."); return; } for (const s of stories) console.log(`${s.storyId.padEnd(8)} [${s.status.padEnd(7)}] ${s.title}${s.retryCount > 0 ? ` (retry ${s.retryCount})` : ""}`); return; }
     process.stderr.write(`Unknown step action: ${action}\n`); process.exit(1);
   }
 
@@ -1565,7 +1567,7 @@ async function main() {
     }
 
     if (selector.kind === "run-number") {
-      const runId = lookupRunIdByNumber(selector.runNumber);
+      const runId = await lookupRunIdByNumber(selector.runNumber);
       if (runId) {
         const events = getRunEvents(runId);
         events.length === 0 ? console.log(`No events for run #${selector.runNumber}.`) : printEvents(events);
@@ -1579,7 +1581,7 @@ async function main() {
 
     let runId: string;
     try {
-      runId = getWorkflowStatus(selector.runId).id;
+      runId = (await getWorkflowStatus(selector.runId)).id;
     } catch (err) {
       console.log(err instanceof Error ? err.message : `No run found matching "${selector.runId}".`);
       return;
@@ -1598,7 +1600,7 @@ async function main() {
     }
 
     if (selector.kind === "run-number") {
-      const runId = lookupRunIdByNumber(selector.runNumber);
+      const runId = await lookupRunIdByNumber(selector.runNumber);
       if (!runId) {
         console.log(`No run #${selector.runNumber}.`);
         return;
@@ -1609,7 +1611,7 @@ async function main() {
 
     let logsTailRunId: string;
     try {
-      logsTailRunId = getWorkflowStatus(selector.runId).id;
+      logsTailRunId = (await getWorkflowStatus(selector.runId)).id;
     } catch (err) {
       const message = err instanceof Error ? err.message : `No run found matching "${selector.runId}".`;
       // The DB row may lag behind the events file in early bootstrap (events
@@ -1880,7 +1882,7 @@ async function main() {
     console.log();
     console.log("---");
     console.log();
-    console.log(formatRunsSummary());
+    console.log(await formatRunsSummary());
     console.log();
     console.log("---");
     console.log();
@@ -1892,7 +1894,7 @@ async function main() {
   if (group !== "workflow") { printUsage(); process.exit(1); }
 
   if (action === "runs") {
-    const runs = listRuns();
+    const runs = await listRuns();
     if (runs.length === 0) { console.log("No workflow runs found."); return; }
     console.log("Workflow runs:");
     for (const r of runs) console.log(`  [${r.status.padEnd(9)}] ${r.id.slice(0, 8).padEnd(10)} ${r.workflowId.padEnd(14)} ${r.tokensSpent.toLocaleString().padStart(8)} tokens  ${r.task.slice(0, 50)}${r.task.length > 50 ? "..." : ""}`);
@@ -1930,7 +1932,7 @@ async function main() {
 
   if (action === "stop") {
     if (!target) { process.stderr.write("Missing run-id.\n"); process.exit(1); }
-    try { const fullId = getWorkflowStatus(target).id; const r = await stopWorkflow(fullId); console.log(`Cancelled run ${r.runId.slice(0, 8)}.`); } catch (err) { process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`); process.exit(1); }
+    try { const fullId = (await getWorkflowStatus(target)).id; const r = await stopWorkflow(fullId); console.log(`Cancelled run ${r.runId.slice(0, 8)}.`); } catch (err) { process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`); process.exit(1); }
     return;
   }
 
@@ -1940,7 +1942,7 @@ async function main() {
     let fullId: string;
     let runStatus: string;
     try {
-      const detail = getWorkflowStatus(target);
+      const detail = await getWorkflowStatus(target);
       fullId = detail.id;
       runStatus = detail.status;
     } catch (err) {
@@ -1970,7 +1972,7 @@ async function main() {
     let fullId: string;
     let runStatus: string;
     try {
-      const detail = getWorkflowStatus(target);
+      const detail = await getWorkflowStatus(target);
       fullId = detail.id;
       runStatus = detail.status;
     } catch (err) {
@@ -2007,7 +2009,7 @@ async function main() {
 
   if (action === "pause-all") {
     const drain = args.includes("--drain");
-    const runs = listRuns(1000).filter(r => r.status === "running");
+    const runs = (await listRuns(1000)).filter(r => r.status === "running");
     if (runs.length === 0) {
       console.log("No runs to pause.");
       return;
@@ -2030,7 +2032,7 @@ async function main() {
   }
 
   if (action === "resume-all") {
-    const runs = listRuns(1000).filter(r => r.status === "paused");
+    const runs = (await listRuns(1000)).filter(r => r.status === "paused");
     if (runs.length === 0) {
       console.log("No runs to resume.");
       return;
@@ -2128,7 +2130,7 @@ async function main() {
   if (action === "status") {
     if (!target) { process.stderr.write("Missing query.\n"); process.exit(1); }
     try {
-      const result = getWorkflowStatus(target);
+      const result = await getWorkflowStatus(target);
       console.log(`Run: ${result.id.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.task}\nStatus: ${result.status}\nTokens: ${result.tokensSpent.toLocaleString()}`);
       console.log(`Steps:`);
       for (const step of result.steps) {
@@ -2147,7 +2149,7 @@ async function main() {
       process.stderr.write("Missing run-id.\nUsage: formiga workflow autoresearch <run-id>\n");
       process.exit(1);
     }
-    printWorkflowAutoresearch(target);
+    await printWorkflowAutoresearch(target);
     return;
   }
 
@@ -2157,7 +2159,7 @@ async function main() {
     try {
       let fullId: string;
       try {
-        fullId = getWorkflowStatus(target).id;
+        fullId = (await getWorkflowStatus(target)).id;
       } catch (err) {
         const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
         process.stderr.write(message.startsWith("No run found matching") ? `No run found matching "${target}".\n` : `${message}\n`);

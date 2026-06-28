@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getDb } from "../db.js";
+import { getPrisma } from "../db.js";
 import { removeAgentCrons } from "./agent-scheduler.js";
 import {
   resolveWorkflowDir,
@@ -22,6 +22,12 @@ export interface ActiveRunInfo {
   task: string;
   status: string;
   createdAt: string;
+}
+
+function dateToIso(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  if (typeof d === "string") return d;
+  return d.toISOString();
 }
 
 /**
@@ -172,44 +178,25 @@ export async function uninstallAllWorkflows(): Promise<UninstallResult[]> {
 export async function checkActiveRuns(
   workflowId?: string,
 ): Promise<ActiveRunInfo[]> {
-  const db = getDb();
+  const prisma = getPrisma();
 
-  let rows: Array<{
-    id: string;
-    task: string;
-    status: string;
-    created_at: string;
-  }>;
+  const where = workflowId
+    ? {
+        status: { in: ["running", "paused"] },
+        workflow_id: workflowId,
+      }
+    : { status: { in: ["running", "paused"] } };
 
-  if (workflowId) {
-    rows = db
-      .prepare(
-        "SELECT id, task, status, created_at FROM runs WHERE workflow_id = ? AND status IN ('running', 'paused')",
-      )
-      .all(workflowId) as Array<{
-        id: string;
-        task: string;
-        status: string;
-        created_at: string;
-      }>;
-  } else {
-    rows = db
-      .prepare(
-        "SELECT id, task, status, created_at FROM runs WHERE status IN ('running', 'paused')",
-      )
-      .all() as Array<{
-        id: string;
-        task: string;
-        status: string;
-        created_at: string;
-      }>;
-  }
+  const rows = await prisma.run.findMany({
+    where,
+    select: { id: true, task: true, status: true, created_at: true },
+  });
 
   return rows.map((r) => ({
     id: r.id,
     task: r.task,
     status: r.status,
-    createdAt: r.created_at,
+    createdAt: dateToIso(r.created_at),
   }));
 }
 

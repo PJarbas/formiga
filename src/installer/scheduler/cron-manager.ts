@@ -90,10 +90,13 @@ export async function createAgentCronJob(
   // Read harness_type from run context; default to "pi" if not set.
   let harnessType: HarnessType = "pi";
   try {
-    const { getDb } = await import("../../db.js");
-    const db = getDb();
-    const runRow = db.prepare("SELECT context FROM runs WHERE id = ?").get(runId) as { context: string } | undefined;
-    if (runRow) {
+    const { getPrisma } = await import("../../db.js");
+    const prisma = getPrisma();
+    const runRow = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { context: true },
+    });
+    if (runRow?.context) {
       const ctx = JSON.parse(runRow.context) as Record<string, unknown>;
       if (ctx.harness_type === "hermes") {
         harnessType = "hermes";
@@ -238,13 +241,15 @@ export async function removeAgentCrons(workflowId: string): Promise<void> {
  */
 export async function teardownWorkflowCronsIfIdle(workflowId: string): Promise<void> {
   try {
-    const { getDb } = await import("../../db.js");
-    const db = getDb();
-    const activeRuns = db
-      .prepare("SELECT COUNT(*) AS cnt FROM runs WHERE workflow_id = ? AND status IN ('running', 'paused')")
-      .get(workflowId) as { cnt: number } | undefined;
+    const { getPrisma } = await import("../../db.js");
+    const prisma = getPrisma();
+    const count = await prisma.run.count({
+      where: {
+        workflow_id: workflowId,
+        status: { in: ["running", "paused"] },
+      },
+    });
 
-    const count = activeRuns?.cnt ?? 0;
     if (count === 0) {
       logger.info("Workflow idle — tearing down crons", { workflowId });
       await removeAgentCrons(workflowId);

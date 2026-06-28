@@ -107,13 +107,13 @@ export function formatFormigaInfo(opts?: {
   return lines.join("\n");
 }
 
-export function formatRunsSummary(opts?: {
-  listRuns?: () => RunInfo[];
-}): string {
+export async function formatRunsSummary(opts?: {
+  listRuns?: () => Promise<RunInfo[]>;
+}): Promise<string> {
   const runsFn = opts?.listRuns ?? defaultListRuns;
   let runs: RunInfo[];
   try {
-    runs = runsFn();
+    runs = await runsFn();
   } catch {
     runs = [];
   }

@@ -19,7 +19,7 @@
 // `../db.js` and `./step-ops.js`, avoiding cycles.
 // ══════════════════════════════════════════════════════════════════════
 
-import { getDb, incrementSystemTokenSpend } from "../../db.js";
+import { getPrisma, incrementSystemTokenSpend } from "../../db.js";
 import { logger } from "../../lib/logger.js";
 import { emitEvent } from "../events.js";
 import { getRoleTimeoutSeconds, inferRole } from "../install.js";
@@ -69,10 +69,13 @@ async function resolveRunIdForAttribution(metadata: PollingRoundMetadata): Promi
   }
 
   try {
-    const db = getDb();
-    const row = db.prepare("SELECT run_id FROM steps WHERE id = ?").get(metadata.stepId) as { run_id: string } | undefined;
-    if (!row?.run_id) return { runId: null, source: "none" };
-    return { runId: row.run_id, source: "step_lookup" };
+    const prisma = getPrisma();
+    const step = await prisma.step.findUnique({
+      where: { id: metadata.stepId },
+      select: { run_id: true },
+    });
+    if (!step?.run_id) return { runId: null, source: "none" };
+    return { runId: step.run_id, source: "step_lookup" };
   } catch {
     return { runId: null, source: "none" };
   }
@@ -84,23 +87,23 @@ interface TokenSpendUpdate {
 }
 
 async function incrementRunTokenSpend(runId: string, tokenUsage: number): Promise<TokenSpendUpdate | null> {
-  const db = getDb();
-  const result = db
-    .prepare("UPDATE runs SET tokens_spent = tokens_spent + ?, updated_at = datetime('now') WHERE id = ?")
-    .run(tokenUsage, runId);
-
-  if ((result.changes ?? 0) <= 0) return null;
-
-  const row = db
-    .prepare("SELECT workflow_id, tokens_spent FROM runs WHERE id = ?")
-    .get(runId) as { workflow_id: string; tokens_spent: number } | undefined;
-
-  if (!row) return null;
-
-  return {
-    workflowId: row.workflow_id,
-    tokensSpent: row.tokens_spent,
-  };
+  const prisma = getPrisma();
+  try {
+    const updated = await prisma.run.update({
+      where: { id: runId },
+      data: {
+        tokens_spent: { increment: tokenUsage },
+        updated_at: new Date(),
+      },
+      select: { workflow_id: true, tokens_spent: true },
+    });
+    return {
+      workflowId: updated.workflow_id,
+      tokensSpent: updated.tokens_spent,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // ── Auto-complete + orphan recovery ───────────────────────────────────
@@ -121,11 +124,11 @@ export async function autoCompleteStepIfRunning(
     return;
   }
 
-  const db = getDb();
-
-  const row = db
-    .prepare("SELECT status, type, current_story_id, run_id FROM steps WHERE id = ?")
-    .get(metadata.stepId) as { status: string; type: string; current_story_id: string | null; run_id: string } | undefined;
+  const prisma = getPrisma();
+  const row = await prisma.step.findUnique({
+    where: { id: metadata.stepId },
+    select: { status: true, type: true, current_story_id: true, run_id: true },
+  });
 
   if (!row) {
     logger.warn("Auto-complete fallback skipped — step not found", {
@@ -421,10 +424,11 @@ export async function executePollingRound(
   // job and skip. Without this check, timers leaked from previous CLI
   // processes would keep polling pi for completed runs.
   try {
-    const db = getDb();
-    const row = db
-      .prepare("SELECT status, scheduling_status FROM runs WHERE id = ?")
-      .get(job.runId) as { status: string; scheduling_status: string | null } | undefined;
+    const prisma = getPrisma();
+    const row = await prisma.run.findUnique({
+      where: { id: job.runId },
+      select: { status: true, scheduling_status: true },
+    });
     if (!row || (row.status !== "running" && row.status !== "paused")) {
       logger.info("Polling round skipped — run no longer running; tearing down job", {
         ...context,

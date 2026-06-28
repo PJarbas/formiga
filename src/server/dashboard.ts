@@ -777,7 +777,7 @@ async function handleDeleteRun(
     // Resolve prefix/id to full run ID
     let fullRunId: string;
     try {
-      fullRunId = getWorkflowStatus(runId).id;
+      fullRunId = (await getWorkflowStatus(runId)).id;
     } catch {
       errorResponse(res, `Run not found: ${runId}`, 404);
       return;

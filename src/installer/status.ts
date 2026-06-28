@@ -1,4 +1,4 @@
-import { getDb, getPrisma } from "../db.js";
+import { getPrisma } from "../db.js";
 import { scheduleRunCronTeardown } from "./step-ops.js";
 import { removeRunCrons } from "./agent-scheduler.js";
 import { terminateRunWithDaemon } from "../server/control-client.js";
@@ -46,79 +46,72 @@ export interface StoryInfo {
  * Returns the run detail if exactly one match is found.
  * Throws if zero or multiple matches.
  */
-export function getWorkflowStatus(query: string): RunDetail {
-  const db = getDb();
+export async function getWorkflowStatus(query: string): Promise<RunDetail> {
+  const prisma = getPrisma();
 
   // Try exact id match first
-  let row = db
-    .prepare(
-      "SELECT id, workflow_id, task, status, context, created_at, updated_at, tokens_spent FROM runs WHERE id = ?",
-    )
-    .get(query) as unknown as RunRow | undefined;
+  let run = await prisma.run.findUnique({ where: { id: query } });
 
   // Try id prefix match
-  if (!row) {
-    const prefixRows = db
-      .prepare(
-        "SELECT id, workflow_id, task, status, context, created_at, updated_at, tokens_spent FROM runs WHERE id LIKE ?",
-      )
-      .all(`${query}%`) as unknown as RunRow[];
-    if (prefixRows.length === 1) {
-      row = prefixRows[0];
-    } else if (prefixRows.length > 1) {
+  if (!run) {
+    const prefixRuns = await prisma.run.findMany({
+      where: { id: { startsWith: query } },
+    });
+    if (prefixRuns.length === 1) {
+      run = prefixRuns[0];
+    } else if (prefixRuns.length > 1) {
       throw new Error(
-        `Multiple runs match prefix "${query}": ${prefixRows.map((r) => r.id.slice(0, 12)).join(", ")}. Use a longer prefix to disambiguate.`,
+        `Multiple runs match prefix "${query}": ${prefixRuns.map((r) => r.id.slice(0, 12)).join(", ")}. Use a longer prefix to disambiguate.`,
       );
     }
   }
 
   // Try task substring match
-  if (!row) {
-    const taskRows = db
-      .prepare(
-        "SELECT id, workflow_id, task, status, context, created_at, updated_at, tokens_spent FROM runs WHERE task LIKE ?",
-      )
-      .all(`%${query}%`) as unknown as RunRow[];
-    if (taskRows.length === 1) {
-      row = taskRows[0];
-    } else if (taskRows.length > 1) {
+  if (!run) {
+    const taskRuns = await prisma.run.findMany({
+      where: { task: { contains: query } },
+    });
+    if (taskRuns.length === 1) {
+      run = taskRuns[0];
+    } else if (taskRuns.length > 1) {
       throw new Error(
-        `Multiple runs match task "${query}": ${taskRows.map((r) => `${r.id.slice(0, 8)} (${r.task.slice(0, 30)})`).join(", ")}. Use a more specific query.`,
+        `Multiple runs match task "${query}": ${taskRuns.map((r) => `${r.id.slice(0, 8)} (${r.task.slice(0, 30)})`).join(", ")}. Use a more specific query.`,
       );
     }
   }
 
-  if (!row) {
+  if (!run) {
     throw new Error(`No run found matching "${query}"`);
   }
 
-  return buildRunDetail(db, row);
+  return buildRunDetail(run);
 }
 
 /**
  * List all runs, most recent first.
  */
-export function listRuns(limit = 50): RunInfo[] {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      "SELECT id, workflow_id, task, status, created_at, updated_at, tokens_spent FROM runs ORDER BY created_at DESC LIMIT ?",
-    )
-    .all(limit) as unknown as RunRow[];
-
-  return rows.map((r) => {
-    const stepSummary = getStepSummary(db, r.id);
-    return {
-      id: r.id,
-      workflowId: r.workflow_id,
-      task: r.task,
-      status: r.status,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-      stepSummary,
-      tokensSpent: r.tokens_spent,
-    };
+export async function listRuns(limit = 50): Promise<RunInfo[]> {
+  const prisma = getPrisma();
+  const rows = await prisma.run.findMany({
+    orderBy: { created_at: "desc" },
+    take: limit,
   });
+
+  return Promise.all(
+    rows.map(async (r) => {
+      const stepSummary = await getStepSummary(r.id);
+      return {
+        id: r.id,
+        workflowId: r.workflow_id,
+        task: r.task,
+        status: r.status,
+        createdAt: dateToIso(r.created_at),
+        updatedAt: dateToIso(r.updated_at),
+        stepSummary,
+        tokensSpent: r.tokens_spent,
+      };
+    }),
+  );
 }
 
 /**
@@ -245,45 +238,44 @@ export async function stopWorkflow(runId: string): Promise<{ ok: boolean; runId:
 
 // ── Internal helpers ────────────────────────────────────────────────
 
-interface RunRow {
+function dateToIso(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  if (typeof d === "string") return d;
+  return d.toISOString();
+}
+
+async function getStepSummary(runId: string): Promise<string> {
+  const prisma = getPrisma();
+  const steps = await prisma.step.findMany({
+    where: { run_id: runId },
+    select: { status: true },
+  });
+
+  if (steps.length === 0) return "no steps";
+  const counts: Record<string, number> = {};
+  for (const s of steps) {
+    counts[s.status] = (counts[s.status] || 0) + 1;
+  }
+  const parts = Object.entries(counts).map(([status, cnt]) => `${status}:${cnt}`);
+  return parts.join(" ");
+}
+
+async function buildRunDetail(run: {
   id: string;
   workflow_id: string;
   task: string;
   status: string;
   context: string;
-  created_at: string;
-  updated_at: string;
+  created_at: Date;
+  updated_at: Date;
   tokens_spent: number;
-}
+}): Promise<RunDetail> {
+  const prisma = getPrisma();
 
-function getStepSummary(db: ReturnType<typeof getDb>, runId: string): string {
-  const steps = db
-    .prepare(
-      "SELECT status, COUNT(*) as cnt FROM steps WHERE run_id = ? GROUP BY status",
-    )
-    .all(runId) as Array<{ status: string; cnt: number }>;
-
-  if (steps.length === 0) return "no steps";
-  const parts = steps.map((s) => `${s.status}:${s.cnt}`);
-  return parts.join(" ");
-}
-
-function buildRunDetail(
-  db: ReturnType<typeof getDb>,
-  row: RunRow,
-): RunDetail {
-  const steps = db
-    .prepare(
-      "SELECT step_id, agent_id, status, type, retry_count, output FROM steps WHERE run_id = ? ORDER BY step_index ASC",
-    )
-    .all(row.id) as Array<{
-      step_id: string;
-      agent_id: string;
-      status: string;
-      type: string;
-      retry_count: number;
-      output: string | null;
-    }>;
+  const steps = await prisma.step.findMany({
+    where: { run_id: run.id },
+    orderBy: { step_index: "asc" },
+  });
 
   const stepInfos: StepInfo[] = steps.map((s) => ({
     stepId: s.step_id,
@@ -294,16 +286,10 @@ function buildRunDetail(
     output: s.output ?? undefined,
   }));
 
-  const stories = db
-    .prepare(
-      "SELECT story_id, title, status, retry_count FROM stories WHERE run_id = ? ORDER BY story_index ASC",
-    )
-    .all(row.id) as Array<{
-      story_id: string;
-      title: string;
-      status: string;
-      retry_count: number;
-    }>;
+  const stories = await prisma.story.findMany({
+    where: { run_id: run.id },
+    orderBy: { story_index: "asc" },
+  });
 
   const storyInfos: StoryInfo[] = stories.map((s) => ({
     storyId: s.story_id,
@@ -312,7 +298,7 @@ function buildRunDetail(
     retryCount: s.retry_count,
   }));
 
-  const stepSummary = getStepSummary(db, row.id);
+  const stepSummary = await getStepSummary(run.id);
 
   // Enrich with worktree information when workspace_mode is 'worktree'
   let workspaceMode: string | undefined;
@@ -321,21 +307,12 @@ function buildRunDetail(
   let wtOriginRef: string | undefined;
   let wtOriginSha: string | undefined;
   try {
-    const ctx = JSON.parse(row.context || "{}") as Record<string, string>;
+    const ctx = JSON.parse(run.context || "{}") as Record<string, string>;
     if (ctx.workspace_mode === "worktree") {
       workspaceMode = ctx.workspace_mode;
-      const wtRow = db
-        .prepare(
-          "SELECT worktree_path, worktree_origin_repository, worktree_origin_ref, worktree_origin_sha FROM run_worktrees WHERE run_id = ?",
-        )
-        .get(row.id) as
-        | {
-            worktree_path: string;
-            worktree_origin_repository: string;
-            worktree_origin_ref: string | null;
-            worktree_origin_sha: string | null;
-          }
-        | undefined;
+      const wtRow = await prisma.runWorktree.findUnique({
+        where: { run_id: run.id },
+      });
       if (wtRow) {
         wtPath = wtRow.worktree_path;
         wtOriginRepo = wtRow.worktree_origin_repository;
@@ -348,14 +325,14 @@ function buildRunDetail(
   }
 
   return {
-    id: row.id,
-    workflowId: row.workflow_id,
-    task: row.task,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    id: run.id,
+    workflowId: run.workflow_id,
+    task: run.task,
+    status: run.status,
+    createdAt: dateToIso(run.created_at),
+    updatedAt: dateToIso(run.updated_at),
     stepSummary,
-    tokensSpent: row.tokens_spent,
+    tokensSpent: run.tokens_spent,
     steps: stepInfos,
     stories: storyInfos.length > 0 ? storyInfos : undefined,
     workspace_mode: workspaceMode,
