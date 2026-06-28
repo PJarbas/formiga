@@ -1803,101 +1803,61 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
   (async () => {
     const prisma = getPrisma();
 
-    const runId = await findActivePipelineRunId();
-    if (!runId) {
-      jsonResponse(res, {
-        run: {
-          runId: null,
-          status: "idle",
-          currentPhase: "idle",
-          currentRound: 0,
-          maxRounds: 5,
-          startedAt: null,
-          updatedAt: null,
-        },
-        phases: derivePhases("idle"),
-        rounds: [],
-      });
+    const activeRuns = await prisma.run.findMany({
+      where: { status: { in: ["running", "paused"] } },
+      orderBy: { created_at: "desc" },
+      select: { id: true, task: true, status: true, created_at: true, updated_at: true },
+    });
+
+    const recentDone = await prisma.run.findMany({
+      where: { status: { in: ["completed", "failed"] } },
+      orderBy: { created_at: "desc" },
+      take: 10,
+      select: { id: true, task: true, status: true, created_at: true, updated_at: true },
+    });
+
+    const allRuns = [...activeRuns, ...recentDone];
+
+    if (allRuns.length === 0) {
+      jsonResponse(res, { runs: [] });
       return;
     }
 
-    const run = await prisma.run.findUnique({
-      where: { id: runId },
-      select: { id: true, status: true, created_at: true, updated_at: true, tokens_spent: true },
-    });
+    const runIds = allRuns.map((r) => r.id);
 
-    const maxRoundRow = await prisma.experiment.aggregate({
-      where: { run_id: runId },
-      _max: { round_number: true },
-    });
-    const currentRound = maxRoundRow._max.round_number ?? 0;
-
-    const currentPhase = await getCurrentPhase(runId);
-
-    // Build rounds summary reusing the same groupBy pattern as GET /api/rounds
-    const roundRows = await prisma.experiment.groupBy({
-      by: ["round_number"],
-      where: { run_id: runId },
-      _min: { created_at: true },
-      _max: { created_at: true, val_metric: true },
+    const experimentStats = await prisma.experiment.groupBy({
+      by: ["run_id"],
+      where: { run_id: { in: runIds } },
       _count: true,
-      orderBy: { round_number: "desc" },
+      _max: { val_metric: true },
     });
+    const statsMap = new Map(experimentStats.map((e) => [e.run_id, { count: e._count, best: e._max.val_metric }]));
 
-    const rounds = roundRows.map((r) => {
-      const isRunning = r.round_number === currentRound && (run?.status === "running" || run?.status === "paused");
-      const startMs = r._min.created_at?.getTime() ?? null;
-      const endMs = r._max.created_at?.getTime() ?? null;
-      const durationMs = startMs && endMs ? endMs - startMs : null;
+    const runs = await Promise.all(
+      allRuns.map(async (run) => {
+        const currentPhase = await getCurrentPhase(run.id);
+        const stats = statsMap.get(run.id);
+        const startMs = run.created_at?.getTime() ?? null;
+        const endMs = run.updated_at?.getTime() ?? null;
+        const durationMs = startMs && endMs ? endMs - startMs : null;
 
-      let status: "running" | "completed" | "failed" = "completed";
-      if (isRunning) status = "running";
+        return {
+          runId: run.id,
+          shortHash: run.id.slice(0, 8),
+          task: run.task,
+          status: run.status,
+          currentPhase,
+          phases: derivePhases(currentPhase),
+          totalExperiments: stats?.count ?? 0,
+          bestCvMean: stats?.best ?? null,
+          durationMs,
+          startedAt: run.created_at?.toISOString() ?? null,
+          updatedAt: run.updated_at?.toISOString() ?? null,
+        };
+      }),
+    );
 
-      return {
-        runId,
-        roundNumber: r.round_number,
-        status,
-        currentPhase: isRunning ? currentPhase : null,
-        bestCvMean: r._max.val_metric ?? null,
-        totalExperiments: r._count,
-        experimentsRegistered: r._count,
-        experimentsRejected: 0,
-        durationMs,
-        startedAt: r._min.created_at?.toISOString() ?? null,
-        completedAt: isRunning ? null : (r._max.created_at?.toISOString() ?? null),
-      };
-    });
-
-    // If pipeline is running but no experiments yet, show round 1 as running
-    if (rounds.length === 0 && run?.status === "running") {
-      rounds.push({
-        runId,
-        roundNumber: 1,
-        status: "running",
-        currentPhase,
-        bestCvMean: null,
-        totalExperiments: 0,
-        experimentsRegistered: 0,
-        experimentsRejected: 0,
-        durationMs: null,
-        startedAt: run.created_at?.toISOString() ?? null,
-        completedAt: null,
-      });
-    }
-
-    jsonResponse(res, {
-      run: {
-        runId,
-        status: run?.status ?? "idle",
-        currentPhase,
-        currentRound,
-        maxRounds: 5,
-        startedAt: run?.created_at ?? null,
-        updatedAt: run?.updated_at ?? null,
-      },
-      phases: derivePhases(currentPhase),
-      rounds,
-    });
+    jsonResponse(res, { runs });
   })().catch((err) => errorResponse(res, `Failed to build command-center snapshot: ${(err as Error).message}`));
 }
 

@@ -1,5 +1,5 @@
 import { useCommandCenter } from "../api/api";
-import { RoundsTable } from "../components/RoundsTable";
+import { PipelineTable } from "../components/PipelineTable";
 import { EmptyState } from "../components/EmptyState";
 
 export default function CommandCenter() {
@@ -22,7 +22,7 @@ export default function CommandCenter() {
     );
   }
 
-  if (!data || data.run.status === "idle") {
+  if (!data || data.runs.length === 0) {
     return (
       <div
         data-testid="cc-idle"
@@ -31,7 +31,7 @@ export default function CommandCenter() {
         <EmptyState
           icon="⚙️"
           message="No active pipeline"
-          detail="Start a pipeline from the CLI to see rounds here."
+          detail="Start a pipeline from the CLI to see runs here."
         />
         <code className="inline-block text-xs font-mono text-[var(--accent-blue)] bg-[var(--bg-tertiary)] px-3 py-1.5 rounded mt-3">
           formiga run --task &quot;predict churn&quot; --rounds 5
@@ -40,18 +40,9 @@ export default function CommandCenter() {
     );
   }
 
-  const { run, phases, rounds = [] } = data;
-
   return (
     <div data-testid="command-center">
-      <RoundsTable
-        rounds={rounds}
-        currentRound={run.currentRound}
-        runId={run.runId ?? ""}
-        phases={phases}
-        startedAt={run.startedAt}
-        updatedAt={run.updatedAt}
-      />
+      <PipelineTable runs={data.runs} />
     </div>
   );
 }
