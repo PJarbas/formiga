@@ -139,7 +139,7 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
           updated_at: now,
         },
       });
-      emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: validationError });
+      emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, agentId: step.agent_id, detail: validationError });
       await emitRunTerminalEvent({ event: "run.failed", runId, workflowId: wfId, detail: "Expects validation failed and retries exhausted" });
       await scheduleRunCronTeardown(runId);
       await finalizeDrainingPause(runId);
@@ -156,7 +156,7 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
         updated_at: now,
       },
     });
-    emitEvent({ ts: new Date().toISOString(), event: "step.retry", runId, workflowId: wfId, stepId: step.step_id, detail: validationError });
+    emitEvent({ ts: new Date().toISOString(), event: "step.retry", runId, workflowId: wfId, stepId: step.step_id, agentId: step.agent_id, detail: validationError });
     logger.warn(validationError, { runId, stepId: step.step_id });
     await finalizeDrainingPause(runId);
     return { status: "retrying", detail: validationError };
@@ -300,7 +300,7 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
                 updated_at: now,
               },
             });
-            emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: errorDetail });
+            emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, agentId: step.agent_id, detail: errorDetail });
             await emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId, detail: "Plan step never produced STORIES_JSON" });
             await scheduleRunCronTeardown(step.run_id);
             await finalizeDrainingPause(step.run_id);
@@ -426,7 +426,7 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
       updated_at: now,
     },
   });
-  emitEvent({ ts: new Date().toISOString(), event: "step.done", runId: step.run_id, workflowId: await getWorkflowId(step.run_id), stepId: step.step_id });
+  emitEvent({ ts: new Date().toISOString(), event: "step.done", runId: step.run_id, workflowId: await getWorkflowId(step.run_id), stepId: step.step_id, agentId: step.agent_id });
   logger.info(`Step completed: ${step.step_id}`, { runId: step.run_id, stepId: step.step_id });
 
   const pipelineResult = await advancePipeline(step.run_id);
