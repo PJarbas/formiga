@@ -4,28 +4,33 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { PrismaClient } from "@prisma/client";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 
-function resolveDbUrl(): string {
+function resolveDbPath(): string {
   const explicit = process.env.FORMIGA_DB_PATH?.trim();
   const dbPath = explicit
     ? path.resolve(explicit)
     : path.join(os.homedir(), ".formiga", "formiga.db");
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  return `file:${dbPath}`;
-}
-
-function ensureEnvDbUrl(): void {
-  if (!process.env.DATABASE_URL) {
-    process.env.DATABASE_URL = resolveDbUrl();
-  }
+  return dbPath;
 }
 
 function createPrismaClient(): PrismaClient {
-  ensureEnvDbUrl();
+  const dbPath = resolveDbPath();
+  // Dynamic import to avoid bundling issues in environments that don't need it.
+  // Using require() for better-sqlite3 since it's a native C++ addon.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Database = require("better-sqlite3");
+  const database = new Database(dbPath);
+  // Enable WAL mode and foreign keys for consistency with the legacy connection
+  database.pragma("journal_mode=WAL");
+  database.pragma("foreign_keys=ON");
+  const adapter = new PrismaBetterSqlite3(database);
   return new PrismaClient({
+    adapter,
     log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
   });
 }

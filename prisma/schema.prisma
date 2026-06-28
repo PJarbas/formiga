@@ -26,12 +26,13 @@ enum StepStatus {
   running
   done
   failed
+  skipped
   canceled
 }
 
 enum StoryStatus {
   pending
-  in_progress
+  running
   done
   failed
 }
@@ -62,6 +63,7 @@ enum SchedulingStatus {
   active
   queued
   paused
+  draining_pause
   error
 }
 
