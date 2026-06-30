@@ -10,6 +10,7 @@ import {
   emitRunTerminalEvent,
   finalizeDrainingPause,
 } from "./pipeline-control.js";
+import { recordProgress } from "./progress.js";
 
 // ══════════════════════════════════════════════════════════════════════
 // Rugpull detection stubs
@@ -133,6 +134,7 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
   }
 
   // Single step: existing logic
+  await recordProgress(step.run_id);
   const newRetryCount = step.retry_count + 1;
 
   if (newRetryCount > step.max_retries) {

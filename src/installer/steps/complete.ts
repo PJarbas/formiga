@@ -20,6 +20,7 @@ import {
 import { ingestStepOutput } from "../../leaderboard/ingest.js";
 import { LeaderboardRepositoryImpl } from "../../leaderboard/repository.js";
 import { processCriticOutput } from "../../leaderboard/critic-processor.js";
+import { recordProgress } from "./progress.js";
 
 // ══════════════════════════════════════════════════════════════════════
 // Expects Validation
@@ -434,6 +435,7 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
       updated_at: now,
     },
   });
+  await recordProgress(step.run_id);
   emitEvent({ ts: new Date().toISOString(), event: "step.done", runId: step.run_id, workflowId: await getWorkflowId(step.run_id), stepId: step.step_id, agentId: step.agent_id });
   logger.info(`Step completed: ${step.step_id}`, { runId: step.run_id, stepId: step.step_id });
 

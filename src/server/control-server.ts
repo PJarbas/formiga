@@ -837,6 +837,9 @@ export function startReconciler(): { stop: () => void } {
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
 
+  // Lazy-init medic ticker and stale-pending checker
+  let medicTicker: Awaited<ReturnType<typeof import("../medic/daemon-integration.js").createMedicTicker>> | null = null;
+
   async function tick(): Promise<void> {
     if (stopped) return;
     try {
@@ -943,6 +946,29 @@ export function startReconciler(): { stop: () => void } {
       }
 
       await admitQueuedRuns();
+
+      // ── Stale Pending Step Recovery ──────────────────────────────────
+      // Re-nudge runs that have steps stuck in "pending" without any claim.
+      try {
+        const { findRunsWithStalePendingSteps } = await import("../medic/reconciler-checks.js");
+        const staleRunIds = await findRunsWithStalePendingSteps();
+        for (const runId of staleRunIds) {
+          await handleRegisterRun(runId).catch(() => {});
+        }
+      } catch (err) {
+        logger.warn("control-server: stale pending check failed", { error: String(err) });
+      }
+
+      // ── Medic Health Check (throttled to every N minutes) ───────────
+      try {
+        if (!medicTicker) {
+          const { createMedicTicker } = await import("../medic/daemon-integration.js");
+          medicTicker = createMedicTicker();
+        }
+        await medicTicker.tickIfDue();
+      } catch (err) {
+        logger.warn("control-server: medic ticker failed", { error: String(err) });
+      }
     } catch (err) {
       logger.warn("control-server: reconciler tick failed", { error: String(err) });
     } finally {

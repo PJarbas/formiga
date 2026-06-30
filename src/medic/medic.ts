@@ -23,6 +23,8 @@ export interface MedicFinding {
 
 // ── Types imported from checks ──
 import { checkStuckRuns } from "./checks.js";
+import { detectStalePendingSteps } from "./stale-pending.js";
+import { detectTimedOutRuns } from "./run-timeout.js";
 
 // ── Sync Checks ─────────────────────────────────────────────────────
 
@@ -82,6 +84,31 @@ async function runSyncChecks(): Promise<MedicFinding[]> {
         workflowId: run.workflow_id,
       });
     }
+  }
+
+  // Detect steps stuck in "pending" with no worker claiming them
+  const stalePending = await detectStalePendingSteps();
+  for (const step of stalePending) {
+    findings.push({
+      severity: step.canRetry ? "warning" : "critical",
+      message: `Step ${step.stepId} pending for ${step.pendingMinutes}m without claim (agent ${step.agentId}, run ${step.runId.slice(0, 8)})`,
+      action: step.canRetry ? "reset_step" : "fail_run",
+      runId: step.runId,
+      stepId: step.id,
+      workflowId: step.workflowId,
+    });
+  }
+
+  // Detect runs that exceeded their maximum allowed duration
+  const timedOut = await detectTimedOutRuns();
+  for (const run of timedOut) {
+    findings.push({
+      severity: "critical",
+      message: `Run ${run.runId.slice(0, 8)} exceeded timeout — no progress for ${run.noProgressMinutes}m (limit ${run.maxDurationMinutes}m, ${run.stalePendingCount} stale pending steps)`,
+      action: "fail_run",
+      runId: run.runId,
+      workflowId: run.workflowId,
+    });
   }
 
   return findings;

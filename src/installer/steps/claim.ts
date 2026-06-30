@@ -21,6 +21,7 @@ import {
 } from "./pipeline-control.js";
 import { setRunContextKey, cleanupAbandonedSteps } from "./recovery.js";
 import { resolveStepContext } from "./context.js";
+import { recordProgress } from "./progress.js";
 
 // ══════════════════════════════════════════════════════════════════════
 // Internal Helpers
@@ -403,6 +404,7 @@ export async function claimStep(agentId: string, runId: string, workerOwnership?
         },
   });
   if (updateResult.count <= 0) return { found: false };
+  await recordProgress(stepRecord.run_id);
   const wfId = await getWorkflowId(stepRecord.run_id);
   emitEvent({ ts: now.toISOString(), event: "step.running", runId: stepRecord.run_id, workflowId: wfId, stepId: stepRecord.step_id, agentId });
   logger.info(`Step claimed by ${agentId}`, { runId: stepRecord.run_id, stepId: stepRecord.step_id });

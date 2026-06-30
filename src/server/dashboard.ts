@@ -218,6 +218,8 @@ function handleListRuns(_req: http.IncomingMessage, res: http.ServerResponse): v
       };
     });
 
+    const STALE_THRESHOLD_MIN = parseInt(process.env.FORMIGA_RUN_MAX_DURATION_MINUTES ?? "120", 10) || 120;
+
     const runs = rawRuns.map((row) => {
       let no_hurry = false;
       try {
@@ -226,7 +228,18 @@ function handleListRuns(_req: http.IncomingMessage, res: http.ServerResponse): v
       } catch {
         // malformed context → no_hurry stays false
       }
-      return { ...row, no_hurry };
+
+      const idleMinutes = Math.floor((Date.now() - new Date(row.updated_at).getTime()) / 60_000);
+      const isStale = row.status === "running" && idleMinutes > STALE_THRESHOLD_MIN;
+      const staleness = row.status === "running"
+        ? {
+            isStale,
+            idleMinutes,
+            recommendation: isStale ? "cancel" as const : idleMinutes > STALE_THRESHOLD_MIN / 2 ? "monitor" as const : "ok" as const,
+          }
+        : undefined;
+
+      return { ...row, no_hurry, staleness };
     });
 
     jsonResponse(res, { runs });
