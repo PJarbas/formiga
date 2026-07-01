@@ -203,6 +203,25 @@ model ChecklistState {
   @@map("checklist_state")
 }
 
+model JobRegistry {
+  id             String   @id
+  workflow_id    String
+  run_id         String
+  agent_id       String
+  status         String   @default("active")
+  harness_type   String?
+  pid            Int?
+  pgid           Int?
+  interval_minutes Int    @default(5)
+  started_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+  metadata       String?
+
+  @@index([run_id])
+  @@index([status])
+  @@map("job_registry")
+}
+
 model FormigaStat {
   id                  Int @id @default(1)
   system_tokens_spent Int @default(0)

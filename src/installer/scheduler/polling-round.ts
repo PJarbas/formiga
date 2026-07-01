@@ -19,11 +19,13 @@
 // `../db.js` and `./step-ops.js`, avoiding cycles.
 // ══════════════════════════════════════════════════════════════════════
 
+import fs from "node:fs";
+import path from "node:path";
 import { getPrisma, incrementSystemTokenSpend } from "../../db.js";
 import { logger } from "../../lib/logger.js";
 import { emitEvent } from "../events.js";
 import { getRoleTimeoutSeconds, inferRole } from "../install.js";
-import { resolveWorkflowWorkspaceDir } from "../paths.js";
+import { resolvePiOutputDir, resolveWorkflowWorkspaceDir } from "../paths.js";
 import { completeStep, recoverOrphanedStepsForAgent } from "../step-ops.js";
 import type { WorkflowAgent, WorkflowSpec } from "../types.js";
 import { findHermesBinary } from "./binary-discovery.js";
@@ -45,6 +47,28 @@ import {
   tryMarkJobInFlight,
   type CronJobInfo,
 } from "./shared.js";
+
+/** Generate a temporary file path for PI/hermes stdout streaming. */
+function makePiOutputFilePath(jobId: string): string {
+  const outputDir = resolvePiOutputDir();
+  return path.join(outputDir, `pi-output-${jobId}-${Date.now()}.log`);
+}
+
+/** Clean up the temporary PI output file unless user opted to keep it. */
+async function cleanupPiOutputFile(filePath: string): Promise<void> {
+  if (process.env.FORMIGA_KEEP_PI_OUTPUT === "1" || process.env.FORMIGA_KEEP_PI_OUTPUT?.toLowerCase() === "true") {
+    logger.debug("Keeping PI output file", { filePath, keep: true });
+    return;
+  }
+  try {
+    await fs.promises.unlink(filePath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT") {
+      logger.warn("Failed to clean up PI output file", { filePath, error: String(err) });
+    }
+  }
+}
 
 export type { PollingRoundMetadata } from "./polling-parser.js";
 
@@ -529,32 +553,45 @@ export async function executePollingRound(
       });
     };
 
+    // Use disk streaming for stdout to prevent OOM on large PI outputs.
+    const outputFile = makePiOutputFilePath(job.id);
     let output: string;
-    if (harnessType === "hermes") {
-      const hermesPath = findHermesBinary();
-      output = await runHermes(pollingPrompt, {
-        timeout,
-        workdir: workingDirectoryForHarness,
-        env: {
-          FORMIGA_WORKER_JOB_ID: job.id,
-          FORMIGA_WORKER_PID: String(process.pid),
-          FORMIGA_HERMES_BINARY: hermesPath,
-        },
-        onSpawn,
-      });
-    } else {
-      output = await runPi(
-        ["--print", "--mode", "json", "--no-session", pollingPrompt],
-        {
+    let cleanupFile: string | undefined;
+
+    try {
+      if (harnessType === "hermes") {
+        const hermesPath = findHermesBinary();
+        output = await runHermes(pollingPrompt, {
           timeout,
           workdir: workingDirectoryForHarness,
           env: {
             FORMIGA_WORKER_JOB_ID: job.id,
             FORMIGA_WORKER_PID: String(process.pid),
+            FORMIGA_HERMES_BINARY: hermesPath,
           },
           onSpawn,
-        },
-      );
+          outputFile,
+        });
+      } else {
+        output = await runPi(
+          ["--print", "--mode", "json", "--no-session", pollingPrompt],
+          {
+            timeout,
+            workdir: workingDirectoryForHarness,
+            env: {
+              FORMIGA_WORKER_JOB_ID: job.id,
+              FORMIGA_WORKER_PID: String(process.pid),
+            },
+            onSpawn,
+            outputFile,
+          },
+        );
+      }
+      cleanupFile = outputFile;
+    } finally {
+      if (cleanupFile) {
+        cleanupPiOutputFile(cleanupFile).catch(() => { /* best effort */ });
+      }
     }
 
     const metadata = parsePollingRoundMetadata(output);

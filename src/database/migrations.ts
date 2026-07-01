@@ -132,6 +132,32 @@ export function migrate(db: DatabaseSync): void {
     "CREATE INDEX IF NOT EXISTS idx_runs_sched_queue ON runs(scheduling_status, scheduling_requested_at, created_at)",
   );
 
+  // ── Job registry ──
+  // Tracks polling job state for crash recovery. Runs are indexed by run_id.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS job_registry (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      harness_type TEXT,
+      pid INTEGER,
+      pgid INTEGER,
+      interval_minutes INTEGER NOT NULL DEFAULT 5,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      metadata TEXT
+    );
+  `);
+
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_job_registry_run_id ON job_registry(run_id)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_job_registry_status ON job_registry(status)",
+  );
+
   // ── Global stats ──
   const statsTableExists = db.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name='formiga_stats'",

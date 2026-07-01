@@ -143,3 +143,26 @@ export async function parsePiOutputStream(rl: ReadlineInterface): Promise<ParseP
     linesDropped: buffer.linesDropped,
   };
 }
+
+/**
+ * Parse PI output from an already-collected string (e.g. bounded memory tail
+ * after disk streaming). Mirrors parsePiOutputStream but skips the readline
+ * step. Used by the disk-streaming path in pi-runner.ts.
+ *
+ * `totalBytes` and `lines` reflect the full stream, not just the tail, so
+ * metrics are accurate even when only a subset was buffered in memory.
+ */
+export function parsePiOutputFromString(
+  tailText: string,
+  totalBytes: number,
+  lines: number,
+): ParsePiResult {
+  return {
+    assistantText: tailText,
+    textFallback: null,
+    events: [],
+    truncated: totalBytes > tailText.length,
+    totalBytesIngested: totalBytes,
+    linesDropped: Math.max(0, lines - tailText.split(/\r?\n/).length),
+  };
+}

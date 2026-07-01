@@ -82,3 +82,9 @@ export function resolveFormigaCli(): string {
   // launcher rather than dist/cli/cli.js so Node runtime flags stay centralized.
   return path.resolve(__dirname, "..", "..", "bin", "formiga");
 }
+
+export function resolvePiOutputDir(): string {
+  const env = process.env.FORMIGA_PI_OUTPUT_DIR?.trim();
+  if (env) return env;
+  return path.join(resolvePiStateDir(), "tmp", "pi-output");
+}
