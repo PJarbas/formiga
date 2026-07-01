@@ -13,6 +13,10 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import type { WorkflowSpec, WorkflowAgent, HarnessType } from "../types.js";
+import {
+  upsertJobRegistry,
+  softDeleteJobsByRun,
+} from "./job-registry-db.js";
 
 // ════════════════════════════════════════════════════════════════════
 // In-memory state maps (with LRU-style bounds to prevent memory leaks)
@@ -75,10 +79,25 @@ export const inFlightChildren = new Map<string, InFlightChild>();
 
 /**
  * Bounded insert for jobMetadata. Evicts the oldest entry when at capacity.
+ * Fire-and-forget write-through to job_registry for crash recovery.
  */
 export function setJobMetadata(id: string, info: CronJobInfo): void {
   evictIfFull(jobMetadata);
   jobMetadata.set(id, info);
+
+  // Async write-through: eventual consistency is fine for crash recovery.
+  void upsertJobRegistry({
+    id,
+    workflowId: info.workflowId,
+    runId: info.runId,
+    agentId: info.agentId,
+    status: "active",
+    harnessType: info.harnessType ?? null,
+    pid: null,
+    pgid: null,
+    intervalMinutes: info.intervalMinutes,
+    metadata: info.sessionLabel ? JSON.stringify({ sessionLabel: info.sessionLabel, timeoutSeconds: info.timeoutSeconds, workingDir: info.workingDirectoryForHarness }) : undefined,
+  });
 }
 
 /**
@@ -227,6 +246,9 @@ export function teardownRunJobs(runId: string): string[] {
     jobMetadata.delete(id);
     removed.push(id);
   }
+
+  // Async write-through to DB: mark jobs inactive (don't block teardown).
+  void softDeleteJobsByRun(runId);
 
   return removed;
 }

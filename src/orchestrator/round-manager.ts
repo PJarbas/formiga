@@ -12,6 +12,7 @@ import type { LeaderboardRepository } from "../leaderboard/repository.js";
 import { AgentMessengerImpl } from "./communication.js";
 import { fanOut, type FanOutResult, type FanOutExecutor } from "./fan-out.js";
 import { collectAndRegister } from "./fan-in.js";
+import { piFanOutExecutor } from "./pi-executor.js";
 
 export interface RoundConfig {
   runId: string;
@@ -21,13 +22,12 @@ export interface RoundConfig {
   maxConcurrency?: number;
   /**
    * Executor that actually runs an agent (e.g. via pi/hermes harness) and
-   * returns a structured AgentResult. Required — the orchestrator no longer
-   * fabricates stub results. Callers using the programmatic
-   * `FormigaEngine`/`RoundManager` path are responsible for wiring this to a
-   * real harness; the workflow YAML path uses the scheduler instead and does
-   * not exercise this code.
+   * returns a structured AgentResult.
+   *
+   * If omitted, defaults to `piFanOutExecutor` which spawns the pi binary
+   * (`pi --print`) with disk streaming to prevent OOM on large outputs.
    */
-  executor: FanOutExecutor;
+  executor?: FanOutExecutor;
 }
 
 export interface RoundResult {
@@ -51,11 +51,12 @@ export class RoundManager {
 
   /** Execute one full round of the ML pipeline. */
   async executeRound(config: RoundConfig): Promise<RoundResult> {
+    const executor = config.executor ?? piFanOutExecutor;
     const phaseResults: PhaseResult[] = [];
     const context = this.buildContext(config);
 
     // Phase 1: Data Analyst (sequential — no dependencies)
-    const analystResult = await this.runSingle(dataAnalyst, context, config.timeoutMs, config.executor);
+    const analystResult = await this.runSingle(dataAnalyst, context, config.timeoutMs, executor);
     phaseResults.push(analystResult);
 
     if (analystResult.status !== "completed") {
@@ -63,7 +64,7 @@ export class RoundManager {
     }
 
     // Phase 2: Feature Engineer (depends on analyst's report)
-    const engineerResult = await this.runSingle(featureEngineer, context, config.timeoutMs, config.executor);
+    const engineerResult = await this.runSingle(featureEngineer, context, config.timeoutMs, executor);
     phaseResults.push(engineerResult);
 
     if (engineerResult.status !== "completed") {
@@ -76,7 +77,7 @@ export class RoundManager {
       context,
       timeoutMs: config.timeoutMs,
       maxConcurrency: config.maxConcurrency,
-      executor: config.executor,
+      executor,
     });
 
     for (const mr of modelerResults) {
@@ -88,7 +89,7 @@ export class RoundManager {
     }
 
     // Phase 4: ML Critic (reviews all modelers)
-    const criticResult = await this.runSingle(mlCritic, context, config.timeoutMs, config.executor);
+    const criticResult = await this.runSingle(mlCritic, context, config.timeoutMs, executor);
     phaseResults.push(criticResult);
 
     // Collect and register all valid results in leaderboard

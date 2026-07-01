@@ -188,6 +188,17 @@ export function usePipelineControl() {
   return { pause, resume, cancel };
 }
 
+export function useDeleteRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runId: string) => fetchJSON(`${BASE}/runs/${encodeURIComponent(runId)}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["command-center"] });
+      qc.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+  });
+}
+
 // ── Compare experiments (front-specs §5.1) ──────────────────────────
 
 export function useCompareExperiments(ids: string[]) {

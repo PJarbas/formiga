@@ -6,13 +6,78 @@
 // prompt provided via `-q`. Unlike pi, hermes emits plain text (not
 // streamed JSON events), so stdout is collected in full and a session_id
 // trailer is stripped before returning.
+//
+// When `outputFile` is provided, stdout is streamed to disk with a bounded
+// memory buffer, preventing OOM on very large outputs.
 // ══════════════════════════════════════════════════════════════════════
 
+import fs from "node:fs";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import { logger } from "../../lib/logger.js";
 import { findHermesBinary } from "./binary-discovery.js";
 import { buildStreamLogMetadata, safeKillPgid } from "./shared.js";
 import type { RunPiOptions } from "./pi-runner.js";
+
+/** Internal helper: stream stdout to a file while keeping a bounded tail in memory. */
+async function streamHermesStdout(
+  stdout: NodeJS.ReadableStream,
+  outputFile: string,
+  maxMemoryBytes = 64 * 1024,
+): Promise<{ memoryTail: string; totalBytes: number; lines: number }> {
+  await fs.promises.mkdir(path.dirname(outputFile), { recursive: true });
+  const writeStream = fs.createWriteStream(outputFile);
+
+  let totalBytes = 0;
+  let lines = 0;
+  const memoryBuffer: string[] = [];
+  let memoryBytes = 0;
+
+  for await (const chunk of stdout) {
+    const str = (chunk as Buffer).toString("utf-8");
+    const chunkBytes = Buffer.byteLength(str, "utf-8");
+    totalBytes += chunkBytes;
+
+    if (!writeStream.write(str)) {
+      await new Promise<void>((resolve) => writeStream.once("drain", resolve));
+    }
+
+    const chunkLines = str.split(/\r?\n/);
+    for (const line of chunkLines) {
+      memoryBuffer.push(line);
+      lines++;
+      const lineBytes = Buffer.byteLength(line, "utf-8") + 1;
+      memoryBytes += lineBytes;
+
+      while (memoryBytes > maxMemoryBytes && memoryBuffer.length > 1) {
+        const dropped = memoryBuffer.shift()!;
+        memoryBytes -= Buffer.byteLength(dropped, "utf-8") + 1;
+      }
+    }
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    writeStream.on("finish", resolve);
+    writeStream.on("error", reject);
+    writeStream.end();
+  });
+
+  return { memoryTail: memoryBuffer.join("\n"), totalBytes, lines };
+}
+
+/** Internal helper: read the tail of a file. */
+async function readTail(filePath: string, maxBytes = 512 * 1024): Promise<string> {
+  try {
+    const stats = await fs.promises.stat(filePath);
+    const start = Math.max(0, stats.size - maxBytes);
+    const stream = fs.createReadStream(filePath, { start, encoding: "utf-8" });
+    const chunks: string[] = [];
+    for await (const chunk of stream) chunks.push(chunk as string);
+    return chunks.join("");
+  } catch {
+    return "";
+  }
+}
 
 export async function runHermes(
   prompt: string,
@@ -48,6 +113,7 @@ export async function runHermes(
     promptLength: Buffer.byteLength(prompt, "utf-8"),
     timeoutMs,
     workdir: options.workdir,
+    outputFile: options.outputFile ?? null,
   });
 
   // Spawn hermes in its own process group for clean termination.
@@ -75,6 +141,7 @@ export async function runHermes(
     pgid,
     timeoutMs,
     workdir: options.workdir,
+    outputFile: options.outputFile ?? null,
   });
 
   // End stdin immediately — hermes reads from args (-q).
@@ -92,17 +159,39 @@ export async function runHermes(
     }
   });
 
-  // Collect stdout fully (hermes produces plain text, not JSON events).
-  let stdoutPieces: string[] = [];
-  let stdoutBytes = 0;
-  const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
-  child.stdout?.on("data", (chunk: Buffer) => {
-    const str = chunk.toString("utf-8");
-    if (stdoutBytes + Buffer.byteLength(str, "utf-8") <= MAX_STDOUT_BYTES) {
-      stdoutPieces.push(str);
-      stdoutBytes += Buffer.byteLength(str, "utf-8");
-    }
-  });
+  // ── stdout handling: stream to disk if outputFile provided ────────────────
+  let rawStdout = "";
+  let totalStdoutBytes = 0;
+  let usedDiskStreaming = false;
+
+  if (options.outputFile) {
+    const maxMemoryKb = parseInt(process.env.FORMIGA_PI_OUTPUT_MAX_MEMORY_KB ?? "64", 10);
+    const maxMemoryBytes = Math.max(4 * 1024, maxMemoryKb * 1024);
+    const result = await streamHermesStdout(child.stdout!, options.outputFile, maxMemoryBytes);
+    totalStdoutBytes = result.totalBytes;
+    rawStdout = result.memoryTail;
+    usedDiskStreaming = true;
+  } else {
+    // Legacy: collect stdout fully in memory (10MB cap)
+    let stdoutPieces: string[] = [];
+    let stdoutBytes = 0;
+    const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
+    child.stdout?.on("data", (chunk: Buffer) => {
+      const str = chunk.toString("utf-8");
+      if (stdoutBytes + Buffer.byteLength(str, "utf-8") <= MAX_STDOUT_BYTES) {
+        stdoutPieces.push(str);
+        stdoutBytes += Buffer.byteLength(str, "utf-8");
+      }
+    });
+
+    // Wait for data collection and child exit simultaneously
+    await new Promise<void>((resolve) => {
+      child.stdout?.on("end", resolve);
+      child.stdout?.on("close", resolve);
+    });
+    rawStdout = stdoutPieces.join("");
+    totalStdoutBytes = stdoutBytes;
+  }
 
   // Wait for child exit, with timeout guard.
   await new Promise<void>((resolve, reject) => {
@@ -153,7 +242,6 @@ export async function runHermes(
   });
 
   const durationMs = Date.now() - startedAt;
-  const rawStdout = stdoutPieces.join("");
   const stderrOut = stderrPieces.join("");
   const stderrMeta = buildStreamLogMetadata(stderrOut);
 
@@ -167,14 +255,27 @@ export async function runHermes(
     });
   }
 
-  // Filter out session_id lines. Hermes appends a session identifier
-  // (e.g. "session_id: 20260518_103004_cdae11") at the end of stdout.
-  // Remove it so the scheduler sees clean output.
-  const filteredStdout = rawStdout
-    .split("\n")
-    .filter((line) => !/^session_id:\s*\S+/.test(line.trim()))
-    .join("\n")
-    .trim();
+  // Determine filtered stdout
+  let filteredStdout = "";
+  if (usedDiskStreaming && options.outputFile) {
+    const maxReadBytes = 512 * 1024;
+    const tail = await readTail(options.outputFile, maxReadBytes);
+    // Filter out session_id lines from tail
+    filteredStdout = tail
+      .split("\n")
+      .filter((line) => !/^session_id:\s*\S+/.test(line.trim()))
+      .join("\n")
+      .trim();
+  } else {
+    // Filter out session_id lines. Hermes appends a session identifier
+    // (e.g. "session_id: 20260518_103004_cdae11") at the end of stdout.
+    // Remove it so the scheduler sees clean output.
+    filteredStdout = rawStdout
+      .split("\n")
+      .filter((line) => !/^session_id:\s*\S+/.test(line.trim()))
+      .join("\n")
+      .trim();
+  }
 
   const stdoutMeta = buildStreamLogMetadata(filteredStdout);
 
@@ -190,6 +291,8 @@ export async function runHermes(
     stdoutTruncated: stdoutMeta.truncated,
     stderrBytes: stderrMeta.bytes,
     hasStderr: stderrMeta.bytes > 0,
+    usedDiskStreaming,
+    totalStdoutBytes,
   });
 
   return filteredStdout;

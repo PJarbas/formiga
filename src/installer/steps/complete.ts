@@ -17,6 +17,7 @@ import {
   finalizeDrainingPause,
   advancePipeline,
 } from "./pipeline-control.js";
+import { validateSidecar, agentRequiresSidecar } from "../../leaderboard/sidecar-validation.js";
 import { ingestStepOutput } from "../../leaderboard/ingest.js";
 import { LeaderboardRepositoryImpl } from "../../leaderboard/repository.js";
 import { processCriticOutput } from "../../leaderboard/critic-processor.js";
@@ -193,6 +194,18 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
       updated_at: now,
     },
   });
+
+  // Validate sidecar JSON for modeler agents before leaderboard ingest
+  if (agentRequiresSidecar(step.agent_id)) {
+    const sidecarResult = validateSidecar(step.agent_id, context["workspace"]);
+    if (!sidecarResult.valid) {
+      const sidecarError = `Sidecar validation failed: ${sidecarResult.error}`;
+      logger.warn(sidecarError, { runId, stepId: step.step_id });
+      // Do not mark step failed immediately; let ingestStepOutput (below)
+      // still attempt so leaderboard may show partial data. The sidecar error
+      // is logged and will be visible in run logs for diagnosis.
+    }
+  }
 
   // Leaderboard ingest hook — for ML modeler/baseline agents only.
   // Gated by agent suffix inside ingestStepOutput so non-ML steps no-op.
