@@ -1090,6 +1090,144 @@ function handleAgentLogs(
   })().catch((err) => errorResponse(res, `Failed to get agent logs: ${(err as Error).message}`));
 }
 
+function handleAgentReasoning(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  agentName: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const info = AGENT_INFO_REGISTRY[agentName];
+    if (!info) {
+      errorResponse(res, `Agent not found: ${agentName}`, 404);
+      return;
+    }
+
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const requestedRunId = url.searchParams.get("runId")?.trim();
+    const runId = requestedRunId || (await findActivePipelineRunId());
+
+    if (!runId) {
+      jsonResponse(res, { agentName, hypothesis: null, learned: null, nextFocus: null, approaches: [], keyDecisions: [], specDiff: null });
+      return;
+    }
+
+    // Fetch experiments for this agent in current run (key decisions)
+    const experiments = await prisma.experiment.findMany({
+      where: { run_id: runId, agent_name: agentName },
+      orderBy: { round_number: "desc" },
+      take: 20,
+      select: {
+        round_number: true,
+        model_type: true,
+        val_metric: true,
+        train_metric: true,
+        status: true,
+        reject_reason: true,
+        error_message: true,
+        hyperparameters: true,
+        promoted_at: true,
+        rejected_at: true,
+      },
+    });
+
+    const keyDecisions = experiments.map((e) => ({
+      roundNumber: e.round_number,
+      modelType: e.model_type,
+      cvMean: e.val_metric,
+      trainMean: e.train_metric,
+      status: e.status,
+      reason: e.reject_reason ?? e.error_message ?? null,
+      promotedAt: e.promoted_at?.toISOString() ?? null,
+      rejectedAt: e.rejected_at?.toISOString() ?? null,
+    }));
+
+    // Fetch step output for approaches/search space
+    const step = await prisma.step.findFirst({
+      where: { run_id: runId, agent_id: agentName },
+      orderBy: { updated_at: "desc" },
+      select: { output: true },
+    });
+
+    const approaches = extractApproaches(step?.output ?? null);
+
+    // Fetch autoresearch ASI data (hypothesis, learned, next_focus)
+    let hypothesis: string | null = null;
+    let learned: string | null = null;
+    let nextFocus: string | null = null;
+
+    const run = await prisma.run.findUnique({ where: { id: runId }, select: { context: true } });
+    if (run?.context) {
+      try {
+        const ctx = JSON.parse(run.context);
+        const cwd = ctx.working_directory_for_harness ?? ctx.cwd;
+        if (cwd) {
+          const logEntries = readAutoresearchLog(cwd);
+          const runEntries = logEntries.filter(
+            (e): e is AutoresearchRunEntry => e.type === "run",
+          );
+          const agentEntries = runEntries.filter((e) =>
+            e.description?.toLowerCase().includes(agentName.replace("-", " ")),
+          );
+          const latest = agentEntries.length > 0
+            ? agentEntries[agentEntries.length - 1]
+            : runEntries[runEntries.length - 1];
+          if (latest?.asi) {
+            hypothesis = latest.asi.hypothesis ?? null;
+            learned = latest.asi.learned ?? null;
+            nextFocus = latest.asi.next_focus ?? null;
+          }
+        }
+      } catch { /* context not parseable, skip */ }
+    }
+
+    // Spec diff from rounds
+    const roundSummaries = await getAgentRoundSummaries(runId, agentName);
+    let specDiff: { before: string; after: string } | null = null;
+    if (roundSummaries.length >= 2) {
+      const sorted = [...roundSummaries].sort((a, b) => a.roundNumber - b.roundNumber);
+      specDiff = {
+        before: JSON.stringify(sorted[sorted.length - 2], null, 2),
+        after: JSON.stringify(sorted[sorted.length - 1], null, 2),
+      };
+    }
+
+    jsonResponse(res, {
+      agentName,
+      hypothesis,
+      learned,
+      nextFocus,
+      approaches,
+      keyDecisions,
+      specDiff,
+    });
+  })().catch((err) => errorResponse(res, `Failed to get agent reasoning: ${(err as Error).message}`));
+}
+
+function extractApproaches(output: string | null): {
+  models: string[];
+  searchSpace: Record<string, unknown> | null;
+  overfittingMitigation: string | null;
+} {
+  if (!output) return { models: [], searchSpace: null, overfittingMitigation: null };
+
+  const models: string[] = [];
+  let searchSpace: Record<string, unknown> | null = null;
+  let overfittingMitigation: string | null = null;
+
+  for (const line of output.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("APPROACHES:")) {
+      models.push(...trimmed.slice("APPROACHES:".length).split(",").map((s) => s.trim()).filter(Boolean));
+    } else if (trimmed.startsWith("SEARCH_SPACE:")) {
+      try { searchSpace = JSON.parse(trimmed.slice("SEARCH_SPACE:".length)); } catch { /* skip */ }
+    } else if (trimmed.startsWith("OVERFITTING_MITIGATION:")) {
+      overfittingMitigation = trimmed.slice("OVERFITTING_MITIGATION:".length).trim();
+    }
+  }
+  return { models, searchSpace, overfittingMitigation };
+}
+
 function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse): void {
   (async () => {
     const prisma = getPrisma();
@@ -2123,6 +2261,13 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /api/agents
   if (method === "GET" && pathname === "/api/agents") {
     handleAgents(req, res);
+    return;
+  }
+
+  // GET /api/agents/:name/reasoning (before /api/agents/:name/logs and /api/agents/:name)
+  const agentReasoningMatch = pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)\/reasoning$/);
+  if (method === "GET" && agentReasoningMatch) {
+    handleAgentReasoning(req, res, agentReasoningMatch[1]);
     return;
   }
 

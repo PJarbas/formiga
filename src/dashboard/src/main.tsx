@@ -10,7 +10,6 @@ import App from "./App";
 import CommandCenter from "./screens/CommandCenter";
 import ExperimentBoard from "./screens/ExperimentBoard";
 import Leaderboard from "./screens/Leaderboard";
-import AgentDetail from "./screens/AgentDetail";
 import { ToastContainer } from "./components/Toast";
 import "./index.css";
 
@@ -32,7 +31,6 @@ const router = createBrowserRouter([
       { index: true, element: <CommandCenter /> },
       { path: "kanban", element: <ExperimentBoard /> },
       { path: "leaderboard", element: <Leaderboard /> },
-      { path: "agents/:name", element: <AgentDetail /> },
       { path: "runs/:id/kanban", element: <Navigate to="/kanban" replace /> },
       { path: "*", element: <CommandCenter /> },
     ],

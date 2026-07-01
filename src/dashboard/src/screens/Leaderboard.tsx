@@ -210,8 +210,8 @@ export default function Leaderboard() {
               </p>
             </div>
           </div>
-          <Link to={`/agents/${bestEntry.agentName}`} className="text-sm text-[var(--accent-blue)] hover:underline">
-            {AGENT_INFO_REGISTRY[bestEntry.agentName]?.label ?? bestEntry.agentName} Detail →
+          <Link to="/kanban" className="text-sm text-[var(--accent-blue)] hover:underline">
+            {AGENT_INFO_REGISTRY[bestEntry.agentName]?.label ?? bestEntry.agentName} · Experiment Board →
           </Link>
         </div>
       )}

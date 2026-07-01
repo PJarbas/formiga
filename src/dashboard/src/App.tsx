@@ -2,12 +2,11 @@
 // App.tsx — Shell layout: header nav + <Outlet /> for child routes
 // ══════════════════════════════════════════════════════════════════════
 
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet } from "react-router-dom";
 import { usePipelineStatus } from "./api/api";
 import { useHumanStatus } from "./hooks/useHumanStatus";
 import { humanLabelToUIStatus } from "./lib/human-status";
 import { StatusBadge } from "./components/StatusBadge";
-import { AgentNavDropdown } from "./components/AgentNavDropdown";
 import { Breadcrumb } from "./components/Breadcrumb";
 
 const NAV_ITEMS = [
@@ -19,7 +18,6 @@ const NAV_ITEMS = [
 export default function App() {
   const { data: status } = usePipelineStatus();
   const humanStatus = useHumanStatus();
-  const location = useLocation();
 
   return (
     <div className="flex flex-col h-screen">
@@ -46,7 +44,6 @@ export default function App() {
                 {item.label}
               </NavLink>
             ))}
-            <AgentNavDropdown />
           </nav>
         </div>
         {status?.runId && humanStatus && (

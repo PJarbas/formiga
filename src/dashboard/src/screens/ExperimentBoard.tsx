@@ -7,16 +7,12 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import {
   usePipelineStatus,
   useKanbanSnapshot,
-  useKanbanCardDetail,
-  useTrace,
-  useChecklist,
 } from "../api/api";
-import { TraceTimeline } from "../components/TraceTimeline";
-import { InteractiveChecklist } from "../components/InteractiveChecklist";
+import { AgentDetailPanel } from "../components/AgentDetailPanel";
 import { ActionBar } from "../components/ActionBar";
 import { EmptyState } from "../components/EmptyState";
 import { addToast } from "../components/Toast";
@@ -160,25 +156,13 @@ export default function ExperimentBoard() {
     return { activePhase: active, completedPhases: completed };
   }, [status?.phaseStats]);
 
-  const selectedCard = useMemo<MLKanbanCard | null>(() => {
+  const selectedAgent = useMemo<string | null>(() => {
     if (!selectedCardId || !kanban) return null;
     for (const l of kanban.lanes) {
-      for (const c of l.cards) if (c.id === selectedCardId) return c;
+      for (const c of l.cards) if (c.id === selectedCardId) return c.agentName;
     }
     return null;
   }, [selectedCardId, kanban]);
-
-  const { data: cardDetail } = useKanbanCardDetail(runId, selectedCardId);
-
-  const { data: trace } = useTrace(
-    selectedCard?.agentName,
-    kanban?.roundNumber ?? 0,
-  );
-  const checklistEnabled = selectedCard?.agentName === "feature-engineer" && !!runId;
-  const { data: checklist } = useChecklist(
-    checklistEnabled ? runId : undefined,
-    checklistEnabled ? "feat-eng" : undefined,
-  );
 
   if (!runId) {
     return (
@@ -356,60 +340,13 @@ export default function ExperimentBoard() {
         })}
       </div>
 
-      {/* Detail panel */}
-      {selectedCard && (
-        <div
-          data-testid="detail-panel"
-          className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-5 space-y-4"
-        >
-          <div>
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-              {selectedCard.title}
-            </h3>
-            <p className="text-xs text-[var(--text-secondary)] mt-0.5">
-              {selectedCard.agentName} · {selectedCard.sub}
-            </p>
-            <Link
-              to={`/agents/${selectedCard.agentName}`}
-              className="text-xs text-[var(--accent-blue)] hover:underline mt-1 inline-block"
-            >
-              {AGENT_INFO_REGISTRY[selectedCard.agentName]?.label ?? selectedCard.agentName} Detail →
-            </Link>
-          </div>
-
-          {checklistEnabled && (
-            <div>
-              <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
-                Checklist
-              </h4>
-              <InteractiveChecklist
-                runId={runId!}
-                phase="feat-eng"
-                items={checklist?.items ?? []}
-              />
-            </div>
-          )}
-
-          <div>
-            <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
-              Trace
-            </h4>
-            <TraceTimeline entries={trace ?? []} />
-          </div>
-
-          {cardDetail?.output && (
-            <div>
-              <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
-                Output
-              </h4>
-              <div className="rounded border border-[var(--border-default)] bg-[var(--bg-tertiary)] p-3 max-h-[400px] overflow-y-auto">
-                <pre className="text-[11px] text-[var(--text-secondary)] whitespace-pre-wrap break-words font-mono leading-relaxed">
-                  {cardDetail.output}
-                </pre>
-              </div>
-            </div>
-          )}
-        </div>
+      {/* Agent detail panel */}
+      {selectedAgent && runId && (
+        <AgentDetailPanel
+          agentName={selectedAgent}
+          runId={runId}
+          onClose={() => setSelectedCardId(null)}
+        />
       )}
     </div>
   );
