@@ -113,6 +113,14 @@ export function migrate(db: DatabaseSync): void {
     db.exec("ALTER TABLE steps ADD COLUMN parallel_group TEXT");
   }
 
+  // ── Run-level timeout & progress tracking ──
+  if (!runColNames.has("max_duration_minutes")) {
+    db.exec("ALTER TABLE runs ADD COLUMN max_duration_minutes INTEGER");
+  }
+  if (!runColNames.has("last_progress_at")) {
+    db.exec("ALTER TABLE runs ADD COLUMN last_progress_at TEXT");
+  }
+
   // Indexes for run-scoped scheduling and step claim queries.
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_steps_agent_run_status ON steps(agent_id, run_id, status)",

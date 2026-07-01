@@ -22,6 +22,7 @@ import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startControlPlane,
 import { DEFAULT_CONTROL_PORT } from "../server/control-server.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon, nudgeWithDaemon } from "../server/control-client.js";
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
+import { listStaleRuns, cancelStaleRuns } from "./stale-runs.js";
 import { resolveSourcePath, resolveSkillPath } from "../installer/paths.js";
 import { formatServiceStatus, formatFormigaInfo, formatRunsSummary, formatProcessList } from "./status-format.js";
 import { readFileSync, existsSync } from "node:fs";
@@ -1294,6 +1295,8 @@ function getUsageText(): string {
     "formiga skill-path                  Print path to the bundled formiga-agents skill",
     "formiga source-path                  Print source checkout path",
     "formiga nudge                       Wake all scheduled agents for all running runs",
+    "", "formiga runs list-stale [--min-minutes N] [--json]   List stale runs (idle > N min)",
+    "formiga runs cancel-stale [--min-minutes N] --force  Cancel stale runs in bulk",
   ].join("\n") + "\n";
 }
 
@@ -1378,6 +1381,20 @@ async function main() {
       if (action === "prune") { printHelp(getAutoresearchPruneHelp()); }
       if (action === "wizard") { printHelp(getAutoresearchWizardHelp()); }
       printHelp(getAutoresearchHelp());
+    }
+    if (group === "runs") {
+      printHelp(`formiga runs — Manage stale/stuck runs
+
+Usage: formiga runs <list-stale|cancel-stale>
+
+Subcommands:
+  list-stale    [--min-minutes N] [--json]  List runs idle for > N minutes (default: 120)
+  cancel-stale  [--min-minutes N] --force   Cancel all stale runs in bulk
+
+Examples:
+  formiga runs list-stale
+  formiga runs list-stale --min-minutes 60 --json
+  formiga runs cancel-stale --min-minutes 60 --force`);
     }
     if (group === "nudge") {
       printHelp(getNudgeHelp());
@@ -1867,6 +1884,19 @@ async function main() {
     }
 
     process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: formiga autoresearch <init|run-experiment|log-experiment|status|next|loop|run-loop-iteration|prune>\n`);
+    process.exit(1);
+  }
+
+  if (group === "runs") {
+    if (action === "list-stale") {
+      await listStaleRuns(args.slice(2));
+      return;
+    }
+    if (action === "cancel-stale") {
+      await cancelStaleRuns(args.slice(2));
+      return;
+    }
+    process.stderr.write(`Unknown runs action: ${action}\nUsage: formiga runs <list-stale|cancel-stale>\n`);
     process.exit(1);
   }
 

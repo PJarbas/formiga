@@ -27,6 +27,8 @@ model Run {
   scheduling_status       String?
   scheduling_requested_at DateTime?
   scheduling_error        String?
+  max_duration_minutes    Int?
+  last_progress_at        DateTime?
   created_at              DateTime
   updated_at              DateTime
 

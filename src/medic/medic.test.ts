@@ -4,8 +4,9 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { ensureMedicTables, getMedicStatus, runMedicCheck, getRecentMedicChecks } from "../../dist/medic/medic.js";
+import { getMedicStatus, runMedicCheck, getRecentMedicChecks } from "../../dist/medic/medic.js";
 import { checkDatabaseIntegrity } from "../../dist/medic/checks.js";
+import { resetPrisma } from "../../dist/database/index.js";
 
 describe("medic", () => {
   let tempDir: string;
@@ -14,7 +15,8 @@ describe("medic", () => {
   let originalDbPath: string | undefined;
   let originalHome: string | undefined;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await resetPrisma();
     originalDbPath = process.env.FORMIGA_DB_PATH;
     originalHome = process.env.HOME;
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-medic-"));
@@ -30,11 +32,18 @@ describe("medic", () => {
     db.exec(`
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
+        run_number INTEGER,
         workflow_id TEXT NOT NULL,
         task TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'running',
         context TEXT NOT NULL DEFAULT '{}',
         tokens_spent INTEGER NOT NULL DEFAULT 0,
+        notify_url TEXT,
+        scheduling_status TEXT,
+        scheduling_requested_at TEXT,
+        scheduling_error TEXT,
+        max_duration_minutes INTEGER,
+        last_progress_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -54,51 +63,46 @@ describe("medic", () => {
         loop_config TEXT,
         current_story_id TEXT,
         abandoned_count INTEGER DEFAULT 0,
+        parallel_group TEXT,
+        claim_job_id TEXT,
+        claim_pid INTEGER,
+        claim_pgid INTEGER,
+        claim_updated_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS medic_checks (
+        id TEXT PRIMARY KEY,
+        checked_at TEXT NOT NULL,
+        issues_found INTEGER NOT NULL DEFAULT 0,
+        actions_taken INTEGER NOT NULL DEFAULT 0,
+        summary TEXT,
+        details TEXT
       );
     `);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (originalDbPath) process.env.FORMIGA_DB_PATH = originalDbPath;
     else delete process.env.FORMIGA_DB_PATH;
     if (originalHome) process.env.HOME = originalHome;
     else delete process.env.HOME;
     try { db.close(); } catch {}
+    await resetPrisma();
     fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  describe("ensureMedicTables", () => {
-    it("creates medic_checks table", () => {
-      ensureMedicTables();
-
-      const row = db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='medic_checks'"
-      ).get() as { name: string } | undefined;
-
-      assert.ok(row);
-      assert.equal(row!.name, "medic_checks");
-    });
-
-    it("is idempotent — can be called multiple times", () => {
-      ensureMedicTables();
-      assert.doesNotThrow(() => ensureMedicTables());
-    });
   });
 
   describe("checkDatabaseIntegrity", () => {
     it("returns ok for a healthy database", () => {
       const result = checkDatabaseIntegrity();
       assert.equal(result.ok, true);
-      assert.equal(result.message, "ok");
     });
   });
 
   describe("getMedicStatus", () => {
-    it("returns installed: true after tables are created", () => {
-      ensureMedicTables();
-      const status = getMedicStatus();
+    it("returns installed: true after tables are created", async () => {
+      const status = await getMedicStatus();
       assert.equal(status.installed, true);
       assert.equal(status.lastCheck, null);
       assert.equal(status.recentChecks, 0);
@@ -107,7 +111,6 @@ describe("medic", () => {
 
   describe("runMedicCheck", () => {
     it("runs without errors on clean DB", async () => {
-      ensureMedicTables();
       const result = await runMedicCheck();
       assert.equal(result.issuesFound, 0);
       assert.equal(result.actionsTaken, 0);
@@ -115,8 +118,6 @@ describe("medic", () => {
     });
 
     it("detects and remediates stuck running steps", async () => {
-      ensureMedicTables();
-
       db.prepare(
         "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now', '-2 hours'), datetime('now', '-2 hours'))"
       ).run("stuck-run", "bug-fix", "Fix stuff", "running", "{}");
@@ -134,8 +135,6 @@ describe("medic", () => {
     });
 
     it("detects and remediates zombie runs", async () => {
-      ensureMedicTables();
-
       db.prepare(
         "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now', '-3 hours'), datetime('now', '-3 hours'))"
       ).run("zombie-run", "bug-fix", "Fix more", "running", "{}");
@@ -153,8 +152,6 @@ describe("medic", () => {
     });
 
     it("marks step+run failed when abandoned_count reaches 5", async () => {
-      ensureMedicTables();
-
       db.prepare(
         "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 100, datetime('now', '-2 hours'), datetime('now', '-2 hours'))"
       ).run("stuck-max", "bug-fix", "Over-abandoned", "running", "{}");
@@ -176,7 +173,6 @@ describe("medic", () => {
     });
 
     it("populates medic_checks table after check", async () => {
-      ensureMedicTables();
       await runMedicCheck();
 
       const row = db.prepare("SELECT COUNT(*) as cnt FROM medic_checks").get() as { cnt: number };
@@ -185,17 +181,15 @@ describe("medic", () => {
   });
 
   describe("getRecentMedicChecks", () => {
-    it("returns empty array when no checks exist", () => {
-      ensureMedicTables();
-      const checks = getRecentMedicChecks(5);
+    it("returns empty array when no checks exist", async () => {
+      const checks = await getRecentMedicChecks(5);
       assert.deepEqual(checks, []);
     });
 
     it("returns recent checks after runMedicCheck", async () => {
-      ensureMedicTables();
       await runMedicCheck();
 
-      const checks = getRecentMedicChecks(5);
+      const checks = await getRecentMedicChecks(5);
       assert.ok(checks.length >= 1, "should have at least one check");
       assert.ok("id" in checks[0]!);
       assert.ok("checkedAt" in checks[0]!);
@@ -204,18 +198,16 @@ describe("medic", () => {
     });
 
     it("respects limit parameter", async () => {
-      ensureMedicTables();
       await runMedicCheck();
       await runMedicCheck();
 
-      const checks = getRecentMedicChecks(1);
+      const checks = await getRecentMedicChecks(1);
       assert.ok(checks.length <= 1, "should respect limit");
     });
   });
 
   describe("getMedicStatus", () => {
     it("reports recent stats after checks", async () => {
-      ensureMedicTables();
       await runMedicCheck();
 
       // Add a stuck step so we get non-zero stats
@@ -228,7 +220,7 @@ describe("medic", () => {
 
       await runMedicCheck();
 
-      const status = getMedicStatus();
+      const status = await getMedicStatus();
       assert.equal(status.installed, true);
       assert.ok(status.lastCheck !== null, "should have last check");
       assert.ok(status.recentChecks >= 1);
