@@ -144,6 +144,35 @@ export interface AgentLogsResponse {
   limit: number;
 }
 
+// ── Agent Reasoning (consolidated view) ─────────────────────────────
+
+export interface AgentKeyDecision {
+  roundNumber: number;
+  modelType: string;
+  cvMean: number;
+  trainMean: number;
+  status: string;
+  reason: string | null;
+  promotedAt: string | null;
+  rejectedAt: string | null;
+}
+
+export interface AgentApproaches {
+  models: string[];
+  searchSpace: Record<string, unknown> | null;
+  overfittingMitigation: string | null;
+}
+
+export interface AgentReasoningResponse {
+  agentName: string;
+  hypothesis: string | null;
+  learned: string | null;
+  nextFocus: string | null;
+  approaches: AgentApproaches;
+  keyDecisions: AgentKeyDecision[];
+  specDiff: { before: string; after: string } | null;
+}
+
 // ── Rounds ───────────────────────────────────────────────────────────
 
 export interface RoundSummary {

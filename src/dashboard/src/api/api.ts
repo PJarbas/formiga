@@ -7,6 +7,7 @@ import type {
   PipelineStatus,
   AgentDetail,
   AgentLogsResponse,
+  AgentReasoningResponse,
   MLKanbanSnapshot,
   KanbanCardDetail,
   LeaderboardResponse,
@@ -74,6 +75,22 @@ export function useAgentLogs(
       ),
     enabled: !!agentName,
     refetchInterval: opts?.refetchInterval,
+  });
+}
+
+// ── Agent Reasoning ────────────────────────────────────────────────
+
+export function useAgentReasoning(agentName: string | undefined, runId: string | undefined) {
+  return useQuery({
+    queryKey: ["agents", agentName, "reasoning", runId],
+    queryFn: () => {
+      const params = runId ? `?runId=${encodeURIComponent(runId)}` : "";
+      return fetchJSON<AgentReasoningResponse>(
+        `${BASE}/agents/${encodeURIComponent(agentName ?? "")}/reasoning${params}`,
+      );
+    },
+    enabled: !!agentName,
+    refetchInterval: false,
   });
 }
 

@@ -12,27 +12,18 @@ const NAV_ITEMS = [
   { to: "/", label: "Command Center", end: true },
   { to: "/kanban", label: "Experiment Board" },
   { to: "/leaderboard", label: "Model Arena" },
-  { to: "/agents/:name", label: "Agent Detail" },
 ];
 
 interface BreadcrumbMatch {
   label: string;
-  agentName?: string;
 }
 
 function matchPath(pathname: string): BreadcrumbMatch | null {
-  // Exact matches first (skip dynamic routes)
-  const exact = NAV_ITEMS.find((n) => !n.to.includes(":") && pathname === n.to);
+  const exact = NAV_ITEMS.find((n) => pathname === n.to);
   if (exact) return { label: exact.label };
 
-  // Agent detail pattern
-  if (pathname.startsWith("/agents/")) {
-    return { label: "Agent Detail", agentName: pathname.slice("/agents/".length) };
-  }
-
-  // Prefix fallback for sub-routes
   const prefix = NAV_ITEMS.find(
-    (n) => !n.to.includes(":") && n.to !== "/" && pathname.startsWith(n.to),
+    (n) => n.to !== "/" && pathname.startsWith(n.to),
   );
   return prefix ? { label: prefix.label } : null;
 }
@@ -59,12 +50,6 @@ export function Breadcrumb() {
       )}
       <span aria-hidden="true">›</span>
       <span className="text-[var(--text-primary)]">{current.label}</span>
-      {current.agentName && (
-        <>
-          <span aria-hidden="true">›</span>
-          <span className="text-[var(--text-primary)]">{current.agentName}</span>
-        </>
-      )}
     </nav>
   );
 }
