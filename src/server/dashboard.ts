@@ -1875,7 +1875,7 @@ const PIPELINE_PHASE_LABELS: Array<{ id: string; label: string }> = [
   { id: "complete", label: "Done" },
 ];
 
-function derivePhases(currentPhase: string): Array<{
+function derivePhases(currentPhase: string, runStatus: string): Array<{
   id: string;
   label: string;
   status: "done" | "running" | "pending" | "failed";
@@ -1883,6 +1883,31 @@ function derivePhases(currentPhase: string): Array<{
   estimatedMs: number;
 }> {
   const currentIdx = PIPELINE_PHASE_LABELS.findIndex((p) => p.id === currentPhase);
+
+  if (runStatus === "completed") {
+    return PIPELINE_PHASE_LABELS.map((p) => ({
+      id: p.id, label: p.label, status: "done" as const, elapsedMs: 0, estimatedMs: 0,
+    }));
+  }
+
+  if (runStatus === "failed") {
+    const failIdx = currentIdx < 0 ? 0 : currentIdx;
+    return PIPELINE_PHASE_LABELS.map((p, i) => {
+      let status: "done" | "running" | "pending" | "failed" = "pending";
+      if (i < failIdx) status = "done";
+      else if (i === failIdx) status = "failed";
+      return { id: p.id, label: p.label, status, elapsedMs: 0, estimatedMs: 0 };
+    });
+  }
+
+  if (runStatus === "canceled") {
+    return PIPELINE_PHASE_LABELS.map((p, i) => ({
+      id: p.id, label: p.label,
+      status: (i < currentIdx ? "done" : "pending") as "done" | "pending",
+      elapsedMs: 0, estimatedMs: 0,
+    }));
+  }
+
   return PIPELINE_PHASE_LABELS.map((p, i) => {
     let status: "done" | "running" | "pending" | "failed" = "pending";
     if (currentIdx < 0) status = "pending";
@@ -1998,7 +2023,7 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
           task: run.task,
           status: run.status,
           currentPhase,
-          phases: derivePhases(currentPhase),
+          phases: derivePhases(currentPhase, run.status),
           totalExperiments: stats?.count ?? 0,
           bestCvMean: stats?.best ?? null,
           durationMs,

@@ -1,9 +1,31 @@
-import { useCommandCenter } from "../api/api";
+import { useCommandCenter, usePipelineControl, useDeleteRun } from "../api/api";
 import { PipelineTable } from "../components/PipelineTable";
+import type { RunActionId } from "../components/PipelineTable";
 import { EmptyState } from "../components/EmptyState";
+import { addToast } from "../components/Toast";
 
 export default function CommandCenter() {
   const { data, isLoading, error } = useCommandCenter();
+  const { pause, resume, cancel } = usePipelineControl();
+  const deleteRun = useDeleteRun();
+
+  function handleRunAction(runId: string, action: RunActionId) {
+    switch (action) {
+      case "pause":
+        pause.mutate(runId, { onError: (e) => addToast("error", `Pause failed: ${(e as Error).message}`) });
+        break;
+      case "resume":
+        resume.mutate(runId, { onError: (e) => addToast("error", `Resume failed: ${(e as Error).message}`) });
+        break;
+      case "cancel":
+        cancel.mutate(runId, { onError: (e) => addToast("error", `Cancel failed: ${(e as Error).message}`) });
+        break;
+      case "delete":
+        if (!window.confirm("Delete this run and all its data? This cannot be undone.")) return;
+        deleteRun.mutate(runId, { onError: (e) => addToast("error", `Delete failed: ${(e as Error).message}`) });
+        break;
+    }
+  }
 
   if (isLoading) {
     return (
@@ -42,7 +64,7 @@ export default function CommandCenter() {
 
   return (
     <div data-testid="command-center">
-      <PipelineTable runs={data.runs} />
+      <PipelineTable runs={data.runs} onRunAction={handleRunAction} />
     </div>
   );
 }
