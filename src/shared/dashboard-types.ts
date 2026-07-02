@@ -58,6 +58,18 @@ export interface LeaderboardEntry {
   promotedAt: string | null;
   rejectedAt: string | null;
   rejectReason: string | null;
+  artifactPath: string | null;
+}
+
+export interface ModelReportResponse {
+  content: string;
+  filename: string;
+}
+
+export interface ReproductionScriptResponse {
+  script: string;
+  filename: string;
+  language: "python";
 }
 
 export interface CompareResponse {

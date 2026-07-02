@@ -11,6 +11,7 @@ import {
   useCompareExperiments,
 } from "../api/api";
 import { ComparePanel } from "../components/ComparePanel";
+import { ModelDetailPanel } from "../components/ModelDetailPanel";
 import { ActionBar } from "../components/ActionBar";
 import { addToast } from "../components/Toast";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
@@ -40,6 +41,7 @@ export default function Leaderboard() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filterAgent, setFilterAgent] = useState<string>("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [detailEntryId, setDetailEntryId] = useState<string | null>(null);
 
   const { data, isLoading } = useLeaderboard({
     agentName: filterAgent || undefined,
@@ -277,14 +279,18 @@ export default function Leaderboard() {
                 sortedEntries.map((entry) => {
                   const isSelected = selectedIds.has(entry.id);
                   const isBest = entry.id === bestId;
+                  const isDetail = entry.id === detailEntryId;
                   return (
                     <tr
                       key={entry.id}
                       data-testid={`arena-row-${entry.id}`}
                       data-selected={isSelected ? "true" : "false"}
-                      className="border-b border-[var(--border-default)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                      onClick={() => setDetailEntryId(isDetail ? null : entry.id)}
+                      className={`border-b border-[var(--border-default)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer ${
+                        isDetail ? "border-l-2 border-l-[var(--accent-blue)] bg-[var(--bg-tertiary)]" : ""
+                      }`}
                     >
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           data-testid={`arena-select-${entry.id}`}
@@ -333,6 +339,18 @@ export default function Leaderboard() {
           </table>
         </div>
       </div>
+
+      {/* Model Detail Panel */}
+      {detailEntryId && (() => {
+        const detailEntry = sortedEntries.find((e) => e.id === detailEntryId);
+        if (!detailEntry) return null;
+        return (
+          <ModelDetailPanel
+            entry={detailEntry}
+            onClose={() => setDetailEntryId(null)}
+          />
+        );
+      })()}
 
       {/* ComparePanel */}
       {selectedIds.size >= 2 && (
