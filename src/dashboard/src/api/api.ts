@@ -22,6 +22,8 @@ import type {
   TraceEntry,
   CommandCenterSnapshot,
   PendingDecision,
+  ModelReportResponse,
+  ReproductionScriptResponse,
 } from "@shared/dashboard-types";
 
 const BASE = "/api";
@@ -146,6 +148,24 @@ export function useLeaderboardEntry(id: string | undefined) {
     queryKey: ["leaderboard", id],
     queryFn: () => fetchJSON<LeaderboardEntry>(`${BASE}/leaderboard/${encodeURIComponent(id ?? "")}`),
     enabled: !!id,
+  });
+}
+
+export function useModelReport(entryId: string | undefined) {
+  return useQuery({
+    queryKey: ["leaderboard", entryId, "report"],
+    queryFn: () =>
+      fetchJSON<ModelReportResponse>(`${BASE}/leaderboard/${encodeURIComponent(entryId ?? "")}/report`),
+    enabled: !!entryId,
+  });
+}
+
+export function useReproductionScript(entryId: string | undefined) {
+  return useQuery({
+    queryKey: ["leaderboard", entryId, "script"],
+    queryFn: () =>
+      fetchJSON<ReproductionScriptResponse>(`${BASE}/leaderboard/${encodeURIComponent(entryId ?? "")}/script`),
+    enabled: !!entryId,
   });
 }
 

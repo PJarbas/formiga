@@ -55,6 +55,7 @@ import {
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
+import { generateReproductionScript } from "./script-templates.js";
 import {
   findActivePipelineRunId,
   getAgentUnifiedStatus,
@@ -1348,6 +1349,7 @@ function mapExperimentRow(r: Record<string, unknown>): {
   promotedAt: string | null;
   rejectedAt: string | null;
   rejectReason: string | null;
+  artifactPath: string | null;
 } {
   return {
     id: String(r.experiment_id),
@@ -1369,6 +1371,7 @@ function mapExperimentRow(r: Record<string, unknown>): {
     promotedAt: (r.promoted_at as string | null) ?? null,
     rejectedAt: (r.rejected_at as string | null) ?? null,
     rejectReason: (r.reject_reason as string | null) ?? null,
+    artifactPath: (r.artifact_path as string | null) ?? null,
   };
 }
 
@@ -1420,6 +1423,227 @@ function handleLeaderboardCompare(req: http.IncomingMessage, res: http.ServerRes
 
     jsonResponse(res, { entries });
   })().catch((err) => errorResponse(res, `Failed to compare leaderboard entries: ${(err as Error).message}`));
+}
+
+// ── Artifact serving ────────────────────────────────────────────────────
+
+const AGENT_REPORT_MAP: Record<string, string> = {
+  "data-analyst": "01_eda.md",
+  "feature-engineer": "02_features.md",
+  "modeler-classic": "03_classic.md",
+  "modeler-advanced": "04_advanced.md",
+  "ml-critic": "05_audit.md",
+};
+
+function resolveWorkspaceFromRun(run: { context: string }): string | null {
+  try {
+    const ctx = JSON.parse(run.context);
+    return ctx.workspace ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isPathSafe(base: string, requested: string): boolean {
+  const resolved = path.resolve(base, requested);
+  return resolved.startsWith(base + path.sep) || resolved === base;
+}
+
+function bareAgentName(scopedName: string): string {
+  const idx = scopedName.lastIndexOf("_");
+  return idx >= 0 ? scopedName.slice(idx + 1) : scopedName;
+}
+
+function handleLeaderboardReport(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const experimentId = Number(id);
+    if (!Number.isFinite(experimentId)) {
+      errorResponse(res, "Invalid experiment id", 400);
+      return;
+    }
+
+    const experiment = await prisma.experiment.findUnique({
+      where: { experiment_id: experimentId },
+      select: { agent_name: true, run_id: true },
+    });
+    if (!experiment) {
+      errorResponse(res, "Experiment not found", 404);
+      return;
+    }
+
+    const run = await prisma.run.findUnique({
+      where: { id: experiment.run_id },
+      select: { context: true },
+    });
+    if (!run) {
+      errorResponse(res, "Run not found", 404);
+      return;
+    }
+
+    const workspace = resolveWorkspaceFromRun(run);
+    if (!workspace) {
+      errorResponse(res, "Cannot resolve workspace for this run", 500);
+      return;
+    }
+
+    const agent = bareAgentName(experiment.agent_name);
+    const reportFile = AGENT_REPORT_MAP[agent];
+    if (!reportFile) {
+      errorResponse(res, `No report mapping for agent: ${agent}`, 404);
+      return;
+    }
+
+    const reportPath = path.join(workspace, "reports", reportFile);
+    if (!isPathSafe(workspace, path.join("reports", reportFile))) {
+      errorResponse(res, "Forbidden", 403);
+      return;
+    }
+
+    try {
+      const content = await fs.promises.readFile(reportPath, "utf-8");
+      jsonResponse(res, { content, filename: reportFile });
+    } catch {
+      errorResponse(res, `Report file not found: ${reportFile}`, 404);
+    }
+  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
+}
+
+function handleLeaderboardScript(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const experimentId = Number(id);
+    if (!Number.isFinite(experimentId)) {
+      errorResponse(res, "Invalid experiment id", 400);
+      return;
+    }
+
+    const experiment = await prisma.experiment.findUnique({
+      where: { experiment_id: experimentId },
+    });
+    if (!experiment) {
+      errorResponse(res, "Experiment not found", 404);
+      return;
+    }
+
+    const run = await prisma.run.findUnique({
+      where: { id: experiment.run_id },
+      select: { context: true },
+    });
+    if (!run) {
+      errorResponse(res, "Run not found", 404);
+      return;
+    }
+
+    const workspace = resolveWorkspaceFromRun(run);
+    if (!workspace) {
+      errorResponse(res, "Cannot resolve workspace for this run", 500);
+      return;
+    }
+
+    let features: string[] = [];
+    try {
+      const featuresParquet = path.join(workspace, "artifacts", "features.parquet");
+      if (fs.existsSync(featuresParquet)) {
+        const sidecarPath = path.join(workspace, "artifacts", "feature-engineer_submission.json");
+        if (fs.existsSync(sidecarPath)) {
+          const sidecar = JSON.parse(await fs.promises.readFile(sidecarPath, "utf-8"));
+          if (Array.isArray(sidecar.FEATURES)) features = sidecar.FEATURES;
+        }
+      }
+    } catch { /* best-effort feature extraction */ }
+
+    let hyperparameters: Record<string, unknown> = {};
+    try {
+      hyperparameters = JSON.parse(experiment.hyperparameters);
+    } catch { /* use empty */ }
+
+    const script = generateReproductionScript({
+      experimentId: String(experiment.experiment_id),
+      modelType: experiment.model_type,
+      hyperparameters,
+      cvMean: experiment.val_metric,
+      trainMean: experiment.train_metric,
+      artifactPath: experiment.artifact_path,
+      metricName: experiment.metric_name,
+      features,
+      workspacePath: workspace,
+    });
+
+    const filename = `reproduce_${experiment.model_type.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${experiment.experiment_id}.py`;
+    jsonResponse(res, { script, filename, language: "python" });
+  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
+}
+
+const ARTIFACT_ALLOWED_EXTENSIONS = new Set([".md", ".json", ".py", ".txt", ".csv", ".log"]);
+
+function handleRunArtifact(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+  relativePath: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { context: true },
+    });
+    if (!run) {
+      errorResponse(res, "Run not found", 404);
+      return;
+    }
+
+    const workspace = resolveWorkspaceFromRun(run);
+    if (!workspace) {
+      errorResponse(res, "Cannot resolve workspace", 500);
+      return;
+    }
+
+    if (!isPathSafe(workspace, relativePath)) {
+      errorResponse(res, "Forbidden", 403);
+      return;
+    }
+
+    const ext = path.extname(relativePath).toLowerCase();
+    const filePath = path.resolve(workspace, relativePath);
+
+    if (ARTIFACT_ALLOWED_EXTENSIONS.has(ext)) {
+      try {
+        const content = await fs.promises.readFile(filePath, "utf-8");
+        const mime = ext === ".json" ? "application/json"
+          : ext === ".md" ? "text/markdown"
+          : ext === ".py" ? "text/x-python"
+          : ext === ".csv" ? "text/csv"
+          : "text/plain";
+        res.writeHead(200, { "Content-Type": `${mime}; charset=utf-8` });
+        res.end(content);
+      } catch {
+        errorResponse(res, "File not found", 404);
+      }
+    } else {
+      try {
+        const stat = await fs.promises.stat(filePath);
+        res.writeHead(200, {
+          "Content-Type": "application/octet-stream",
+          "Content-Disposition": `attachment; filename="${path.basename(filePath)}"`,
+          "Content-Length": String(stat.size),
+        });
+        const stream = fs.createReadStream(filePath);
+        stream.pipe(res);
+      } catch {
+        errorResponse(res, "File not found", 404);
+      }
+    }
+  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
 }
 
 function handleLeaderboardAgentHistory(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -2347,6 +2571,27 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /api/leaderboard/compare (before /api/leaderboard/:id)
   if (method === "GET" && pathname === "/api/leaderboard/compare") {
     handleLeaderboardCompare(req, res);
+    return;
+  }
+
+  // GET /api/leaderboard/:id/report
+  const leaderboardReportMatch = pathname.match(/^\/api\/leaderboard\/([0-9]+)\/report$/);
+  if (method === "GET" && leaderboardReportMatch) {
+    handleLeaderboardReport(req, res, leaderboardReportMatch[1]);
+    return;
+  }
+
+  // GET /api/leaderboard/:id/script
+  const leaderboardScriptMatch = pathname.match(/^\/api\/leaderboard\/([0-9]+)\/script$/);
+  if (method === "GET" && leaderboardScriptMatch) {
+    handleLeaderboardScript(req, res, leaderboardScriptMatch[1]);
+    return;
+  }
+
+  // GET /api/runs/:id/artifacts/*
+  const artifactMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/artifacts\/(.+)$/);
+  if (method === "GET" && artifactMatch) {
+    handleRunArtifact(req, res, artifactMatch[1], decodeURIComponent(artifactMatch[2]));
     return;
   }
 
