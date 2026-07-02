@@ -57,6 +57,7 @@ export function AgentDetailPanel({ agentName, runId, onClose }: Props) {
   });
   const { data: logs } = useAgentLogs(agentName, logOffset, LOG_PAGE_SIZE, {
     refetchInterval: isRunning ? 3000 : false,
+    runId,
   });
 
   const isFeatureEngineer = agentName === "feature-engineer";

@@ -223,19 +223,30 @@ export async function getCurrentPhase(runId: string): Promise<string> {
 
 /**
  * Return the most-recently-started run that is still `running` or `paused`.
+ * Falls back to the most recent run of any status so that completed runs
+ * remain visible in the dashboard (leaderboard, logs, reasoning).
  * Uses the `runs` table directly (the canonical source of truth).
  */
 export async function findActivePipelineRunId(): Promise<string | null> {
   try {
     const prisma = getPrisma();
-    const row = await prisma.run.findFirst({
+    const active = await prisma.run.findFirst({
       where: {
         status: { in: ["running", "paused"] },
       },
       orderBy: { created_at: "desc" },
       select: { id: true },
     });
-    return row?.id ?? null;
+    if (active) return active.id;
+
+    const latest = await prisma.run.findFirst({
+      where: {
+        status: { not: "canceled" },
+      },
+      orderBy: { created_at: "desc" },
+      select: { id: true },
+    });
+    return latest?.id ?? null;
   } catch {
     return null;
   }
@@ -259,7 +270,7 @@ export async function getAgentRoundSummaries(
 > {
   const prisma = getPrisma();
   const rows = await prisma.experiment.findMany({
-    where: { run_id: runId, agent_name: agentName },
+    where: { run_id: runId, agent_name: { endsWith: `_${agentName}` } },
     orderBy: { round_number: "asc" },
     select: {
       round_number: true,
