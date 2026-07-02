@@ -65,14 +65,18 @@ export function useAgentLogs(
   agentName: string | undefined,
   offset = 0,
   limit = 50,
-  opts?: { refetchInterval?: number | false },
+  opts?: { refetchInterval?: number | false; runId?: string },
 ) {
+  const runId = opts?.runId;
   return useQuery({
-    queryKey: ["agents", agentName, "logs", offset, limit],
-    queryFn: () =>
-      fetchJSON<AgentLogsResponse>(
-        `${BASE}/agents/${encodeURIComponent(agentName ?? "")}/logs?offset=${offset}&limit=${limit}`,
-      ),
+    queryKey: ["agents", agentName, "logs", offset, limit, runId],
+    queryFn: () => {
+      const params = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+      if (runId) params.set("runId", runId);
+      return fetchJSON<AgentLogsResponse>(
+        `${BASE}/agents/${encodeURIComponent(agentName ?? "")}/logs?${params}`,
+      );
+    },
     enabled: !!agentName,
     refetchInterval: opts?.refetchInterval,
   });

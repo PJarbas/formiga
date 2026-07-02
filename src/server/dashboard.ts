@@ -1059,21 +1059,26 @@ function handleAgentLogs(
     const url = new URL(req.url ?? "/", "http://localhost");
     const offset = parseInt(url.searchParams.get("offset") ?? "0", 10);
     const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10), 200);
+    const requestedRunId = url.searchParams.get("runId")?.trim();
 
-    const runId = await findActivePipelineRunId();
+    const runId = requestedRunId || (await findActivePipelineRunId());
 
     if (!runId) {
       jsonResponse(res, { agentName, entries: [], total: 0, offset, limit });
       return;
     }
 
-    // Read experiments for this agent as log entries
+    // Read experiments for this agent as log entries.
+    // agent_name in the DB is scoped (e.g. "ml-pipeline_modeler-classic")
+    // but the URL param is the bare suffix ("modeler-classic").
+    const agentNameFilter = { endsWith: `_${agentName}` };
+
     const total = await prisma.experiment.count({
-      where: { run_id: runId, agent_name: agentName },
+      where: { run_id: runId, agent_name: agentNameFilter },
     });
 
     const rows = await prisma.experiment.findMany({
-      where: { run_id: runId, agent_name: agentName },
+      where: { run_id: runId, agent_name: agentNameFilter },
       orderBy: { experiment_id: "desc" },
       skip: offset,
       take: limit,
@@ -1125,9 +1130,11 @@ function handleAgentReasoning(
       return;
     }
 
-    // Fetch experiments for this agent in current run (key decisions)
+    // Fetch experiments for this agent in current run (key decisions).
+    // agent_name in DB is scoped ("ml-pipeline_modeler-classic"), URL param is bare.
+    const scopedAgentFilter = { endsWith: `_${agentName}` };
     const experiments = await prisma.experiment.findMany({
-      where: { run_id: runId, agent_name: agentName },
+      where: { run_id: runId, agent_name: scopedAgentFilter },
       orderBy: { round_number: "desc" },
       take: 20,
       select: {
@@ -1155,9 +1162,10 @@ function handleAgentReasoning(
       rejectedAt: e.rejected_at?.toISOString() ?? null,
     }));
 
-    // Fetch step output for approaches/search space
+    // Fetch step output for approaches/search space.
+    // agent_id in steps table is scoped (e.g. "ml-pipeline_modeler-classic").
     const step = await prisma.step.findFirst({
-      where: { run_id: runId, agent_id: agentName },
+      where: { run_id: runId, agent_id: { endsWith: `_${agentName}` } },
       orderBy: { updated_at: "desc" },
       select: { output: true },
     });
@@ -1259,9 +1267,10 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
       return;
     }
 
-    // Build where clause
+    // Build where clause.
+    // agent_name in DB is scoped ("ml-pipeline_modeler-classic"), filter param is bare.
     const whereClause: Record<string, unknown> = { run_id: runId };
-    if (agentName) whereClause.agent_name = agentName;
+    if (agentName) whereClause.agent_name = { endsWith: `_${agentName}` };
     if (roundStr) whereClause.round_number = Number(roundStr);
     if (statusFilter) whereClause.status = statusFilter;
 

@@ -11,6 +11,7 @@ import {
   useCompareExperiments,
 } from "../api/api";
 import { ComparePanel } from "../components/ComparePanel";
+import { ActionBar } from "../components/ActionBar";
 import { addToast } from "../components/Toast";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
 import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
