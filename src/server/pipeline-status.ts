@@ -1,17 +1,19 @@
 // ══════════════════════════════════════════════════════════════════════
 // pipeline-status.ts — Unified pipeline status helpers
 // MIGRATED TO PRISMA — no raw SQL
+// STATUS REGISTRY — all normalization via resolveDashboardStatus()
 // ══════════════════════════════════════════════════════════════════════
 
 import { getPrisma } from "../database/prisma.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
-
-/** Unified status label used by the dashboard. */
-export type DashboardAgentStatus =
-  | "idle"
-  | "running"
-  | "completed"
-  | "failed";
+import {
+  resolveDashboardStatus,
+  type DashboardAgentStatus,
+  type ResolutionContext,
+  type VisualStatus,
+  STEP_TO_VISUAL,
+  type StepStatus,
+} from "../shared/status-registry.js";
 
 /** Result of resolving an agent's status across both tables. */
 export interface UnifiedAgentStatus {
@@ -35,7 +37,7 @@ function getStepIdForAgent(agentName: string): string | undefined {
 }
 
 /** Derive agentName from stepId by searching AGENT_INFO_REGISTRY */
-function getAgentNameForStepId(stepId: string): string | undefined {
+export function getAgentNameForStepId(stepId: string): string | undefined {
   for (const [name, info] of Object.entries(AGENT_INFO_REGISTRY)) {
     if (info.stepId === stepId) return name;
   }
@@ -88,11 +90,9 @@ async function getLatestExperiment(
 /**
  * Resolve the dashboard-visible status for a single agent in a run.
  *
- * Logic:
- *   1. Look at the `experiments` table first (leaderboard entries).
- *   2. If no experiment exists, fall back to the `steps` table.
- *
- * This guarantees "idle" is never returned while a step is `running`.
+ * Uses the status-registry for all normalization — no scattered if/else.
+ * Experiment status takes priority; Step status is the fallback.
+ * Unknown values are logged with context.
  */
 export async function getAgentUnifiedStatus(
   runId: string,
@@ -105,40 +105,31 @@ export async function getAgentUnifiedStatus(
     getLatestExperiment(runId, agentName, roundNumber),
   ]);
 
+  const ctx: ResolutionContext = {
+    entityType: exp ? "Experiment" : step ? "Step" : "Agent",
+    entityId: `${runId}/${agentName}`,
+    fieldName: "status",
+  };
+
   if (exp) {
-    const s = exp.status;
-    const status: DashboardAgentStatus =
-      s === "SUCCESS" || s === "AUDITED"
-        ? "completed"
-        : s === "FAILED" || s === "OVERFITTED"
-          ? "failed"
-          : s === "PENDING"
-            ? "running"
-            : "idle";
+    const rawStatus = exp.status.toString();
+    const status = resolveDashboardStatus(rawStatus, ctx);
     return {
       status,
       stepStatus: step?.status ?? null,
-      experimentStatus: s.toString(),
+      experimentStatus: rawStatus,
       hasExperiment: true,
       valMetric: exp.val_metric ?? null,
       errorMessage: exp.error_message ?? null,
     };
   }
 
-  // No experiment yet — derive from step status
   if (step) {
-    const s = step.status;
-    const status: DashboardAgentStatus =
-      s === "done" || s === "completed"
-        ? "completed"
-        : s === "running"
-          ? "running"
-          : s === "failed" || s === "canceled"
-            ? "failed"
-            : "idle";
+    const rawStatus = step.status;
+    const status = resolveDashboardStatus(rawStatus, ctx);
     return {
       status,
-      stepStatus: s,
+      stepStatus: rawStatus,
       experimentStatus: null,
       hasExperiment: false,
       valMetric: null,
@@ -202,27 +193,13 @@ export async function getCurrentPhase(runId: string): Promise<string> {
     where: { run_id: runId },
     select: { step_id: true, status: true },
   });
-  const stepStatus: Record<string, string> = {};
-  for (const s of steps) stepStatus[s.step_id] = s.status.toString();
+  const stepStatus: Record<string, VisualStatus> = {};
+  for (const s of steps) stepStatus[s.step_id] = STEP_TO_VISUAL[s.status as StepStatus] ?? "todo";
 
-  if (
-    stepStatus["audit"] === "running" ||
-    stepStatus["audit"] === "done"
-  ) return "audit";
-  if (
-    stepStatus["model-classic"] === "running" ||
-    stepStatus["model-classic"] === "done" ||
-    stepStatus["model-advanced"] === "running" ||
-    stepStatus["model-advanced"] === "done"
-  ) return "modeling";
-  if (
-    stepStatus["features"] === "running" ||
-    stepStatus["features"] === "done"
-  ) return "feature_engineering";
-  if (
-    stepStatus["eda"] === "running" ||
-    stepStatus["eda"] === "done"
-  ) return "data_analysis";
+  if (stepStatus["audit"] === "running" || stepStatus["audit"] === "done") return "audit";
+  if (stepStatus["model-classic"] === "running" || stepStatus["model-classic"] === "done" || stepStatus["model-advanced"] === "running" || stepStatus["model-advanced"] === "done") return "modeling";
+  if (stepStatus["features"] === "running" || stepStatus["features"] === "done") return "feature_engineering";
+  if (stepStatus["eda"] === "running" || stepStatus["eda"] === "done") return "data_analysis";
 
   return "idle";
 }
@@ -253,7 +230,12 @@ export async function findActivePipelineRunId(): Promise<string | null> {
       select: { id: true },
     });
     return latest?.id ?? null;
-  } catch {
+  } catch (err) {
+    // Distinguish DB failures from "no active run" — log the error
+    const { logger } = await import("../lib/logger.js");
+    logger.warn("findActivePipelineRunId: DB query failed", {
+      error: (err as Error).message,
+    });
     return null;
   }
 }

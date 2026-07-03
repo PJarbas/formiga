@@ -138,6 +138,11 @@ export async function ingestStepOutput(params: {
     return { experimentId: null, reason: "non-leaderboard agent" };
   }
 
+  const LOG_SKIP = (reason: string) => {
+    logger.info("Leaderboard ingest skipped", { runId, agentId, reason });
+    return reason;
+  };
+
   // Merge parsedKv (from STATUS:/KEY:value text) with the sidecar JSON the
   // agent writes to `artifacts/<agent>_submission.json`. parsedKv values take
   // precedence when both sources provide a key — the sidecar is a fallback
@@ -149,21 +154,21 @@ export async function ingestStepOutput(params: {
 
   const modelType = merged["model_type"];
   if (!modelType) {
-    return { experimentId: null, reason: "missing MODEL_TYPE" };
+    return { experimentId: null, reason: LOG_SKIP("missing MODEL_TYPE") };
   }
 
   const cvMean = parseNumber(merged["cv_mean"]);
   const trainMean = parseNumber(merged["train_mean"]);
   if (cvMean === null) {
-    return { experimentId: null, reason: "missing or non-numeric CV_MEAN" };
+    return { experimentId: null, reason: LOG_SKIP("missing or non-numeric CV_MEAN") };
   }
   if (trainMean === null) {
-    return { experimentId: null, reason: "missing or non-numeric TRAIN_MEAN" };
+    return { experimentId: null, reason: LOG_SKIP("missing or non-numeric TRAIN_MEAN") };
   }
 
   const artifactPath = merged["artifact_path"] ?? "";
   if (!artifactPath) {
-    return { experimentId: null, reason: "missing ARTIFACT_PATH" };
+    return { experimentId: null, reason: LOG_SKIP("missing ARTIFACT_PATH") };
   }
 
   const hyperparameters = parseHyperparams(merged["hyperparameters"]);

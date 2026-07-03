@@ -2,9 +2,21 @@
 // dashboard-types.ts — Types shared between server API and React frontend
 // ══════════════════════════════════════════════════════════════════════
 
+// Re-export canonical status types from the registry (single source of truth)
+export type {
+  VisualStatus,
+  DashboardAgentStatus as AgentStatus,
+  PipelineRunStatus,
+  UIStatus,
+} from "./status-registry.js";
+
+// Keep AgentStatus as a convenient alias
+import type { DashboardAgentStatus } from "./status-registry.js";
+
 // ── ML Kanban (per-agent lane view, Tela 2) ──────────────────────────
 
-export type AgentStatus = "idle" | "running" | "completed" | "failed" | "timed_out";
+/** @deprecated Use DashboardAgentStatus from status-registry instead */
+type AgentStatus = DashboardAgentStatus;
 
 export interface MLKanbanCard {
   /** Unique card id (experiment_id or round-phase key). */
@@ -359,6 +371,8 @@ export interface TraceEntry {
 }
 
 export type PhaseStatus = "done" | "running" | "pending" | "failed";
+// Note: PhaseStatus is a UI-specific concept (pipeline phase progression).
+// It is NOT the same as Step/Story/Experiment status. Kept here intentionally.
 
 export interface PhaseInfo {
   id: string;

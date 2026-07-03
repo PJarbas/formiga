@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { STATUS_CONFIG, getStatusConfig, type UIStatus } from "./status-config";
+import { STATUS_CONFIG, getStatusConfig } from "./status-config";
+import type { UIStatus } from "@shared/status-registry";
 
 describe("STATUS_CONFIG", () => {
   it("has an entry for every UIStatus key", () => {

@@ -43,6 +43,7 @@ import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 import { runWorkflow } from "../installer/run.js";
 import { stopWorkflow, deleteWorkflow, getWorkflowStatus } from "../installer/status.js";
 import { getBuildVersion } from "../lib/version.js";
+import { logger } from "../lib/logger.js";
 import {
   findAutoresearchSessionCwd,
   calculateAutoresearchConfidence,
@@ -112,7 +113,11 @@ function parseRunContext(context: unknown): RunContext {
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? parsed as RunContext
       : {};
-  } catch {
+  } catch (err) {
+    logger.warn("parseRunContext: malformed JSON, defaulting to empty", {
+      error: (err as Error).message,
+      contextPreview: typeof context === "string" ? context.slice(0, 80) : typeof context,
+    });
     return {};
   }
 }
@@ -228,8 +233,8 @@ function handleListRuns(_req: http.IncomingMessage, res: http.ServerResponse): v
       try {
         const ctx = JSON.parse(String(row.context ?? "{}"));
         no_hurry = ctx.no_hurry_save_tokens_mode === "true";
-      } catch {
-        // malformed context → no_hurry stays false
+      } catch (err) {
+        logger.warn("handleListRuns: malformed run context", { runId: row.id, error: (err as Error).message });
       }
 
       const idleMinutes = Math.floor((Date.now() - new Date(row.updated_at).getTime()) / 60_000);
@@ -446,8 +451,8 @@ function handleAutoresearchRuns(_req: http.IncomingMessage, res: http.ServerResp
       try {
         const ctx = JSON.parse(String(row.context ?? "{}"));
         no_hurry = ctx.no_hurry_save_tokens_mode === "true";
-      } catch {
-        // malformed context → no_hurry stays false
+      } catch (err) {
+        logger.warn("handleListRuns: malformed run context", { runId: row.id, error: (err as Error).message });
       }
       return { ...row, no_hurry };
     });
@@ -1239,7 +1244,7 @@ function handleAgentReasoning(
             nextFocus = latest.asi.next_focus ?? null;
           }
         }
-      } catch { /* context not parseable, skip */ }
+      } catch (err) { logger.warn("handleAgentReasoning: context not parseable", { agentName, error: (err as Error).message }); }
     }
 
     // Spec diff from rounds
@@ -1282,7 +1287,7 @@ function extractApproaches(output: string | null): {
     if (trimmed.startsWith("APPROACHES:")) {
       models.push(...trimmed.slice("APPROACHES:".length).split(",").map((s) => s.trim()).filter(Boolean));
     } else if (trimmed.startsWith("SEARCH_SPACE:")) {
-      try { searchSpace = JSON.parse(trimmed.slice("SEARCH_SPACE:".length)); } catch { /* skip */ }
+      try { searchSpace = JSON.parse(trimmed.slice("SEARCH_SPACE:".length)); } catch (err) { logger.warn("parseAgentOutput: SEARCH_SPACE parse failed", { error: (err as Error).message }); }
     } else if (trimmed.startsWith("OVERFITTING_MITIGATION:")) {
       overfittingMitigation = trimmed.slice("OVERFITTING_MITIGATION:".length).trim();
     }
@@ -1361,7 +1366,7 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
 }
 
 function safeParseJson(raw: string): Record<string, unknown> {
-  try { return JSON.parse(raw) as Record<string, unknown>; } catch { return {}; }
+  try { return JSON.parse(raw) as Record<string, unknown>; } catch (err) { logger.debug("safeParseJson: parse error", { error: (err as Error).message }); return {}; }
 }
 
 /**
@@ -3045,6 +3050,10 @@ export interface DashboardServerOptions {
 
 export async function createDashboardServer(port: number, options: DashboardServerOptions = {}): Promise<http.Server> {
   await initDatabase();
+
+  // Wire the status-registry logger so unknown statuses are visible
+  const { setStatusLogger } = await import("../shared/status-registry.js");
+  setStatusLogger(logger);
 
   const server = http.createServer((req, res) => {
     try {
