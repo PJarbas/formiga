@@ -5,6 +5,7 @@
 
 import type { ArenaSession, ArenaAgentConfig, AgentRoundResult, MetricDirection } from "./arena-types.js";
 import type { ExperimentRow } from "../leaderboard/repository.js";
+import { formatDatasetContextForPrompt, type DatasetContext } from "./dataset-context.js";
 
 interface AgentAttempt {
   round: number;
@@ -53,6 +54,7 @@ function formatOthersInsights(keptResults: AgentRoundResult[]): string {
  * @param leaderboard   — current top experiments from the leaderboard
  * @param agentHistory  — this agent's past attempts in this session
  * @param othersResults — other agents' kept results in this session
+ * @param datasetCtx    — dataset metadata for complexity-aware prompting
  */
 export function buildAgentPrompt(
   session: ArenaSession,
@@ -61,6 +63,7 @@ export function buildAgentPrompt(
   leaderboard: ExperimentRow[],
   agentHistory: AgentRoundResult[],
   othersResults: AgentRoundResult[],
+  datasetCtx?: DatasetContext,
 ): string {
   const topN = leaderboard.slice(0, 10);
   const myAttempts: AgentAttempt[] = agentHistory
@@ -75,11 +78,18 @@ export function buildAgentPrompt(
 
   const directionLabel = session.metricDirection === "lower" ? "(lower is better)" : "(higher is better)";
 
-  return `## Competition Arena — Round ${round}
+  let prompt = `## Competition Arena — Round ${round}
 
 You are **${agent.id}**. Your goal: beat the current best metric.
 
-### Current Leaderboard (Top 10)
+`;
+
+  if (datasetCtx) {
+    prompt += formatDatasetContextForPrompt(datasetCtx, agent.id);
+    prompt += `\n`;
+  }
+
+  prompt += `### Current Leaderboard (Top 10)
 ${formatLeaderboardTable(topN, session.metricDirection)}
 
 ### Your Previous Attempts
@@ -98,6 +108,7 @@ ${agent.strategyHint}
 - Metric: ${session.metricName} ${directionLabel}
 - Current best: ${session.bestMetric ?? "no baseline yet"}
 - Target: ${session.targetMetric ?? "none (just improve)"}
+- **RESPECT the complexity gates above.** Violating them produces overfit models that get discarded.
 
 ### Output Format
 After generating the script, end your response with:
@@ -110,4 +121,5 @@ NEXT_FOCUS: <what you will try next round>
 STATUS: done
 \`\`\`
 `;
+  return prompt;
 }

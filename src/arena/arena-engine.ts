@@ -12,6 +12,7 @@ import type { ArenaRepository } from "./arena-repository.js";
 import type { ArenaExperiment } from "../leaderboard/repository.js";
 import { makeDecision, isImprovement } from "./arena-decision.js";
 import { extractMetric } from "./arena-benchmark.js";
+import { readDatasetContext, formatDatasetContextForPrompt, type DatasetContext } from "./dataset-context.js";
 
 const SCRIPT_DIR = "artifacts/models";
 const BENCHMARK_TIMEOUT_MS = 120_000;
@@ -200,12 +201,15 @@ export async function runArena(
   // History tracking for prompts
   const allResults: AgentRoundResult[] = [];
 
+  // Read dataset context once for the entire arena run
+  const datasetCtx = readDatasetContext(config.workspacePath);
+
   // 3. Round loop
   for (let round = 1; round <= config.maxRounds; round++) {
     session.currentRound = round;
 
-    // Build prompts
-    const prompts = buildPromptsForRound(config, session, allResults);
+    // Build prompts with dataset context for complexity-aware generation
+    const prompts = buildPromptsForRound(config, session, allResults, datasetCtx);
 
     // Fan-out: run all agents in parallel
     const agentOutputs = await runAgentsParallel(prompts, config);
@@ -337,6 +341,7 @@ function buildPromptsForRound(
   config: ArenaConfig,
   session: ArenaSession,
   allResults: AgentRoundResult[],
+  datasetCtx: DatasetContext,
 ): Record<string, string> {
   const prompts: Record<string, string> = {};
 
@@ -354,9 +359,11 @@ function buildPromptsForRound(
     const myHistory = allResults.filter(r => r.agentId === agent.id);
     const othersKept = allResults.filter(r => r.agentId !== agent.id && (r.decision === "keep" || r.decision === "baseline"));
 
-    // Minimal prompt construction inline to avoid circular import
     let prompt = `## Competition Arena — Round ${session.currentRound}\n\n`;
     prompt += `You are ${agent.id}. Beat the current best.\n\n`;
+    // Inject dataset context with complexity gates
+    prompt += formatDatasetContextForPrompt(datasetCtx, agent.id);
+    prompt += `\n`;
     prompt += `### Current Best\n`;
     prompt += `Metric: ${session.bestMetric ?? "N/A"} (${config.metricDirection} is better)\n`;
     prompt += `Target: ${config.targetMetric ?? "none"}\n\n`;
@@ -383,6 +390,7 @@ function buildPromptsForRound(
     prompt += `- Example output: ${config.metricName}: 4500.1234\n`;
     prompt += `- Also save your trained model as: artifacts/models/${agent.id}_round${session.currentRound}.pkl\n`;
     prompt += `- Save script to: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
+    prompt += `- **RESPECT the complexity gates above.** Violating them (e.g., training FT-Transformer on a TINY dataset) will produce overfit models that get discarded.\n`;
     prompt += `- End your response with:\n`;
     prompt += `\n\`\`\`\n`;
     prompt += `HYPOTHESIS: <one-line description>\n`;

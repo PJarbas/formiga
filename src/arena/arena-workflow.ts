@@ -40,16 +40,21 @@ const ARENA_AGENTS: ArenaAgentConfig[] = [
     strategyHint:
       "You are a classic ML practitioner. Prefer gradient boosting, regularized linear models, " +
       "ensemble trees, and careful feature engineering. Avoid NN/AutoML — stay interpretable " +
-      "and fast. Focus on strong cross-validation and hyperparameter discipline.",
+      "and fast. Focus on strong cross-validation and hyperparameter discipline. " +
+      "ALWAYS read the Dataset Context section above before choosing your approach — " +
+      "on tiny datasets, prefer simpler models with heavy regularization.",
   },
   {
     id: "modeler-advanced",
     agentPersona: "arena-modeler-advanced",
     timeout: AGENT_TIMEOUT_SECONDS,
     strategyHint:
-      "You are an advanced ML researcher. Explore neural nets, AutoML, deep stacking, " +
-      "entity embeddings, and knowledge distillation if the data size supports it. " +
-      "Push the metric frontier even if training takes longer.",
+      "You are an advanced ML researcher. Your approach MUST match the dataset complexity tier " +
+      "shown in the Dataset Context section above. On TINY/SMALL datasets, prefer TabPFN, KAN, " +
+      "or light AutoML — heavy NNs will overfit and get discarded by the benchmark. " +
+      "On MEDIUM/LARGE datasets, use the full neural toolkit (FT-Transformer, deep stacking, etc.). " +
+      "Read the EDA and Feature Engineering summaries to understand feature types and data quality. " +
+      "Never ignore the MANDATORY Complexity Gates — they exist because the benchmark penalizes overfit.",
   },
 ];
 

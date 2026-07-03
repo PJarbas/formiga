@@ -17,16 +17,24 @@ function planModePrompt(context: AgentContext): string {
   const ws = context.workspacePath;
   return `## PLAN MODE (MANDATORY — First Round)
 
-Before training, submit a plan with:
+Before training, you MUST:
+1. Read \`${ws}/artifacts/features.parquet\` to determine dataset shape (rows x cols)
+2. Read \`${ws}/reports/02_features.md\` for feature engineering recommendations
+3. Read \`${ws}/reports/01_eda.md\` for data quality findings
+4. Determine complexity tier: TINY (<2k), SMALL (2k-10k), MEDIUM (10k-50k), LARGE (>50k)
+5. Choose approaches ONLY from your tier's allowed list
 
-### 1. Approaches (minimum 3 distinct)
-Choose from and justify for this dataset:
-- **MLP** (Multi-Layer Perceptron): good for capturing non-linear interactions
-- **TabNet**: attention-based, interpretable feature selection
-- **FT-Transformer**: transformer-based, strong on heterogeneous tabular data
-- **AutoML** (FLAML or AutoGluon): automated architecture + hyperparameter search
-- **Multi-level Stacking**: using classic models as base + NN meta-learner
-- **Entity Embeddings**: for high-cardinality categorical features
+### Complexity Gates (MANDATORY)
+
+| Tier | Allowed | Forbidden | Max Optuna |
+|------|---------|-----------|------------|
+| TINY (<2k) | TabPFN, KAN, light stacking, 5min AutoML | FT-Transformer, SAINT, TabNet, deep MLP | 10 |
+| SMALL (2k-10k) | TabPFN, simple MLP (<=128 units), KAN, SAINT, 10min AutoML | TabNet n_d>64, deep stacking, DAS | 15 |
+| MEDIUM (10k-50k) | Full NN toolkit, L2 stacking, 20min AutoML | none | 30 |
+| LARGE (>50k) | Everything, prioritize scalable (TabNet, DCN-V2, MOE) | TabPFN (too slow), SAINT (O(n^2)) | 50 |
+
+### 1. Approaches (minimum 2 distinct, from your tier's allowed list)
+Justify each choice against the dataset size and feature types.
 
 ### 2. Time Budget & Search Space
 - Expected compute time per approach
@@ -36,11 +44,11 @@ Choose from and justify for this dataset:
 ### 3. Overfitting Prevention
 - NNs on tabular data are PRONE to overfitting
 - Strategy per approach (dropout rate, weight decay, early stopping, batch size)
-- Train/val gap monitoring
+- Train/val gap monitoring — threshold by tier: TINY=5%, SMALL=8%, MEDIUM=10%, LARGE=12%
 
 ### 4. Gap Measurement
 - |train_mean - cv_mean| / cv_mean * 100
-- Threshold: gap > 10% = REJECT
+- Threshold varies by tier (see above) — REJECT if exceeded
 
 ### 5. Classic Artifacts Usage
 - How you will (or won't) use \`${ws}/results/classic_*.json\`
