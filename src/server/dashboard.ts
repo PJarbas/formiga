@@ -1300,8 +1300,9 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
     const statusFilter = url.searchParams.get("status")?.trim();
     const sortBy = url.searchParams.get("sortBy") ?? "cvMean";
     const sortDir = url.searchParams.get("sortDir") ?? "desc";
+    const runIdParam = url.searchParams.get("runId")?.trim();
 
-    const runId = await findActivePipelineRunId();
+    const runId = runIdParam || await findActivePipelineRunId();
 
     if (!runId) {
       jsonResponse(res, { entries: [], total: 0, bestCvMean: null, filters: {} });
@@ -2151,7 +2152,17 @@ function handleTrace(
   })().catch((err) => errorResponse(res, `Failed to read trace: ${(err as Error).message}`));
 }
 
-const PIPELINE_PHASE_LABELS: Array<{ id: string; label: string }> = [
+const STEP_LABEL_MAP: Record<string, string> = {
+  eda: "EDA",
+  features: "Feat",
+  "model-classic": "Model",
+  "model-advanced": "Model+",
+  audit: "Audit",
+  arena: "Arena",
+  report: "Report",
+};
+
+const FALLBACK_PHASE_LABELS: Array<{ id: string; label: string }> = [
   { id: "data_analysis", label: "EDA" },
   { id: "feature_engineering", label: "Feat" },
   { id: "modeling", label: "Model" },
@@ -2159,24 +2170,50 @@ const PIPELINE_PHASE_LABELS: Array<{ id: string; label: string }> = [
   { id: "complete", label: "Done" },
 ];
 
-function derivePhases(currentPhase: string, runStatus: string): Array<{
+async function derivePhaseLabelsFromRun(runId: string): Promise<Array<{ id: string; label: string }>> {
+  const prisma = getPrisma();
+  const steps = await prisma.step.findMany({
+    where: { run_id: runId },
+    orderBy: { step_index: "asc" },
+    select: { step_id: true },
+  });
+
+  if (steps.length === 0) return FALLBACK_PHASE_LABELS;
+
+  const seen = new Set<string>();
+  const labels: Array<{ id: string; label: string }> = [];
+  for (const step of steps) {
+    const id = step.step_id;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    labels.push({ id, label: STEP_LABEL_MAP[id] ?? id.charAt(0).toUpperCase() + id.slice(1) });
+  }
+  labels.push({ id: "complete", label: "Done" });
+  return labels;
+}
+
+function derivePhases(
+  phaseLabels: Array<{ id: string; label: string }>,
+  currentPhase: string,
+  runStatus: string,
+): Array<{
   id: string;
   label: string;
   status: "done" | "running" | "pending" | "failed";
   elapsedMs: number;
   estimatedMs: number;
 }> {
-  const currentIdx = PIPELINE_PHASE_LABELS.findIndex((p) => p.id === currentPhase);
+  const currentIdx = phaseLabels.findIndex((p) => p.id === currentPhase);
 
   if (runStatus === "completed") {
-    return PIPELINE_PHASE_LABELS.map((p) => ({
+    return phaseLabels.map((p) => ({
       id: p.id, label: p.label, status: "done" as const, elapsedMs: 0, estimatedMs: 0,
     }));
   }
 
   if (runStatus === "failed") {
     const failIdx = currentIdx < 0 ? 0 : currentIdx;
-    return PIPELINE_PHASE_LABELS.map((p, i) => {
+    return phaseLabels.map((p, i) => {
       let status: "done" | "running" | "pending" | "failed" = "pending";
       if (i < failIdx) status = "done";
       else if (i === failIdx) status = "failed";
@@ -2185,14 +2222,14 @@ function derivePhases(currentPhase: string, runStatus: string): Array<{
   }
 
   if (runStatus === "canceled") {
-    return PIPELINE_PHASE_LABELS.map((p, i) => ({
+    return phaseLabels.map((p, i) => ({
       id: p.id, label: p.label,
       status: (i < currentIdx ? "done" : "pending") as "done" | "pending",
       elapsedMs: 0, estimatedMs: 0,
     }));
   }
 
-  return PIPELINE_PHASE_LABELS.map((p, i) => {
+  return phaseLabels.map((p, i) => {
     let status: "done" | "running" | "pending" | "failed" = "pending";
     if (currentIdx < 0) status = "pending";
     else if (i < currentIdx) status = "done";
@@ -2293,27 +2330,44 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
     });
     const statsMap = new Map(experimentStats.map((e) => [e.run_id, { count: e._count, best: e._max.val_metric }]));
 
+    const arenaSessions = await prisma.arenaSession.findMany({
+      where: { run_id: { in: runIds } },
+      select: { run_id: true, current_round: true, max_rounds: true, status: true },
+    });
+    const arenaMap = new Map(arenaSessions.map((s) => [s.run_id, s]));
+
     const runs = await Promise.all(
       allRuns.map(async (run) => {
         const currentPhase = await getCurrentPhase(run.id);
+        const phaseLabels = await derivePhaseLabelsFromRun(run.id);
         const stats = statsMap.get(run.id);
         const startMs = run.created_at?.getTime() ?? null;
         const endMs = run.updated_at?.getTime() ?? null;
         const durationMs = startMs && endMs ? endMs - startMs : null;
+        const arena = arenaMap.get(run.id);
+        const workflowType = run.workflow_id.includes("autoresearch") ? "ml-autoresearch" : "ml-pipeline";
 
         return {
           runId: run.id,
           shortHash: run.id.slice(0, 8),
           workflowId: run.workflow_id,
+          workflowType,
           task: run.task,
           status: run.status,
           currentPhase,
-          phases: derivePhases(currentPhase, run.status),
+          phases: derivePhases(phaseLabels, currentPhase, run.status),
           totalExperiments: stats?.count ?? 0,
           bestCvMean: stats?.best ?? null,
           durationMs,
           startedAt: run.created_at?.toISOString() ?? null,
           updatedAt: run.updated_at?.toISOString() ?? null,
+          ...(arena && {
+            arenaProgress: {
+              currentRound: arena.current_round,
+              maxRounds: arena.max_rounds,
+              status: arena.status,
+            },
+          }),
         };
       }),
     );
