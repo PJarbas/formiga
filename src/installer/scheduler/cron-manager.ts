@@ -420,8 +420,29 @@ export async function nudgeScheduledRuns(
     }
   }
 
+  // Pre-fetch pending/running steps to skip agents with no work.
+  const { getPrisma } = await import("../../db.js");
+  const prisma = getPrisma();
+  const stepsWithWork = await prisma.step.findMany({
+    where: { run_id: { in: [...runIdSet] }, status: { in: ["pending", "running"] } },
+    select: { run_id: true, agent_id: true },
+  });
+  const agentsWithWork = new Set(
+    stepsWithWork.map((s: { run_id: string; agent_id: string }) => `${s.run_id}::${s.agent_id}`),
+  );
+
   // Process each job.
   for (const { info, id: jobId } of matchingJobs) {
+    // ── No-work guard: skip agents whose steps are all done ─────
+    if (!agentsWithWork.has(`${info.runId}::${info.agentId}`)) {
+      result.jobs.push({
+        runId: info.runId,
+        agentId: info.agentId,
+        status: "skipped_no_work",
+      });
+      continue;
+    }
+
     // ── In-flight guard ──────────────────────────────────────────
     if (inFlightJobs.has(jobId)) {
       result.skippedInFlight++;

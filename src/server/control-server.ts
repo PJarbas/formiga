@@ -596,6 +596,7 @@ async function handleNudge(): Promise<JsonResponse> {
     const runJobs = nudgeResult.jobs.filter((j) => j.runId === runId);
     const runLaunched = runJobs.filter((j) => j.status === "launched").length;
     const runSkipped = runJobs.filter((j) => j.status === "skipped_in_flight").length;
+    const runNoWork = runJobs.filter((j) => j.status === "skipped_no_work").length;
     const runErrors = nudgeResult.errors.filter((e) => e.runId === runId);
 
     const run = runningRuns.find((r) => r.id === runId);
@@ -605,7 +606,7 @@ async function handleNudge(): Promise<JsonResponse> {
       event: "run.nudged",
       runId,
       workflowId: run?.workflow_id,
-      detail: `Launched ${runLaunched}; skipped ${runSkipped} in-flight`,
+      detail: `Launched ${runLaunched}; skipped ${runSkipped} in-flight${runNoWork ? `, ${runNoWork} no-work` : ""}`,
     });
 
     for (const job of runJobs) {
@@ -638,11 +639,14 @@ async function handleNudge(): Promise<JsonResponse> {
     });
   }
 
+  const totalNoWork = nudgeResult.jobs.filter((j) => j.status === "skipped_no_work").length;
+
   return ok({
     runningRuns: runningRuns.length,
     scheduledRuns: scheduledRunIds.length,
     launched: nudgeResult.launched,
     skippedInFlight: nudgeResult.skippedInFlight,
+    skippedNoWork: totalNoWork,
     skippedPaused: 0,
     runs: runsDetail,
     errors: [
