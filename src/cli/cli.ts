@@ -1498,7 +1498,11 @@ Examples:
     }
     const launched = typeof body.launched === "number" ? body.launched : 0;
     const skippedInFlight = typeof body.skippedInFlight === "number" ? body.skippedInFlight : 0;
-    console.log(`Nudged ${runningRuns} running run(s): launched ${launched} agent(s), skipped ${skippedInFlight} in-flight.`);
+    const skippedNoWork = typeof body.skippedNoWork === "number" ? body.skippedNoWork : 0;
+    const parts = [`launched ${launched} agent(s)`];
+    if (skippedInFlight) parts.push(`skipped ${skippedInFlight} in-flight`);
+    if (skippedNoWork) parts.push(`skipped ${skippedNoWork} no-work`);
+    console.log(`Nudged ${runningRuns} running run(s): ${parts.join(", ")}.`);
     return;
   }
 

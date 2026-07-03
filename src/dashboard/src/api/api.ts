@@ -2,7 +2,7 @@
 // api.ts — TanStack Query hooks for ML dashboard API
 // ══════════════════════════════════════════════════════════════════════
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import type {
   PipelineStatus,
   AgentDetail,
@@ -150,6 +150,7 @@ export function useLeaderboard(params?: {
   return useQuery({
     queryKey: ["leaderboard", qs],
     queryFn: () => fetchJSON<LeaderboardResponse>(`${BASE}/leaderboard${qs ? `?${qs}` : ""}`),
+    placeholderData: keepPreviousData,
   });
 }
 

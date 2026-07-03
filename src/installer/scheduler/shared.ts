@@ -133,7 +133,7 @@ export const AGENT_PERSONA_FILES = ["AGENTS.md", "IDENTITY.md", "SOUL.md"] as co
 export interface NudgeJobDetail {
   runId: string;
   agentId: string;
-  status: "launched" | "skipped_in_flight" | "error";
+  status: "launched" | "skipped_in_flight" | "skipped_no_work" | "error";
   error?: string;
 }
 
