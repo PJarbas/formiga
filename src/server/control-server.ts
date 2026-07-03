@@ -886,7 +886,9 @@ export function startReconciler(): { stop: () => void } {
       for (const run of desired) {
         if (run.scheduling_status === "active" && _hasRunScheduled(run.id)) continue;
         // Re-admit pending/error/missing runs.
-        await handleRegisterRun(run.id).catch(() => {});
+        await handleRegisterRun(run.id).catch((err) => {
+          logger.warn("reconcile: re-register failed for run", { runId: run.id, error: (err as Error).message });
+        });
       }
 
       // Clean up jobs for runs that are no longer active.
@@ -957,7 +959,9 @@ export function startReconciler(): { stop: () => void } {
         const { findRunsWithStalePendingSteps } = await import("../medic/reconciler-checks.js");
         const staleRunIds = await findRunsWithStalePendingSteps();
         for (const runId of staleRunIds) {
-          await handleRegisterRun(runId).catch(() => {});
+          await handleRegisterRun(runId).catch((err) => {
+            logger.warn("stale-pending recovery: re-register failed", { runId, error: (err as Error).message });
+          });
         }
       } catch (err) {
         logger.warn("control-server: stale pending check failed", { error: String(err) });

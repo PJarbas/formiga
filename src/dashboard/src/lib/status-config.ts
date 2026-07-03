@@ -1,21 +1,5 @@
-import type { AgentStatus } from "@shared/dashboard-types";
-
-export type UIStatus =
-  | AgentStatus
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "promoted"
-  | "overfitted"
-  | "success"
-  | "keep"
-  | "discard"
-  | "crash"
-  | "converged"
-  | "target_reached"
-  | "max_rounds"
-  | "max_no_improve"
-  | "paused";
+import type { UIStatus } from "@shared/status-registry";
+import { resolveUIStatus } from "@shared/status-registry";
 
 export interface StatusConfig {
   key: UIStatus;
@@ -261,13 +245,10 @@ export const STATUS_CONFIG: Record<UIStatus, StatusConfig> = {
   },
 };
 
-// Normalize backend VisualStatus ("todo"|"done") to UIStatus equivalents.
-const STATUS_ALIASES: Record<string, UIStatus> = {
-  todo: "idle",
-  done: "completed",
-};
+// All normalization is now handled by resolveUIStatus() from the registry.
+// STATUS_ALIASES removed — resolveUIStatus covers all known mappings.
 
 export function getStatusConfig(status: string): StatusConfig {
-  const normalized = STATUS_ALIASES[status] ?? status;
-  return STATUS_CONFIG[normalized as UIStatus] ?? STATUS_CONFIG.idle;
+  const resolved = resolveUIStatus(status);
+  return STATUS_CONFIG[resolved] ?? STATUS_CONFIG.idle;
 }

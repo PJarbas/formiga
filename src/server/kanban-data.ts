@@ -21,8 +21,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { FormigaEvent } from "../installer/events.js";
 import { getPrisma } from "../database/prisma.js";
-
-export type VisualStatus = "todo" | "running" | "done" | "failed";
+import {
+  type VisualStatus,
+  resolveVisualStatus,
+  ARENA_DECISION_TO_VISUAL,
+  type ResolutionContext,
+} from "../shared/status-registry.js";
 
 export interface KanbanCard {
   /** Card identifier shown in the chip (story_id for stories, step_id for steps). */
@@ -147,18 +151,10 @@ interface RunRow {
   updated_at: string;
 }
 
-const RUNNING_STATUSES = new Set(["running"]);
-const DONE_STATUSES = new Set(["done", "completed"]);
-const FAILED_STATUSES = new Set(["failed", "canceled", "cancelled"]);
 const TERMINAL_STATUSES = new Set(["done", "completed", "failed", "canceled", "cancelled"]);
 
-export function normaliseStatus(raw: string | null | undefined): VisualStatus {
-  if (!raw) return "todo";
-  const s = String(raw).toLowerCase();
-  if (RUNNING_STATUSES.has(s)) return "running";
-  if (DONE_STATUSES.has(s)) return "done";
-  if (FAILED_STATUSES.has(s)) return "failed";
-  return "todo";
+export function normaliseStatus(raw: string | null | undefined, context?: ResolutionContext): VisualStatus {
+  return resolveVisualStatus(raw, context);
 }
 
 export function laneAgentSuffix(agentId: string): string {
@@ -609,13 +605,7 @@ const ARENA_AGENT_LABELS: Record<string, string> = {
 
 function decisionToStatus(decision: string | null): VisualStatus {
   if (!decision) return "running";
-  switch (decision) {
-    case "keep": return "done";
-    case "discard":
-    case "crash":
-    case "checks_failed": return "failed";
-    default: return "todo";
-  }
+  return ARENA_DECISION_TO_VISUAL[decision as keyof typeof ARENA_DECISION_TO_VISUAL] ?? "todo";
 }
 
 function formatMetricSub(metric: number | null, decision: string | null): string {
