@@ -13,15 +13,14 @@ import { DatabaseSync } from "node:sqlite";
 import { createDashboardServer } from "../../dist/server/dashboard.js";
 import { initLeaderboardSchema } from "../../dist/leaderboard/schema.js";
 
-function startDashboard(): Promise<{ server: http.Server; baseUrl: string }> {
-  return new Promise((resolve) => {
-    const server = createDashboardServer(0);
-    server.on("listening", () => {
-      const addr = server.address();
-      assert.ok(addr && typeof addr !== "string");
-      resolve({ server, baseUrl: `http://127.0.0.1:${addr.port}` });
-    });
-  });
+async function startDashboard(): Promise<{ server: http.Server; baseUrl: string }> {
+  const server = await createDashboardServer(0);
+  if (!server.listening) {
+    await new Promise((resolve) => server.on("listening", resolve));
+  }
+  const addr = server.address();
+  assert.ok(addr && typeof addr !== "string");
+  return { server, baseUrl: `http://127.0.0.1:${addr.port}` };
 }
 
 function stopDashboard(server: http.Server): Promise<void> {

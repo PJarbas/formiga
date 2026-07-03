@@ -227,6 +227,38 @@ export function migrate(db: DatabaseSync): void {
     "CREATE INDEX IF NOT EXISTS idx_autoresearch_sessions_last_seen_at ON autoresearch_sessions(last_seen_at)",
   );
 
+  // ── Arena sessions table (competitive loop state) ──
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS arena_sessions (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL UNIQUE,
+      metric_name TEXT NOT NULL,
+      metric_direction TEXT NOT NULL,
+      benchmark_script TEXT NOT NULL,
+      checks_script TEXT,
+      target_metric REAL,
+      max_rounds INTEGER NOT NULL DEFAULT 10,
+      max_no_improve INTEGER NOT NULL DEFAULT 3,
+      current_round INTEGER NOT NULL DEFAULT 0,
+      best_metric REAL,
+      best_agent TEXT,
+      best_experiment_id INTEGER,
+      baseline_metric REAL,
+      noise_floor_mad REAL,
+      status TEXT NOT NULL DEFAULT 'running',
+      total_keep INTEGER NOT NULL DEFAULT 0,
+      total_discard INTEGER NOT NULL DEFAULT 0,
+      total_crash INTEGER NOT NULL DEFAULT 0,
+      total_checks_failed INTEGER NOT NULL DEFAULT 0,
+      consecutive_no_improve INTEGER NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+    );
+  `);
+  db.exec("CREATE INDEX IF NOT EXISTS idx_arena_sessions_run_id ON arena_sessions(run_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_arena_sessions_status ON arena_sessions(status)");
+
   // ── Leaderboard experiments table ──
   initLeaderboardSchema(db);
 

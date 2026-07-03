@@ -99,7 +99,7 @@ function initDb(dbPath: string, runs: Array<{ id: string; status: string; workfl
 async function startDashboardOnPort(
   port: number,
 ): Promise<{ server: http.Server; baseUrl: string }> {
-  const server = createDashboardServer(port);
+  const server = await createDashboardServer(port);
   if (!server.listening) {
     await once(server, "listening");
   }

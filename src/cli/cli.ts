@@ -48,7 +48,7 @@ import {
   type RunLoopIterationOptions,
   type RunLoopIterationResult,
 } from "../autoresearch/autoresearch.js";
-import { getPrisma, upsertAutoresearchSession } from "../db.js";
+import { getPrisma, initDatabase, upsertAutoresearchSession } from "../db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1320,6 +1320,8 @@ function printUsage() {
 }
 
 async function main() {
+  await initDatabase();
+
   const args = process.argv.slice(2);
   const [group, action, target] = args;
 

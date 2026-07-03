@@ -66,12 +66,37 @@ interface BenchmarkConfigJson {
   maxNoImprove?: number;
 }
 
+function normalizeDirection(dir: string | undefined): "lower" | "higher" | undefined {
+  if (!dir) return undefined;
+  if (dir === "minimize" || dir === "lower") return "lower";
+  if (dir === "maximize" || dir === "higher") return "higher";
+  return undefined;
+}
+
 function readBenchmarkConfig(workspace: string): BenchmarkConfigJson | null {
-  const p = path.join(workspace, "artifacts", "benchmark_config.json");
-  if (!fs.existsSync(p)) return null;
+  // Look in workspace root first, then artifacts/
+  const candidates = [
+    path.join(workspace, "benchmark_config.json"),
+    path.join(workspace, "artifacts", "benchmark_config.json"),
+  ];
+  const p = candidates.find((c) => fs.existsSync(c));
+  if (!p) return null;
   try {
-    const raw = fs.readFileSync(p, "utf-8");
-    return JSON.parse(raw) as BenchmarkConfigJson;
+    const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
+    // Normalize: metric can be a string ("rmse") or object ({ name, direction })
+    let metric: BenchmarkConfigJson["metric"] | undefined;
+    if (typeof raw.metric === "string") {
+      metric = { name: raw.metric, direction: normalizeDirection(raw.direction ?? raw.metric_direction) };
+    } else if (raw.metric && typeof raw.metric === "object") {
+      metric = { name: raw.metric.name, direction: normalizeDirection(raw.metric.direction) };
+    }
+    return {
+      problemType: raw.type ?? raw.problemType,
+      metric,
+      targetMetric: raw.targetMetric,
+      maxRounds: raw.maxRounds ?? raw.max_rounds,
+      maxNoImprove: raw.maxNoImprove ?? raw.max_no_improve,
+    };
   } catch {
     return null;
   }
@@ -215,14 +240,13 @@ async function buildArenaConfig(runId: string): Promise<ArenaConfig | null> {
     (ctx.max_no_improve ? Number(ctx.max_no_improve) : undefined) ??
     3;
 
-  const benchmarkScript = path.join(workspace, "artifacts", "autoresearch.sh");
-  if (!fs.existsSync(benchmarkScript)) {
-    logger.error("Arena cannot start — benchmark script missing", {
-      runId,
-      expected: benchmarkScript,
-    });
-    return null;
-  }
+  // Look for benchmark script (optional — arena uses direct execution by default)
+  const candidatePaths = [
+    path.join(workspace, "autoresearch.sh"),
+    path.join(workspace, "artifacts", "autoresearch.sh"),
+    path.join(workspace, "artifacts", "benchmark_runner.py"),
+  ];
+  const benchmarkScript = candidatePaths.find((p) => fs.existsSync(p));
 
   return {
     runId,

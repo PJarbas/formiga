@@ -23,7 +23,7 @@ function appendGlobalEvent(stateDir: string, evt: FormigaEvent): void {
 }
 
 async function startDashboard(): Promise<{ server: http.Server; baseUrl: string }> {
-  const server = createDashboardServer(0);
+  const server = await createDashboardServer(0);
   if (!server.listening) {
     await once(server, "listening");
   }

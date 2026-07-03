@@ -206,7 +206,7 @@ async function bootstrap(): Promise<void> {
 
   writePidFile();
 
-  dashboardServer = createDashboardServer(dashboardPort, {
+  dashboardServer = await createDashboardServer(dashboardPort, {
     onError: (err) => {
       if (!isShuttingDown) {
         console.error(`Dashboard listener failed on port ${dashboardPort}: ${err.message}`);
