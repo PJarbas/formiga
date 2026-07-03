@@ -193,6 +193,7 @@ export interface AgentReasoningResponse {
   approaches: AgentApproaches;
   keyDecisions: AgentKeyDecision[];
   specDiff: { before: string; after: string } | null;
+  summary: string | null;
 }
 
 // ── Rounds ───────────────────────────────────────────────────────────
@@ -498,6 +499,7 @@ export interface AgentStripItem {
 export interface PipelineRunRow {
   runId: string;
   shortHash: string;
+  workflowId: string;
   task: string;
   status: string;
   currentPhase: PipelinePhase;
