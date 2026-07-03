@@ -175,7 +175,7 @@ async function piRunAgentsParallel(
         workdir: config.workspacePath,
       },
     )
-      .then((stdout) => parseArenaAgentOutput(stdout, config.workspacePath))
+      .then((piResult) => parseArenaAgentOutput(piResult.assistantText, config.workspacePath))
       .then((parsed) => ({
         agentId,
         ok: true as const,

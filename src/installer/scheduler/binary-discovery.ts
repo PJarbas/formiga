@@ -6,15 +6,10 @@
 //   1. Explicit env override (FORMIGA_PI_BINARY / FORMIGA_HERMES_BINARY)
 //   2. Each directory on PATH
 // Throws if neither yields an executable.
-//
-// Also exposes two thin orphan-replacement stubs (formatPiCommandPreview,
-// parsePiOutputStream) that survive only to keep the legacy pi/hermes
-// spawn paths type-clean until Branch 5 replaces the execution model.
 // ══════════════════════════════════════════════════════════════════════
 
 import fs from "node:fs";
 import path from "node:path";
-import type { Interface as ReadlineInterface } from "node:readline";
 
 // ── pi binary discovery ────────────────────────────────────────────────
 
@@ -80,12 +75,7 @@ export function findHermesBinary(): string {
   );
 }
 
-// ── Inline stubs for previously-imported orphan helpers ────────────────
-//
-// formatPiCommandPreview and parsePiOutputStream were removed as orphan
-// code. Branch 5 (ML agents) replaces the entire pi/hermes execution
-// model, so these stubs only exist to keep the legacy spawn paths
-// type-clean until that branch lands.
+// ── Command preview (for logging) ──────────────────────────────────────
 
 export interface PiCommandPreview {
   commandPreview: string;
@@ -104,65 +94,5 @@ export function formatPiCommandPreview(binPath: string, args: string[]): PiComma
     truncatedIndices: [],
     promptElided: false,
     argCount: args.length,
-  };
-}
-
-export interface ParsePiResult {
-  assistantText: string;
-  textFallback: string | null;
-  events: unknown[];
-  /** True if the output exceeded the buffer capacity and was truncated. */
-  truncated: boolean;
-  /** Total bytes produced by pi (including evicted). */
-  totalBytesIngested: number;
-  /** Lines dropped due to buffer capacity. */
-  linesDropped: number;
-}
-
-export async function parsePiOutputStream(rl: ReadlineInterface): Promise<ParsePiResult> {
-  const { OutputRingBuffer } = await import("./output-buffer.js");
-
-  // 1 MB ring buffer — retains only the tail of pi's output.
-  // Agents should report results via `formiga step complete` (API/CLI).
-  // The scheduler only needs the tail for:
-  //   - JSON metadata extraction (token usage, stepId)
-  //   - Outcome classification (heartbeat vs work_done)
-  //   - Fallback auto-complete (safety net)
-  const buffer = new OutputRingBuffer(1024 * 1024);
-
-  for await (const line of rl) {
-    buffer.push(line);
-  }
-
-  return {
-    assistantText: buffer.toString(),
-    textFallback: null,
-    events: [],
-    truncated: buffer.wasTruncated,
-    totalBytesIngested: buffer.totalBytesIngested,
-    linesDropped: buffer.linesDropped,
-  };
-}
-
-/**
- * Parse PI output from an already-collected string (e.g. bounded memory tail
- * after disk streaming). Mirrors parsePiOutputStream but skips the readline
- * step. Used by the disk-streaming path in pi-runner.ts.
- *
- * `totalBytes` and `lines` reflect the full stream, not just the tail, so
- * metrics are accurate even when only a subset was buffered in memory.
- */
-export function parsePiOutputFromString(
-  tailText: string,
-  totalBytes: number,
-  lines: number,
-): ParsePiResult {
-  return {
-    assistantText: tailText,
-    textFallback: null,
-    events: [],
-    truncated: totalBytes > tailText.length,
-    totalBytesIngested: totalBytes,
-    linesDropped: Math.max(0, lines - tailText.split(/\r?\n/).length),
   };
 }
