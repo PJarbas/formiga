@@ -15,6 +15,7 @@ import { extractMetric } from "./arena-benchmark.js";
 
 const SCRIPT_DIR = "artifacts/models";
 const BENCHMARK_TIMEOUT_MS = 120_000;
+const TRAIN_TIMEOUT_MS = 180_000;
 
 export interface ArenaResult {
   sessionId: string;
@@ -35,6 +36,50 @@ export interface ArenaResult {
 function ensureScriptDir(workspacePath: string): void {
   const dir = path.join(workspacePath, SCRIPT_DIR);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+/**
+ * Execute an agent-generated Python script to produce a trained model (.pkl).
+ * Returns the path to the generated pickle, or null if training failed.
+ */
+async function trainScript(
+  scriptPath: string,
+  workspacePath: string,
+): Promise<{ modelPath: string | null; stdout: string; stderr: string; exitCode: number | null }> {
+  const expectedPkl = scriptPath.replace(/\.py$/, ".pkl");
+  return new Promise((resolve) => {
+    const child = spawn(`python3 "${scriptPath}"`, {
+      cwd: workspacePath,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, FORMIGA_WORKSPACE: workspacePath },
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+
+    const timer = setTimeout(() => {
+      killed = true;
+      child.kill("SIGTERM");
+    }, TRAIN_TIMEOUT_MS);
+
+    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf-8"); });
+    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf-8"); });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const exitCode = killed ? null : code;
+      // Look for generated .pkl at the expected path
+      const modelPath = fs.existsSync(expectedPkl) ? expectedPkl : null;
+      resolve({ modelPath, stdout, stderr, exitCode });
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ modelPath: null, stdout, stderr: stderr + err.message, exitCode: null });
+    });
+  });
 }
 
 /**
@@ -68,7 +113,12 @@ async function benchmarkOne(
 
     child.on("close", (code) => {
       clearTimeout(timer);
-      const metric = code === 0 && !killed ? extractMetric(stdout, config.metricName) : null;
+      // Try stdout first, then stderr (benchmark_runner.py prints to stderr)
+      let metric: number | null = null;
+      if (code === 0 && !killed) {
+        metric = extractMetric(stdout, config.metricName);
+        if (metric === null) metric = extractMetric(stderr, config.metricName);
+      }
       resolve({
         metric,
         exitCode: killed ? null : code,
@@ -109,17 +159,39 @@ export async function runArena(
   // 1. Create session
   const session: ArenaSession = await repo.createFromConfig(config.runId, config);
 
-  // 2. Establish baseline (run benchmark once against a dummy/saved baseline script if present)
+  // 2. Establish baseline from benchmark_config.json or by running benchmark script
   let baselineMetric: number | null = null;
-  const baselineScript = path.join(config.workspacePath, "artifacts", "baseline.py");
-  if (fs.existsSync(baselineScript)) {
-    const baseline = await benchmarkOne(config, baselineScript);
-    baselineMetric = baseline.metric;
-    if (baselineMetric !== null) {
-      await repo.setBaseline(session.id, baselineMetric);
-      session.baselineMetric = baselineMetric;
-      session.bestMetric = baselineMetric;
+  // Try reading baseline from config first (most reliable)
+  const benchmarkConfigPaths = [
+    path.join(config.workspacePath, "benchmark_config.json"),
+    path.join(config.workspacePath, "artifacts", "benchmark_config.json"),
+  ];
+  for (const cfgPath of benchmarkConfigPaths) {
+    if (fs.existsSync(cfgPath)) {
+      try {
+        const cfgRaw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+        const baselineCfg = cfgRaw.baseline;
+        if (baselineCfg) {
+          // Look for cv_rmse_mean, cv_<metric>_mean, or any metric value
+          const metricKey = `cv_${config.metricName.toLowerCase()}_mean`;
+          baselineMetric = baselineCfg[metricKey] ?? baselineCfg.cv_rmse_mean ?? baselineCfg.metric ?? null;
+        }
+      } catch { /* ignore parse errors */ }
+      break;
     }
+  }
+  // Fallback: run benchmark with baseline .pkl if no config baseline
+  if (baselineMetric === null) {
+    const baselinePkl = path.join(config.workspacePath, "artifacts", "baseline.pkl");
+    if (fs.existsSync(baselinePkl)) {
+      const baseline = await benchmarkOne(config, baselinePkl);
+      baselineMetric = baseline.metric;
+    }
+  }
+  if (baselineMetric !== null) {
+    await repo.setBaseline(session.id, baselineMetric);
+    session.baselineMetric = baselineMetric;
+    session.bestMetric = baselineMetric;
   }
 
   let consecutiveNoImprove = 0;
@@ -150,7 +222,17 @@ export async function runArena(
       const scriptPath = path.join(config.workspacePath, SCRIPT_DIR, `${agent.id}_round${round}.py`);
       fs.writeFileSync(scriptPath, output.script, "utf-8");
 
-      const bench = await benchmarkOne(config, scriptPath);
+      // Execute the agent's script directly — it trains, evaluates, and prints metric
+      const exec = await trainScript(scriptPath, config.workspacePath);
+      const combinedOutput = exec.stdout + "\n" + exec.stderr;
+      const metric = exec.exitCode === 0 ? extractMetric(combinedOutput, config.metricName) : null;
+      const bench: BenchmarkResult = {
+        metric,
+        exitCode: exec.exitCode,
+        stdout: exec.stdout,
+        stderr: exec.stderr,
+        durationMs: 0,
+      };
       const decision = bench.exitCode === 0 && bench.metric !== null
         ? makeDecision(bench.metric, session.bestMetric, config.metricDirection, session.baselineMetric)
         : "crash";
@@ -294,8 +376,13 @@ function buildPromptsForRound(
     }
     prompt += `\n### Strategy\n${agent.strategyHint}\n\n`;
     prompt += `### Rules\n`;
-    prompt += `- Produce a Python script that defines a \`model\` variable.\n`;
-    prompt += `- Save to: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
+    prompt += `- Write a STANDALONE Python script that trains a model and evaluates it.\n`;
+    prompt += `- The script must read benchmark_config.json from the workspace root.\n`;
+    prompt += `- Use cross-validation with the same config (same splits, same metric).\n`;
+    prompt += `- At the end, print EXACTLY this line to stdout: ${config.metricName}: <numeric_value>\n`;
+    prompt += `- Example output: ${config.metricName}: 4500.1234\n`;
+    prompt += `- Also save your trained model as: artifacts/models/${agent.id}_round${session.currentRound}.pkl\n`;
+    prompt += `- Save script to: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
     prompt += `- End your response with:\n`;
     prompt += `\n\`\`\`\n`;
     prompt += `HYPOTHESIS: <one-line description>\n`;

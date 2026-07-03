@@ -16,14 +16,22 @@ function escapeRegExp(value: string): string {
  * Extract the primary metric value from benchmark stdout.
  * Tries exact match first, then generic fallbacks.
  */
-export function extractMetric(stdout: string, metricName: string): number | null {
+export function extractMetric(output: string, metricName: string): number | null {
   const patterns = [
+    // Exact match: "rmse: 10392.11" or "rmse = 10392.11"
     new RegExp(`${escapeRegExp(metricName)}\\s*[:=]\\s*(-?\\d+(?:\\.\\d+)?)`, "i"),
+    // benchmark_runner.py format: "PRIMARY (rmse): 10392.1144 ± ..."
+    new RegExp(`PRIMARY\\s*\\(${escapeRegExp(metricName)}\\)\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`, "i"),
+    // cv_ prefixed: "cv_rmse_mean: 10392.11"
+    new RegExp(`cv_${escapeRegExp(metricName)}(?:_mean)?\\s*[:=]\\s*(-?\\d+(?:\\.\\d+)?)`, "i"),
+    // JSON "primary_value": 10392.11
+    /"primary_value"\s*:\s*(-?\d+(?:\.\d+)?)/i,
+    // Generic fallbacks
     /(?:metric|score|loss|result)\s*[:=]\s*(-?\d+(?:\.\d+)?)/i,
   ];
 
   for (const regex of patterns) {
-    const match = stdout.match(regex);
+    const match = output.match(regex);
     if (match) {
       const value = Number(match[1]);
       if (Number.isFinite(value)) return value;

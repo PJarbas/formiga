@@ -34,7 +34,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession } from "../db.js";
+import { getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession, initDatabase } from "../db.js";
 import { getPrisma } from "../database/prisma.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
@@ -2950,7 +2950,9 @@ export interface DashboardServerOptions {
   onError?: (err: NodeJS.ErrnoException) => void;
 }
 
-export function createDashboardServer(port: number, options: DashboardServerOptions = {}): http.Server {
+export async function createDashboardServer(port: number, options: DashboardServerOptions = {}): Promise<http.Server> {
+  await initDatabase();
+
   const server = http.createServer((req, res) => {
     try {
       route(req, res);

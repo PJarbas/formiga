@@ -11,7 +11,7 @@ export type ConfidenceBand = "high" | "medium" | "low" | "unknown";
 export interface ArenaConfig {
   runId: string;
   workspacePath: string;
-  benchmarkScript: string;
+  benchmarkScript?: string;
   checksScript?: string;
   metricName: string;
   metricDirection: MetricDirection;
@@ -35,7 +35,7 @@ export interface ArenaSession {
   runId: string;
   metricName: string;
   metricDirection: MetricDirection;
-  benchmarkScript: string;
+  benchmarkScript: string | null;
   checksScript?: string | null;
   targetMetric: number | null;
   maxRounds: number;
