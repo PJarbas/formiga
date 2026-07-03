@@ -24,6 +24,14 @@ import type {
   PendingDecision,
   ModelReportResponse,
   ReproductionScriptResponse,
+  ArenaSessionResponse,
+  ArenaRoundResponse,
+  ArenaConvergenceResponse,
+  ArenaConfidenceResponse,
+  ArenaAgentHistoryResponse,
+  ArenaRoundExperiment,
+  ConvergencePoint,
+  ArenaDashboardStatus,
 } from "@shared/dashboard-types";
 
 const BASE = "/api";
@@ -332,6 +340,66 @@ export function useTrace(
 }
 
 // ── Command Center aggregate ────────────────────────────────────────
+
+export function useArenaSession(runId: string | undefined) {
+  return useQuery({
+    queryKey: ["arena", "session", runId],
+    queryFn: () => fetchJSON<ArenaSessionResponse>(`${BASE}/arena/${encodeURIComponent(runId ?? "")}/session`),
+    enabled: !!runId,
+    refetchInterval: 5000,
+  });
+}
+
+export function useArenaRounds(runId: string | undefined) {
+  return useQuery({
+    queryKey: ["arena", "rounds", runId],
+    queryFn: () => fetchJSON<ArenaRoundResponse[]>(`${BASE}/arena/${encodeURIComponent(runId ?? "")}/rounds`),
+    enabled: !!runId,
+  });
+}
+
+export function useArenaConvergence(runId: string | undefined) {
+  return useQuery({
+    queryKey: ["arena", "convergence", runId],
+    queryFn: () => fetchJSON<ArenaConvergenceResponse>(`${BASE}/arena/${encodeURIComponent(runId ?? "")}/convergence`),
+    enabled: !!runId,
+  });
+}
+
+export function useArenaConfidence(runId: string | undefined) {
+  return useQuery({
+    queryKey: ["arena", "confidence", runId],
+    queryFn: () => fetchJSON<ArenaConfidenceResponse>(`${BASE}/arena/${encodeURIComponent(runId ?? "")}/confidence`),
+    enabled: !!runId,
+  });
+}
+
+export function useArenaAgentHistory(runId: string | undefined, agentName: string | undefined) {
+  return useQuery({
+    queryKey: ["arena", "agent-history", runId, agentName],
+    queryFn: () =>
+      fetchJSON<ArenaAgentHistoryResponse>(
+        `${BASE}/arena/${encodeURIComponent(runId ?? "")}/agent-history/${encodeURIComponent(agentName ?? "")}`,
+      ),
+    enabled: !!runId && !!agentName,
+  });
+}
+
+export function useArenaControls(runId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ action }: { action: "pause" | "resume" | "skip" | "stop" }) =>
+      fetchJSON<{ status: string }>(`${BASE}/arena/${encodeURIComponent(runId ?? "")}/${action}`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["arena", "session", runId] });
+      qc.invalidateQueries({ queryKey: ["arena", "rounds", runId] });
+      qc.invalidateQueries({ queryKey: ["arena", "convergence", runId] });
+      qc.invalidateQueries({ queryKey: ["arena", "confidence", runId] });
+    },
+  });
+}
 
 export function useCommandCenter() {
   return useQuery({

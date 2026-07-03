@@ -246,6 +246,18 @@ function toExperimentRow(model: {
   error_message: string | null;
   dataset_signature: string | null;
   created_at: Date;
+  hypothesis: string | null;
+  learned: string | null;
+  next_focus: string | null;
+  measured_metric: number | null;
+  benchmark_stdout: string | null;
+  benchmark_stderr: string | null;
+  benchmark_exit_code: number | null;
+  confidence_score: number | null;
+  confidence_band: string | null;
+  decision: string | null;
+  duration_ms: number | null;
+  artifact_script: string | null;
 }): ExperimentRow {
   return {
     experiment_id: model.experiment_id,
@@ -263,5 +275,17 @@ function toExperimentRow(model: {
     error_message: model.error_message,
     dataset_signature: model.dataset_signature,
     created_at: model.created_at.toISOString(),
+    hypothesis: model.hypothesis,
+    learned: model.learned,
+    next_focus: model.next_focus,
+    measured_metric: model.measured_metric,
+    benchmark_stdout: model.benchmark_stdout,
+    benchmark_stderr: model.benchmark_stderr,
+    benchmark_exit_code: model.benchmark_exit_code,
+    confidence_score: model.confidence_score,
+    confidence_band: model.confidence_band,
+    decision: model.decision,
+    duration_ms: model.duration_ms,
+    artifact_script: model.artifact_script,
   };
 }

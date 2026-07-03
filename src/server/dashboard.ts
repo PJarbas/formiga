@@ -62,6 +62,8 @@ import {
   getCurrentPhase,
   getAgentRoundSummaries,
 } from "./pipeline-status.js";
+import { ArenaRepositoryImpl } from "../arena/arena-repository.js";
+import type { ArenaSession } from "../arena/arena-types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
@@ -1350,6 +1352,12 @@ function mapExperimentRow(r: Record<string, unknown>): {
   rejectedAt: string | null;
   rejectReason: string | null;
   artifactPath: string | null;
+  /** Arena fields attached to leaderboard entries. */
+  decision?: string | null;
+  confidenceScore?: number | null;
+  confidenceBand?: string | null;
+  hypothesis?: string | null;
+  learned?: string | null;
 } {
   return {
     id: String(r.experiment_id),
@@ -1372,6 +1380,11 @@ function mapExperimentRow(r: Record<string, unknown>): {
     rejectedAt: (r.rejected_at as string | null) ?? null,
     rejectReason: (r.reject_reason as string | null) ?? null,
     artifactPath: (r.artifact_path as string | null) ?? null,
+    decision: (r.decision as string | null) ?? null,
+    confidenceScore: (r.confidence_score as number | null) ?? null,
+    confidenceBand: (r.confidence_band as string | null) ?? null,
+    hypothesis: (r.hypothesis as string | null) ?? null,
+    learned: (r.learned as string | null) ?? null,
   };
 }
 
@@ -2270,6 +2283,181 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
   })().catch((err) => errorResponse(res, `Failed to build command-center snapshot: ${(err as Error).message}`));
 }
 
+// ── Arena API Handlers ─────────────────────────────────────────────────
+
+function handleArenaSession(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): void {
+  (async () => {
+    const arenaRepo = new ArenaRepositoryImpl();
+    const session = await arenaRepo.getByRunId(runId);
+    if (!session) {
+      errorResponse(res, "Arena session not found", 404);
+      return;
+    }
+    jsonResponse(res, session);
+  })().catch((err) => errorResponse(res, `Failed to get arena session: ${(err as Error).message}`));
+}
+
+function handleArenaRounds(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): void {
+  (async () => {
+    const leaderboard = new LeaderboardRepositoryImpl();
+    const rows = await leaderboard.getArenaResults(runId);
+    // Group by round
+    const roundsMap = new Map<number, typeof rows>();
+    for (const r of rows) {
+      const list = roundsMap.get(r.round_number) ?? [];
+      list.push(r);
+      roundsMap.set(r.round_number, list);
+    }
+    const rounds = Array.from(roundsMap.entries()).map(([round, entries]) => ({
+      round,
+      experiments: entries.map((e) => ({
+        experimentId: e.experiment_id,
+        agentName: e.agent_name,
+        modelType: e.model_type,
+        metric: e.measured_metric ?? e.val_metric,
+        decision: e.decision,
+        confidenceScore: e.confidence_score,
+        confidenceBand: e.confidence_band,
+        hypothesis: e.hypothesis,
+        learned: e.learned,
+        durationMs: e.duration_ms,
+        status: e.status,
+      })),
+    }));
+    jsonResponse(res, rounds);
+  })().catch((err) => errorResponse(res, `Failed to get arena rounds: ${(err as Error).message}`));
+}
+
+function handleArenaConvergence(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): void {
+  (async () => {
+    const leaderboard = new LeaderboardRepositoryImpl();
+    const rows = await leaderboard.getArenaResults(runId);
+    const points = rows
+      .filter((r) => r.measured_metric !== null)
+      .map((r) => ({
+        round: r.round_number,
+        agent: r.agent_name,
+        metric: r.measured_metric!,
+        decision: r.decision,
+        timestamp: r.created_at,
+      }))
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    jsonResponse(res, { points });
+  })().catch((err) => errorResponse(res, `Failed to get arena convergence: ${(err as Error).message}`));
+}
+
+function handleArenaConfidence(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): void {
+  (async () => {
+    const arenaRepo = new ArenaRepositoryImpl();
+    const session = await arenaRepo.getByRunId(runId);
+    if (!session) {
+      errorResponse(res, "Arena session not found", 404);
+      return;
+    }
+    jsonResponse(res, {
+      noiseFloorMad: session.noiseFloorMad,
+      baselineMetric: session.baselineMetric,
+      bestMetric: session.bestMetric,
+      bestAgent: session.bestAgent,
+      bestExperimentId: session.bestExperimentId,
+    });
+  })().catch((err) => errorResponse(res, `Failed to get arena confidence: ${(err as Error).message}`));
+}
+
+function handleArenaAgentHistory(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): void {
+  (async () => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const agentName = url.searchParams.get("agent")?.trim();
+    if (!agentName) {
+      errorResponse(res, "Missing required query parameter: agent", 400);
+      return;
+    }
+    const leaderboard = new LeaderboardRepositoryImpl();
+    const experiments = await leaderboard.getByAgent(`${runId}_${agentName}`, runId);
+    jsonResponse(res, {
+      agentId: agentName,
+      experiments: experiments.filter((e) => e.decision).map((e) => ({
+        experimentId: e.experiment_id,
+        round: e.round_number,
+        hypothesis: e.hypothesis,
+        learned: e.learned,
+        metric: e.measured_metric ?? e.val_metric,
+        decision: e.decision,
+        confidenceBand: e.confidence_band,
+        createdAt: e.created_at,
+      })),
+    });
+  })().catch((err) => errorResponse(res, `Failed to get arena agent history: ${(err as Error).message}`));
+}
+
+function handleArenaControls(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+): void {
+  (async () => {
+    const action = req.url?.split("/").pop()?.replace(/\?.*$/, "");
+    const arenaRepo = new ArenaRepositoryImpl();
+    const session = await arenaRepo.getByRunId(runId);
+    if (!session) {
+      errorResponse(res, "Arena session not found", 404);
+      return;
+    }
+
+    let status: ArenaSession["status"] = session.status;
+    switch (action) {
+      case "pause":
+        if (session.status === "running") {
+          status = "paused";
+          await arenaRepo.update({ ...session, status: "paused" });
+        }
+        break;
+      case "resume":
+        if (session.status === "paused") {
+          status = "running";
+          await arenaRepo.update({ ...session, status: "running" });
+        }
+        break;
+      case "skip":
+        // Skip current round: mark as running but advance round
+        status = "running";
+        await arenaRepo.update(session);
+        break;
+      case "stop":
+        if (["running", "paused"].includes(session.status)) {
+          status = "converged";
+          await arenaRepo.update({ ...session, status: "converged" });
+        }
+        break;
+      default:
+        errorResponse(res, `Unknown arena control action: ${action}`, 400);
+        return;
+    }
+
+    jsonResponse(res, { runId, action, status });
+  })().catch((err) => errorResponse(res, `Failed to control arena: ${(err as Error).message}`));
+}
+
 async function handlePipelinePause(
   _req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -2617,6 +2805,50 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /api/cross-findings
   if (method === "GET" && pathname === "/api/cross-findings") {
     handleCrossFindings(req, res);
+    return;
+  }
+
+  // ── Arena routes ────────────────────────────────────────────────
+
+  // GET /api/arena/:runId/session
+  const arenaSessionMatch = pathname.match(/^\/?api\/arena\/([a-zA-Z0-9_-]+)\/session$/);
+  if (method === "GET" && arenaSessionMatch) {
+    handleArenaSession(req, res, arenaSessionMatch[1]);
+    return;
+  }
+
+  // GET /api/arena/:runId/rounds
+  const arenaRoundsMatch = pathname.match(/^\/?api\/arena\/([a-zA-Z0-9_-]+)\/rounds$/);
+  if (method === "GET" && arenaRoundsMatch) {
+    handleArenaRounds(req, res, arenaRoundsMatch[1]);
+    return;
+  }
+
+  // GET /api/arena/:runId/convergence
+  const arenaConvergenceMatch = pathname.match(/^\/?api\/arena\/([a-zA-Z0-9_-]+)\/convergence$/);
+  if (method === "GET" && arenaConvergenceMatch) {
+    handleArenaConvergence(req, res, arenaConvergenceMatch[1]);
+    return;
+  }
+
+  // GET /api/arena/:runId/confidence
+  const arenaConfidenceMatch = pathname.match(/^\/?api\/arena\/([a-zA-Z0-9_-]+)\/confidence$/);
+  if (method === "GET" && arenaConfidenceMatch) {
+    handleArenaConfidence(req, res, arenaConfidenceMatch[1]);
+    return;
+  }
+
+  // GET /api/arena/:runId/agent-history
+  const arenaAgentHistoryMatch = pathname.match(/^\/?api\/arena\/([a-zA-Z0-9_-]+)\/agent-history$/);
+  if (method === "GET" && arenaAgentHistoryMatch) {
+    handleArenaAgentHistory(req, res, arenaAgentHistoryMatch[1]);
+    return;
+  }
+
+  // POST /api/arena/:runId/pause|resume|skip|stop
+  const arenaControlsMatch = pathname.match(/^\/?api\/arena\/([a-zA-Z0-9_-]+)\/(pause|resume|skip|stop)$/);
+  if (method === "POST" && arenaControlsMatch) {
+    handleArenaControls(req, res, arenaControlsMatch[1]);
     return;
   }
 

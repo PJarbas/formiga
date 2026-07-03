@@ -59,6 +59,16 @@ export interface LeaderboardEntry {
   rejectedAt: string | null;
   rejectReason: string | null;
   artifactPath: string | null;
+  /** Arena decision (keep/discard/crash) when this entry came from an arena round. */
+  decision?: string | null;
+  /** Arena confidence score when this entry came from an arena round. */
+  confidenceScore?: number | null;
+  /** Arena confidence band (high/medium/low/unknown). */
+  confidenceBand?: string | null;
+  /** Agent's hypothesis text for this experiment. */
+  hypothesis?: string | null;
+  /** Agent's learned text for this experiment. */
+  learned?: string | null;
 }
 
 export interface ModelReportResponse {
@@ -366,6 +376,96 @@ export interface PendingDecision {
   description: string;
   actions: DecisionAction[];
   createdAt: string;
+}
+
+// ── Arena (ml-autoresearch — competitive arena dashboard) ─────────────
+
+export type ArenaDashboardStatus = "running" | "converged" | "target_reached" | "max_rounds" | "failed" | "paused";
+
+export interface ArenaSessionResponse {
+  id: string;
+  runId: string;
+  metricName: string;
+  metricDirection: "lower" | "higher";
+  benchmarkScript: string;
+  checksScript?: string | null;
+  targetMetric: number | null;
+  maxRounds: number;
+  maxNoImprove: number;
+  currentRound: number;
+  bestMetric: number | null;
+  bestAgent: string | null;
+  bestExperimentId: number | null;
+  baselineMetric: number | null;
+  noiseFloorMad: number | null;
+  status: ArenaDashboardStatus;
+  totalKeep: number;
+  totalDiscard: number;
+  totalCrash: number;
+  totalChecksFailed: number;
+  consecutiveNoImprove: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ArenaRoundExperiment {
+  experimentId: number;
+  agentName: string;
+  modelType: string;
+  metric: number | null;
+  decision: string | null;
+  confidenceScore: number | null;
+  confidenceBand: string | null;
+  hypothesis: string | null;
+  learned: string | null;
+  durationMs: number | null;
+  status: string;
+}
+
+export interface ArenaRoundResponse {
+  round: number;
+  experiments: ArenaRoundExperiment[];
+}
+
+export interface ConvergencePoint {
+  round: number;
+  agent: string;
+  metric: number;
+  decision: string | null;
+  timestamp: string;
+}
+
+export interface ArenaConvergenceResponse {
+  points: ConvergencePoint[];
+}
+
+export interface ArenaStopReason {
+  reason: "max_rounds" | "target_reached" | "converged" | "max_no_improve" | "stopped" | "failed" | "unknown";
+  description: string;
+}
+
+export interface ArenaConfidenceResponse {
+  noiseFloorMad: number | null;
+  baselineMetric: number | null;
+  bestMetric: number | null;
+  bestAgent: string | null;
+  bestExperimentId: number | null;
+}
+
+export interface ArenaAgentHistoryEntry {
+  experimentId: number;
+  round: number;
+  hypothesis: string | null;
+  learned: string | null;
+  metric: number | null;
+  decision: string | null;
+  confidenceBand: string | null;
+  createdAt: string;
+}
+
+export interface ArenaAgentHistoryResponse {
+  agentId: string;
+  experiments: ArenaAgentHistoryEntry[];
 }
 
 // ── Spec approvals (persisted) ───────────────────────────────────────

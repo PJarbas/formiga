@@ -999,18 +999,31 @@ Examples:
 }
 
 function getAutoresearchHelp(): string {
-  return `formiga autoresearch — Run durable optimization experiment loops
+  return `formiga autoresearch — Run ML AutoResearch arena workflow
 
-Usage: formiga autoresearch <init|run-experiment|log-experiment|status|next|loop|prune>
+Usage: formiga autoresearch "[dataset_path=PATH target_column=COL ...] [options]"
+   or: formiga autoresearch <init|run-experiment|log-experiment|status|next|loop|prune>
 
-AutoResearch stores a project-local session in:
-  autoresearch.config.json   Session configuration
-  autoresearch.md            Agent-facing objective and loop contract
-  autoresearch.jsonl         Append-only experiment history
-  autoresearch.sh            Benchmark command
-  autoresearch.checks.sh     Optional correctness checks
+NEW WORKFLOW (recommended):
+  Runs the full ML AutoResearch pipeline:
+    EDA → Features → Arena (competing modelers) → Report
 
-Subcommands:
+  Arguments are space-separated key=value pairs embedded in the task string:
+    dataset_path=<abs-path>    (required)
+    target_column=<name>       (required)
+    max_rounds=<N>             (optional)
+    metric=<name>              (optional, e.g. cv_score, roc_auc)
+    direction=<lower|higher>   (optional, default: higher)
+
+  Options:
+    --working-directory-for-harness <dir>
+    --no-hurry-please-save-tokens-mode
+
+  Examples:
+    formiga autoresearch "dataset_path=/data/train.csv target_column=price max_rounds=5"
+    formiga autoresearch "dataset_path=./iris.csv target_column=species metric=accuracy direction=higher"
+
+LEGACY SUBCOMMANDS (deprecated — use workflow version above):
   init            Create a new AutoResearch session
   run-experiment  Run the configured experiment command and append a measured result
   log-experiment  Log the keep/discard decision, learning, and next focus
@@ -1023,11 +1036,10 @@ Subcommands:
   wizard          Interactive setup wizard that guides you through creating
                   an AutoResearch command sequence
 
-Examples:
+Legacy examples:
   formiga autoresearch init --goal "reduce validation loss" --metric val_bpb --direction lower --command "uv run train.py"
   formiga autoresearch run-experiment
-  formiga autoresearch log-experiment --status auto --description "try smaller LR" --learned "stable but slower" --next-focus "test warmup"
-  formiga autoresearch prune --older-than 30d`;
+  formiga autoresearch log-experiment --status auto --description "try smaller LR" --learned "stable but slower" --next-focus "test warmup"`;
 }
 
 function getAutoresearchInitHelp(): string {
@@ -1259,7 +1271,11 @@ function getUsageText(): string {
     "                                      [--pi-as-harness | --hermes-as-harness]",
     "                                      [--no-relaunch-upon-rugpull]",
     "                                      Start a workflow run",
-    "", "formiga autoresearch init            Create durable experiment-loop state",
+    "", "formiga autoresearch [task]            Run ML AutoResearch arena workflow",
+    "             or legacy: init|run-experiment|log-experiment|status|next|loop|prune|wizard",
+    "formiga workflow autoresearch <run-id> Show run AutoResearch progress",
+    "", "Legacy autoresearch subcommands (deprecated, use workflow version above):",
+    "formiga autoresearch init            Create durable experiment-loop state",
     "formiga autoresearch run-experiment  Run the configured experiment command",
     "formiga autoresearch log-experiment   Log keep/discard learning for the loop",
     "formiga autoresearch loop            Run a bounded experiment loop with live progress",
@@ -1269,7 +1285,6 @@ function getUsageText(): string {
     "formiga autoresearch prune           Remove stale AutoResearch registry rows",
     "           --older-than <duration>    (e.g. 30d, 7d, 24h)",
     "formiga autoresearch wizard          Interactive AutoResearch setup wizard",
-    "formiga workflow autoresearch <run-id> Show run AutoResearch progress",
     "formiga workflow status <query>      Check run status",
     "formiga workflow runs                List all workflow runs",
     "formiga workflow pause <run-id>      Pause a running workflow",
@@ -1654,6 +1669,73 @@ Examples:
 
   if (group === "autoresearch") {
     const cwd = readOption(args, "--cwd");
+
+    const legacyAutoresearchCommands = new Set([
+      "init",
+      "run-experiment",
+      "log-experiment",
+      "status",
+      "next",
+      "loop",
+      "prune",
+      "wizard",
+      "run-loop-iteration",
+    ]);
+
+    // When autoresearch is called without a recognized legacy subcommand, route
+    // directly to the new ml-autoresearch workflow. Example:
+    //   formiga autoresearch "dataset_path=/path/train.csv target_column=price max_rounds=5"
+    if (!action || !legacyAutoresearchCommands.has(action)) {
+      let runArgs: ReturnType<typeof parseWorkflowRunArgs>;
+      try {
+        runArgs = parseWorkflowRunArgs(args.slice(1));
+      } catch (err) {
+        process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+        process.exit(1);
+      }
+
+      if (!runArgs.taskTitle) {
+        process.stderr.write(
+          `Missing task description.\nUsage: formiga autoresearch '<dataset_path=PATH target_column=COL [max_rounds=N]>' [options]\n`,
+        );
+        process.exit(1);
+      }
+
+      let harnessType: HarnessType | undefined;
+      if (runArgs.harnessAs !== undefined) {
+        harnessType = runArgs.harnessAs as HarnessType;
+      }
+
+      // Auto-install bundled ml-autoresearch workflow if not yet installed
+      if (!existsSync(resolveWorkflowDir("ml-autoresearch"))) {
+        const bundled = await listBundledWorkflows();
+        if (bundled.includes("ml-autoresearch")) {
+          console.log(`Installing bundled workflow "ml-autoresearch"...`);
+          try {
+            await installWorkflow({ workflowId: "ml-autoresearch" });
+          } catch (err) {
+            process.stderr.write(
+              `Failed to install "ml-autoresearch": ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+            process.exit(1);
+          }
+        }
+      }
+
+      const result = await runWorkflow({
+        workflowId: "ml-autoresearch",
+        taskTitle: runArgs.taskTitle,
+        workingDirectoryForHarness: runArgs.workingDirectoryForHarness,
+        noHurrySaveTokensMode: runArgs.noHurrySaveTokensMode,
+        noRelaunchUponRugpull: runArgs.noRelaunchUponRugpull,
+        harnessType,
+      });
+      console.log(
+        `Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}\nHarness CWD: ${result.workingDirectoryForHarness}`,
+      );
+      return;
+    }
+
     if (action === "init") {
       const usage = "formiga autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd>";
       const entry = initExperiment({

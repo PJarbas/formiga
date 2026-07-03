@@ -5,6 +5,7 @@
 
 import { getPrisma } from "../database/prisma.js";
 import type { PrismaClient } from "@prisma/client";
+import type { ConfidenceBand, ArenaDecision } from "../arena/arena-types.js";
 
 // ── Row types ────────────────────────────────────────────────────
 
@@ -24,6 +25,20 @@ export interface ExperimentRow {
   error_message: string | null;
   dataset_signature: string | null;
   created_at: string;
+
+  // ── Arena fields (optional until legacy pipelines are removed) ──
+  hypothesis: string | null;
+  learned: string | null;
+  next_focus: string | null;
+  measured_metric: number | null;
+  benchmark_stdout: string | null;
+  benchmark_stderr: string | null;
+  benchmark_exit_code: number | null;
+  confidence_score: number | null;
+  confidence_band: string | null;
+  decision: string | null;
+  duration_ms: number | null;
+  artifact_script: string | null;
 }
 
 export interface NewExperiment {
@@ -38,6 +53,28 @@ export interface NewExperiment {
   artifact_path: string;
 }
 
+export interface ArenaExperiment {
+  run_id: string;
+  round_number: number;
+  agent_name: string;
+  model_type: string;
+  hyperparameters?: Record<string, unknown>;
+  hypothesis?: string;
+  learned?: string;
+  next_focus?: string;
+  measured_metric: number | null;
+  benchmark_stdout?: string;
+  benchmark_stderr?: string;
+  benchmark_exit_code?: number | null;
+  confidence_score?: number | null;
+  confidence_band?: ConfidenceBand;
+  decision?: ArenaDecision;
+  duration_ms?: number;
+  artifact_script?: string;
+  metric_name: string;
+  artifact_path: string;
+}
+
 // ── Repository interfaces (ISP) ──────────────────────────────────────────────
 
 export interface LeaderboardReadonly {
@@ -48,10 +85,12 @@ export interface LeaderboardReadonly {
   getFailedConfigs(agentName: string): Promise<ExperimentRow[]>;
   getBestByDatasetSignature(signature: string, limit?: number): Promise<ExperimentRow[]>;
   getBestInRun(runId: string): Promise<ExperimentRow | null>;
+  getArenaResults(runId: string): Promise<ExperimentRow[]>;
 }
 
 export interface LeaderboardRepository extends LeaderboardReadonly {
   register(entry: NewExperiment): Promise<number>;
+  registerArena(entry: ArenaExperiment): Promise<number>;
   updateTestMetric(experimentId: number, testMetric: number, status: "AUDITED" | "OVERFITTED"): Promise<void>;
   reject(experimentId: number, reason: string): Promise<void>;
   autoAudit(experimentId: number): Promise<void>;
@@ -84,6 +123,18 @@ function toExperimentRow(model: {
   error_message: string | null;
   dataset_signature: string | null;
   created_at: Date;
+  hypothesis: string | null;
+  learned: string | null;
+  next_focus: string | null;
+  measured_metric: number | null;
+  benchmark_stdout: string | null;
+  benchmark_stderr: string | null;
+  benchmark_exit_code: number | null;
+  confidence_score: number | null;
+  confidence_band: string | null;
+  decision: string | null;
+  duration_ms: number | null;
+  artifact_script: string | null;
 }): ExperimentRow {
   return {
     experiment_id: model.experiment_id,
@@ -101,6 +152,18 @@ function toExperimentRow(model: {
     error_message: model.error_message,
     dataset_signature: model.dataset_signature,
     created_at: model.created_at.toISOString(),
+    hypothesis: model.hypothesis,
+    learned: model.learned,
+    next_focus: model.next_focus,
+    measured_metric: model.measured_metric,
+    benchmark_stdout: model.benchmark_stdout,
+    benchmark_stderr: model.benchmark_stderr,
+    benchmark_exit_code: model.benchmark_exit_code,
+    confidence_score: model.confidence_score,
+    confidence_band: model.confidence_band,
+    decision: model.decision,
+    duration_ms: model.duration_ms,
+    artifact_script: model.artifact_script,
   };
 }
 
@@ -118,6 +181,33 @@ function fromNewExperiment(entry: NewExperiment) {
   };
 }
 
+function fromArenaExperiment(entry: ArenaExperiment) {
+  return {
+    run_id: entry.run_id,
+    round_number: entry.round_number,
+    agent_name: entry.agent_name,
+    model_type: entry.model_type ?? "arena_script",
+    hyperparameters: JSON.stringify(entry.hyperparameters ?? {}),
+    hypothesis: entry.hypothesis ?? null,
+    learned: entry.learned ?? null,
+    next_focus: entry.next_focus ?? null,
+    measured_metric: entry.measured_metric ?? null,
+    benchmark_stdout: entry.benchmark_stdout ?? null,
+    benchmark_stderr: entry.benchmark_stderr ?? null,
+    benchmark_exit_code: entry.benchmark_exit_code ?? null,
+    confidence_score: entry.confidence_score ?? null,
+    confidence_band: entry.confidence_band ?? null,
+    decision: entry.decision ?? null,
+    duration_ms: entry.duration_ms ?? null,
+    artifact_script: entry.artifact_script ?? null,
+    // Map the measured_metric (primary) to val_metric for leaderboard compatibility
+    train_metric: entry.measured_metric ?? 0,
+    val_metric: entry.measured_metric ?? 0,
+    metric_name: entry.metric_name,
+    artifact_path: entry.artifact_path,
+  };
+}
+
 // ── Implementation ──────────────────────────────────────────────────────
 
 export class LeaderboardRepositoryImpl implements LeaderboardRepository {
@@ -128,6 +218,13 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
   async register(entry: NewExperiment): Promise<number> {
     const created = await this.prisma.experiment.create({
       data: fromNewExperiment(entry),
+    });
+    return created.experiment_id;
+  }
+
+  async registerArena(entry: ArenaExperiment): Promise<number> {
+    const created = await this.prisma.experiment.create({
+      data: fromArenaExperiment(entry),
     });
     return created.experiment_id;
   }
@@ -206,6 +303,17 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
       orderBy: { val_metric: "desc" },
     });
     return row ? toExperimentRow(row) : null;
+  }
+
+  async getArenaResults(runId: string): Promise<ExperimentRow[]> {
+    const rows = await this.prisma.experiment.findMany({
+      where: { run_id: runId },
+      orderBy: [
+        { round_number: "asc" },
+        { val_metric: "desc" },
+      ],
+    });
+    return rows.map(toExperimentRow);
   }
 
   async updateTestMetric(

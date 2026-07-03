@@ -44,6 +44,23 @@ export async function spawnAgentsForPendingSteps(runId: string): Promise<void> {
     return;
   }
 
+  // Handle arena steps inline, before launching any PI cron jobs.
+  for (const step of pendingSteps) {
+    if (step.step_id === "arena") {
+      try {
+        const { launchArenaFromStep } = await import("../../arena/arena-workflow.js");
+        await launchArenaFromStep(runId, step.id);
+      } catch (err) {
+        logger.error("direct-spawn: arena launch failed", {
+          runId,
+          stepId: step.id,
+          error: String(err),
+        });
+      }
+      return; // Arena step fully owns this pipeline segment; nothing else to spawn.
+    }
+  }
+
   // Get run info for workflow resolution
   const run = await prisma.run.findUnique({
     where: { id: runId },

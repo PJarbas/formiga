@@ -1,0 +1,202 @@
+# Formiga ML AutoResearch — Competitive arena workflow
+#
+# Flow:
+#   eda → features → arena (N rounds of competing agents) → report (optional)
+#
+# The arena step is a special "single" step that internally runs the
+# competition loop (arena-engine.ts).  It is claimed by the workflow
+# scheduler like any other step, but its execution harness is the arena
+# engine rather than a single agent polling round.
+#
+# Inputs are passed via the `task` string as space-separated key=value pairs:
+#   formiga workflow run ml-autoresearch \
+#     'dataset_path=/abs/path/train.csv target_column=price max_rounds=5'
+
+id: ml-autoresearch
+name: ML AutoResearch
+version: 1
+description: |
+  Competitive ML optimization with arena loop:
+  Data Analyst → Feature Engineer → Arena (competing modelers) → Report.
+
+polling:
+  model: default
+  timeoutSeconds: 1800
+
+run:
+  workspace: direct
+
+agents:
+  - id: data-analyst
+    name: Data Analyst
+    role: analysis
+    description: Rigorous EDA, data quality, and pre-processing recommendations.
+    timeoutSeconds: 1200
+    workspace:
+      baseDir: agents/data-analyst
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/data-analyst/AGENTS.md
+        IDENTITY.md: agents/data-analyst/IDENTITY.md
+        SOUL.md: agents/data-analyst/SOUL.md
+
+  - id: feature-engineer
+    name: Feature Engineer
+    role: coding
+    description: Builds features, canonical split, baseline model, and benchmark scripts.
+    timeoutSeconds: 1800
+    workspace:
+      baseDir: agents/feature-engineer
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/feature-engineer/AGENTS.md
+        IDENTITY.md: agents/feature-engineer/IDENTITY.md
+        SOUL.md: agents/feature-engineer/SOUL.md
+
+  - id: arena-modeler-classic
+    name: Arena Modeler Classic
+    role: coding
+    description: Classic ML competitor in the arena (GBM, linear, trees, SVM, stacking).
+    timeoutSeconds: 3600
+    workspace:
+      baseDir: agents/modeler-classic
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/modeler-classic/AGENTS.md
+        IDENTITY.md: agents/modeler-classic/IDENTITY.md
+        SOUL.md: agents/modeler-classic/SOUL.md
+
+  - id: arena-modeler-advanced
+    name: Arena Modeler Advanced
+    role: coding
+    description: Advanced ML competitor in the arena (NN, AutoML, deep stacking, embeddings).
+    timeoutSeconds: 3600
+    workspace:
+      baseDir: agents/modeler-advanced
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/modeler-advanced/AGENTS.md
+        IDENTITY.md: agents/modeler-advanced/IDENTITY.md
+        SOUL.md: agents/modeler-advanced/SOUL.md
+
+  - id: reporter
+    name: Arena Reporter
+    role: analysis
+    description: Summarizes arena results and writes the final competition report.
+    timeoutSeconds: 1200
+    workspace:
+      baseDir: agents/reporter
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/reporter/AGENTS.md
+        IDENTITY.md: agents/reporter/IDENTITY.md
+        SOUL.md: agents/reporter/SOUL.md
+
+steps:
+  - id: eda
+    agent: data-analyst
+    input: |
+      Run Exploratory Data Analysis for this AutoResearch run.
+
+      INPUTS:
+      - dataset_path: {{dataset_path}}
+      - target_column: {{target_column}}
+      - workspace: {{workspace}}
+
+      Produce the EDA report at {{workspace}}/reports/01_eda.md and a machine-readable
+      config at {{workspace}}/artifacts/eda_config.json.
+
+      End your output with the protocol fields:
+        REPORT_PATH: <relative path>
+        FIGURES_COUNT: <integer>
+        KEY_FINDINGS: <one line>
+        STATUS: done
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: features
+    agent: feature-engineer
+    input: |
+      Build the canonical feature matrix, split, baseline model, AND the benchmark scripts.
+
+      INPUTS:
+      - dataset_path: {{dataset_path}}
+      - target_column: {{target_column}}
+      - report_path: {{report_path}}
+      - workspace: {{workspace}}
+      - run_id: {{run_id}}
+
+      Read the EDA report and config. Produce:
+        - features.parquet, split.pkl
+        - baseline.json, baseline.pkl
+        - benchmark_config.json (type, metric, validation, data paths)
+        - benchmark_runner.py
+        - autoresearch.sh (wrapper calling the runner)
+
+      Write your report to {{workspace}}/reports/02_features.md.
+
+      BEFORE emitting STATUS: done, you MUST write the leaderboard sidecar
+      submission as JSON to {{workspace}}/artifacts/feature-engineer_submission.json
+      with keys: MODEL_TYPE, CV_MEAN, TRAIN_MEAN, HYPERPARAMETERS, ARTIFACT_PATH, METRIC_NAME.
+
+      End your output with:
+        REPORT_PATH: <relative path>
+        BASELINE_CV_MEAN: <float>
+        BASELINE_CV_STD: <float>
+        BASELINE_JSON_PATH: artifacts/baseline.json
+        FEATURES_SHAPE: <rows>x<cols>
+        MODEL_TYPE: baseline-<algorithm>
+        CV_MEAN: <float>
+        TRAIN_MEAN: <float>
+        HYPERPARAMETERS: <compact JSON>
+        ARTIFACT_PATH: artifacts/baseline.pkl
+        STATUS: done
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: arena
+    agent: feature-engineer
+    # The arena step is executed by the arena engine, not by a single agent.
+    # The workflow runner detects this special step and invokes runArena()
+    # with competing agents configured in the arena engine.
+    input: |
+      ARENA_STEP: this step is handled by the arena competition engine.
+      Workspace: {{workspace}}
+      Run ID: {{run_id}}
+      Benchmark config should be at {{workspace}}/artifacts/benchmark_config.json
+    expects: "STATUS: done"
+    max_retries: 0
+    on_fail:
+      escalate_to: human
+
+  - id: report
+    agent: reporter
+    input: |
+      Summarize the arena competition results for this run.
+
+      INPUTS:
+      - run_id: {{run_id}}
+      - workspace: {{workspace}}
+
+      Read the arena session from the API and leaderboard data.
+      Produce a final report at {{workspace}}/reports/07_arena_report.md.
+
+      End your output with:
+        REPORT_PATH: <relative path>
+        TOTAL_ROUNDS: <integer>
+        BEST_METRIC: <float>
+        BEST_AGENT: <id>
+        STATUS: done
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human

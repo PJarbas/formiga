@@ -151,6 +151,27 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
         </div>
       )}
 
+      {/* Arena insights */}
+      {(entry.hypothesis || entry.learned) && (
+        <div>
+          <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
+            Arena Insights
+          </h4>
+          {entry.hypothesis && (
+            <div className="mb-2">
+              <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">Hypothesis</div>
+              <p className="text-xs text-[var(--text-secondary)]">{entry.hypothesis}</p>
+            </div>
+          )}
+          {entry.learned && (
+            <div>
+              <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">Learned</div>
+              <p className="text-xs text-[var(--text-secondary)]">{entry.learned}</p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Artifact path */}
       {entry.artifactPath && (
         <div className="text-xs text-[var(--text-muted)]">

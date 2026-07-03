@@ -185,6 +185,12 @@ export async function getCurrentPhase(runId: string): Promise<string> {
   });
   const agentNames = new Set(expAgents.map((a) => a.agent_name));
 
+  // Check for arena session first
+  const hasArenaSession = await prisma.arenaSession.count({
+    where: { run_id: runId },
+  }) > 0;
+  if (hasArenaSession) return "arena";
+
   if (agentNames.has("ml-critic")) return "audit";
   if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) return "modeling";
   if (agentNames.has("feature-engineer")) return "feature_engineering";

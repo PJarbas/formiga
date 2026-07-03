@@ -187,13 +187,17 @@ export async function runWorkflow(
       const runWorkspaceDir = path.join(workingDirectoryForHarness, "runs", runId);
       await fs.mkdir(runWorkspaceDir, { recursive: true });
       seededContext.workspace = runWorkspaceDir;
+    } else if (workflowId === "ml-autoresearch") {
+      const runWorkspaceDir = path.join(workingDirectoryForHarness, "runs", runId);
+      await fs.mkdir(runWorkspaceDir, { recursive: true });
+      seededContext.workspace = runWorkspaceDir;
     } else {
       seededContext.workspace = workingDirectoryForHarness;
     }
 
-    // Compute dataset signature for ml-pipeline so modelers can query
+    // Compute dataset signature for ml-pipeline / ml-autoresearch so modelers can query
     // cross-run transfer-learning experiments from the leaderboard.
-    if (workflowId === "ml-pipeline" && seededContext.dataset_path) {
+    if ((workflowId === "ml-pipeline" || workflowId === "ml-autoresearch") && seededContext.dataset_path) {
       try {
         const datasetFullPath = path.resolve(seededContext.dataset_path);
         const sig = await computeDatasetSignature(datasetFullPath);

@@ -9,6 +9,10 @@ import ReactECharts from "echarts-for-react";
 import {
   useLeaderboard,
   useCompareExperiments,
+  useArenaSession,
+  useArenaConvergence,
+  useArenaConfidence,
+  useArenaRounds,
 } from "../api/api";
 import { ComparePanel } from "../components/ComparePanel";
 import { ModelDetailPanel } from "../components/ModelDetailPanel";
@@ -16,6 +20,11 @@ import { ActionBar } from "../components/ActionBar";
 import { addToast } from "../components/Toast";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
 import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
+
+import ArenaControlsBar from "../components/arena/ArenaControlsBar";
+import ConvergenceChart from "../components/arena/ConvergenceChart";
+import ConfidenceStats from "../components/arena/ConfidenceStats";
+import AgentStrategyCards from "../components/arena/AgentStrategyCards";
 
 type SortKey = "cvMean" | "trainMean" | "trainValGap" | "roundNumber";
 
@@ -42,12 +51,22 @@ export default function Leaderboard() {
   const [filterAgent, setFilterAgent] = useState<string>("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [detailEntryId, setDetailEntryId] = useState<string | null>(null);
+  const [chartView, setChartView] = useState<"scatter" | "convergence">("scatter");
 
   const { data, isLoading } = useLeaderboard({
     agentName: filterAgent || undefined,
     sortBy,
     sortDir,
   });
+
+  // Detect arena run via active runId in first entry
+  const activeRunId = data?.entries?.[0]?.runId;
+  const { data: arenaSession } = useArenaSession(activeRunId);
+  const { data: convergence } = useArenaConvergence(activeRunId);
+  const { data: confidence } = useArenaConfidence(activeRunId);
+  const { data: rounds } = useArenaRounds(activeRunId);
+
+  const isArenaRun = !!arenaSession;
 
   const selectedIdArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
   const compareQuery = useCompareExperiments(selectedIdArray);
@@ -61,7 +80,7 @@ export default function Leaderboard() {
     });
   }, [data, sortBy, sortDir]);
 
-  // Best CV among visible (non-FAILED/OVERFITTED) entries — drives the ⭐.
+  // Best CV among visible (non-FAILED/OVERFITTED) entries — drives the star.
   const bestId = useMemo(() => {
     let best: LeaderboardEntry | null = null;
     for (const e of sortedEntries) {
@@ -107,7 +126,7 @@ export default function Leaderboard() {
         name: f.name,
         type: "scatter" as const,
         data: f.data,
-        symbolSize: 14, // TODO: scale by train_time_seconds when available
+        symbolSize: 14,
         itemStyle: { color: familyColor(f.name) },
       })),
     };
@@ -163,9 +182,10 @@ export default function Leaderboard() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-[var(--text-primary)]">Model Arena</h2>
+          <h2 className="text-lg font-semibold text-[var(--text-primary)]">{isArenaRun ? "Arena" : "Model Arena"}</h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5">
             {data?.total ?? 0} experiments · Best CV: {data?.bestCvMean?.toFixed(4) ?? "—"}
+            {isArenaRun && arenaSession?.metricName ? ` · Metric: ${arenaSession.metricName} (${arenaSession.metricDirection})` : ""}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -199,6 +219,11 @@ export default function Leaderboard() {
         </div>
       </div>
 
+      {/* Arena controls */}
+      {isArenaRun && arenaSession && (
+        <ArenaControlsBar runId={arenaSession.runId} status={arenaSession.status} />
+      )}
+
       {/* Best Model Banner */}
       {bestEntry && data?.bestCvMean != null && (
         <div className="bg-[var(--accent-green)]/10 border border-[var(--accent-green)]/30 rounded-lg p-4 flex items-center justify-between">
@@ -219,10 +244,43 @@ export default function Leaderboard() {
         </div>
       )}
 
-      {/* Scatter */}
+      {/* Confidence stats */}
+      {isArenaRun && (
+        <ConfidenceStats confidence={confidence} session={arenaSession} />
+      )}
+
+      {/* Chart toggle */}
+      {isArenaRun && (
+        <div className="flex items-center gap-1 rounded border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-1 py-0.5 w-fit">
+          <button
+            type="button"
+            onClick={() => setChartView("scatter")}
+            className={`text-xs px-2 py-0.5 rounded ${chartView === "scatter" ? "bg-[var(--accent-blue)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}
+          >
+            Scatter
+          </button>
+          <button
+            type="button"
+            onClick={() => setChartView("convergence")}
+            className={`text-xs px-2 py-0.5 rounded ${chartView === "convergence" ? "bg-[var(--accent-blue)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}
+          >
+            Convergence
+          </button>
+        </div>
+      )}
+
+      {/* Chart */}
       {sortedEntries.length > 0 && (
         <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-4">
-          <ReactECharts option={scatterOption} style={{ height: 320 }} notMerge />
+          {isArenaRun && chartView === "convergence" ? (
+            <ConvergenceChart
+              points={convergence?.points ?? []}
+              confidence={confidence}
+              maxRounds={arenaSession?.maxRounds ?? 5}
+            />
+          ) : (
+            <ReactECharts option={scatterOption} style={{ height: 320 }} notMerge />
+          )}
         </div>
       )}
 
@@ -258,11 +316,17 @@ export default function Leaderboard() {
                     {label}
                     {sortBy === key && (
                       <span className="ml-1 text-[var(--accent-blue)]">
-                        {sortDir === "asc" ? "\u2191" : "\u2193"}
+                        {sortDir === "asc" ? "↑" : "↓"}
                       </span>
                     )}
                   </th>
                 ))}
+                {/* Arena extra columns */}
+                {isArenaRun && (
+                  <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide select-none">
+                    Decision
+                  </th>
+                )}
                 <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide select-none">
                   Audit
                 </th>
@@ -271,7 +335,7 @@ export default function Leaderboard() {
             <tbody>
               {sortedEntries.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-8 text-center text-[var(--text-muted)]">
+                  <td colSpan={isArenaRun ? 10 : 9} className="px-4 py-8 text-center text-[var(--text-muted)]">
                     No leaderboard entries yet
                   </td>
                 </tr>
@@ -317,6 +381,22 @@ export default function Leaderboard() {
                       <td className="px-4 py-2.5 font-mono text-xs text-[var(--accent-orange)]">
                         {entry.trainValGap.toFixed(4)}
                       </td>
+                      {/* Arena Decision cell */}
+                      {isArenaRun && (
+                        <td className="px-4 py-2.5">
+                          <span
+                            className={`text-xs px-1.5 py-0.5 rounded ${
+                              entry.decision?.toLowerCase() === "keep"
+                                ? "bg-[var(--accent-green)]/10 text-[var(--accent-green)]"
+                                : entry.decision?.toLowerCase() === "discard"
+                                  ? "bg-[var(--status-idle)]/10 text-[var(--text-muted)]"
+                                  : "bg-[var(--status-failed)]/10 text-[var(--status-failed)]"
+                            }`}
+                          >
+                            {entry.decision?.toUpperCase() ?? "·"}
+                          </span>
+                        </td>
+                      )}
                       <td className="px-4 py-2.5">
                         <span
                           className={`text-xs px-1.5 py-0.5 rounded ${
@@ -368,6 +448,11 @@ export default function Leaderboard() {
             </>
           )}
         </div>
+      )}
+
+      {/* Arena strategies */}
+      {isArenaRun && (
+        <AgentStrategyCards rounds={rounds ?? []} />
       )}
     </div>
   );

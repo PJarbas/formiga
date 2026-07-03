@@ -35,6 +35,7 @@ model Run {
   steps            Step[]
   stories          Story[]
   experiments      Experiment[]
+  arena_session    ArenaSession?
   spec_approvals   SpecApproval[]
   checklist_states ChecklistState[]
 
@@ -100,6 +101,18 @@ model Experiment {
   agent_name        String
   model_type        String
   hyperparameters   String  @default("{}")
+  hypothesis        String?
+  learned           String?
+  next_focus        String?
+  measured_metric   Float?
+  benchmark_stdout  String?
+  benchmark_stderr  String?
+  benchmark_exit_code Int?
+  confidence_score  Float?
+  confidence_band   String?
+  decision          String?
+  duration_ms       Int?
+  artifact_script   String?
   train_metric      Float
   val_metric        Float
   test_metric       Float?
@@ -129,6 +142,41 @@ model DatasetSignature {
   row_bucket  String
 
   @@map("dataset_signatures")
+}
+
+model ArenaSession {
+  id                      String   @id @default(uuid())
+  run_id                  String   @unique
+  run                     Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  metric_name             String
+  metric_direction        String
+  benchmark_script        String
+  checks_script             String?
+  target_metric             Float?
+  max_rounds              Int      @default(10)
+  max_no_improve          Int      @default(3)
+
+  current_round           Int      @default(0)
+  best_metric             Float?
+  best_agent              String?
+  best_experiment_id      Int?
+  baseline_metric         Float?
+  noise_floor_mad         Float?
+
+  status                  String   @default("running")
+  total_keep              Int      @default(0)
+  total_discard           Int      @default(0)
+  total_crash             Int      @default(0)
+  total_checks_failed     Int      @default(0)
+  consecutive_no_improve  Int      @default(0)
+
+  created_at              DateTime @default(now())
+  updated_at              DateTime @updatedAt
+
+  @@map("arena_sessions")
+  @@index([run_id])
+  @@index([status])
 }
 
 model AutoresearchSession {
