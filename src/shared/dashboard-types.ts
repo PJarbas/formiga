@@ -23,6 +23,8 @@ export interface MLKanbanCard {
 export interface MLKanbanLane {
   agent: string;
   label: string;
+  stepId?: string;
+  stepType?: string;
   status: AgentStatus;
   cards: MLKanbanCard[];
   summary: { done: number; failed: number; running: number; total: number };

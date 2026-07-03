@@ -30,7 +30,7 @@ type ViewMode = "phase" | "agent";
 // Derive phase info from AGENT_INFO_REGISTRY — single source of truth.
 
 // Phase ordering for sequential pipeline display
-const PHASE_ORDER = ["data_analysis", "feature_engineering", "modeling", "audit"];
+const PHASE_ORDER = ["data_analysis", "feature_engineering", "modeling", "arena", "audit", "report"];
 
 // Map phaseStats keys to phase IDs used in AGENT_INFO_REGISTRY
 const PHASE_STATS_TO_PHASE_ID: Record<string, string> = {
@@ -60,7 +60,9 @@ const PHASE_LABELS: Record<string, string> = {
   data_analysis: "Data Analysis",
   feature_engineering: "Feature Engineering",
   modeling: "Modeling",
+  arena: "Arena",
   audit: "Audit",
+  report: "Report",
 };
 
 function buildLanes(view: ViewMode, lanes: MLKanbanLane[]): BoardLane[] {
@@ -78,7 +80,11 @@ function buildLanes(view: ViewMode, lanes: MLKanbanLane[]): BoardLane[] {
   const buckets = new Map<string, BoardLane>();
   for (const l of lanes) {
     const agentInfo = AGENT_INFO_REGISTRY[l.agent];
-    const phaseId = agentInfo?.phase ?? l.agent;
+    const phaseId = l.stepId === "arena"
+      ? "arena"
+      : l.stepId === "report"
+        ? "report"
+        : (agentInfo?.phase ?? l.agent);
     const phaseLabel = PHASE_LABELS[phaseId] ?? agentInfo?.label ?? l.label;
     if (!buckets.has(phaseId)) {
       buckets.set(phaseId, {
@@ -104,7 +110,7 @@ function buildLanes(view: ViewMode, lanes: MLKanbanLane[]): BoardLane[] {
   for (const [phaseId, bucket] of buckets) {
     if (!PHASE_ORDER.includes(phaseId)) ordered.push(bucket);
   }
-  return ordered;
+  return ordered.filter((lane) => lane.cards.length > 0);
 }
 
 function actionsForCard(_card: MLKanbanCard): Action[] {
@@ -126,9 +132,9 @@ export default function ExperimentBoard() {
   const pipelineRunning = status?.status === "running";
 
   // Determine active phase and dependent phases from phaseStats
-  const { activePhase, completedPhases } = useMemo(() => {
+  const { activePhase, completedPhases, mappedPhases } = useMemo(() => {
     const phaseStats = status?.phaseStats;
-    if (!phaseStats) return { activePhase: null as string | null, completedPhases: new Set<string>() };
+    if (!phaseStats) return { activePhase: null as string | null, completedPhases: new Set<string>(), mappedPhases: new Set<string>() };
 
     // Build per-phase status by aggregating agent statuses
     const phaseStatusMap = new Map<string, AgentStatus[]>();
@@ -144,7 +150,8 @@ export default function ExperimentBoard() {
 
     for (const phaseId of PHASE_ORDER) {
       const statuses = phaseStatusMap.get(phaseId) ?? [];
-      const allCompleted = statuses.length > 0 && statuses.every((s) => s === "completed");
+      if (statuses.length === 0) continue;
+      const allCompleted = statuses.every((s) => s === "completed");
       const anyRunning = statuses.some((s) => s === "running");
 
       if (allCompleted) {
@@ -154,7 +161,7 @@ export default function ExperimentBoard() {
       }
     }
 
-    return { activePhase: active, completedPhases: completed };
+    return { activePhase: active, completedPhases: completed, mappedPhases: new Set(phaseStatusMap.keys()) };
   }, [status?.phaseStats]);
 
   const selectedAgent = useMemo<string | null>(() => {
@@ -242,7 +249,7 @@ export default function ExperimentBoard() {
         {lanes.map((lane) => {
           const isActivePhase = view === "phase" && lane.key === activePhase;
           const isCompletedPhase = view === "phase" && completedPhases.has(lane.key);
-          const isDependentPhase = view === "phase" && !isActivePhase && !isCompletedPhase && pipelineRunning;
+          const isDependentPhase = view === "phase" && !isActivePhase && !isCompletedPhase && pipelineRunning && mappedPhases.has(lane.key);
 
           return (
           <div
