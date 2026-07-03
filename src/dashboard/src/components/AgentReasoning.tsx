@@ -27,8 +27,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export function AgentReasoning({ reasoning }: Props) {
-  const { hypothesis, learned, nextFocus, approaches, keyDecisions, specDiff } = reasoning;
-  const hasContent = hypothesis || learned || nextFocus || approaches.models.length > 0 || keyDecisions.length > 0;
+  const { hypothesis, learned, nextFocus, approaches, keyDecisions, specDiff, summary } = reasoning;
+  const hasContent = hypothesis || learned || nextFocus || approaches.models.length > 0 || keyDecisions.length > 0 || summary;
 
   if (!hasContent) {
     return (
@@ -106,6 +106,14 @@ export function AgentReasoning({ reasoning }: Props) {
       {specDiff && (
         <Section title="Spec Evolution">
           <SpecDiffViewer before={specDiff.before} after={specDiff.after} />
+        </Section>
+      )}
+
+      {!hypothesis && !approaches.models.length && summary && (
+        <Section title="Step Output">
+          <pre className="whitespace-pre-wrap text-xs text-[var(--text-secondary)] leading-relaxed max-h-[300px] overflow-y-auto">
+            {summary}
+          </pre>
         </Section>
       )}
     </div>

@@ -1080,6 +1080,38 @@ function handleAgentLogs(
       where: { run_id: runId, agent_name: agentNameFilter },
     });
 
+    if (total === 0) {
+      const stepForAgent = await prisma.step.findFirst({
+        where: { run_id: runId, agent_id: { endsWith: `_${agentName}` } },
+        select: { step_id: true, output: true, status: true, updated_at: true },
+      });
+      if (stepForAgent) {
+        const stepEntries: Array<{ timestamp: string; level: "info" | "warn" | "error"; message: string }> = [];
+        const ts = stepForAgent.updated_at?.toISOString() ?? new Date().toISOString();
+        stepEntries.push({
+          timestamp: ts,
+          level: stepForAgent.status === "failed" ? "error" : "info",
+          message: `[${stepForAgent.step_id}] Status: ${stepForAgent.status}`,
+        });
+        if (stepForAgent.output) {
+          const lines = stepForAgent.output.split("\n");
+          for (const line of lines) {
+            if (line.trim()) {
+              stepEntries.push({ timestamp: ts, level: "info", message: line });
+            }
+          }
+        }
+        jsonResponse(res, {
+          agentName,
+          entries: stepEntries.slice(offset, offset + limit),
+          total: stepEntries.length,
+          offset,
+          limit,
+        });
+        return;
+      }
+    }
+
     const rows = await prisma.experiment.findMany({
       where: { run_id: runId, agent_name: agentNameFilter },
       orderBy: { experiment_id: "desc" },
@@ -1129,7 +1161,7 @@ function handleAgentReasoning(
     const runId = requestedRunId || (await findActivePipelineRunId());
 
     if (!runId) {
-      jsonResponse(res, { agentName, hypothesis: null, learned: null, nextFocus: null, approaches: [], keyDecisions: [], specDiff: null });
+      jsonResponse(res, { agentName, hypothesis: null, learned: null, nextFocus: null, approaches: [], keyDecisions: [], specDiff: null, summary: null });
       return;
     }
 
@@ -1174,6 +1206,11 @@ function handleAgentReasoning(
     });
 
     const approaches = extractApproaches(step?.output ?? null);
+
+    let summary: string | null = null;
+    if (!experiments.length && step?.output) {
+      summary = step.output.slice(0, 2000);
+    }
 
     // Fetch autoresearch ASI data (hypothesis, learned, next_focus)
     let hypothesis: string | null = null;
@@ -1224,6 +1261,7 @@ function handleAgentReasoning(
       approaches,
       keyDecisions,
       specDiff,
+      summary,
     });
   })().catch((err) => errorResponse(res, `Failed to get agent reasoning: ${(err as Error).message}`));
 }
@@ -2228,14 +2266,14 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
     const activeRuns = await prisma.run.findMany({
       where: { status: { in: ["running", "paused"] } },
       orderBy: { created_at: "desc" },
-      select: { id: true, task: true, status: true, created_at: true, updated_at: true },
+      select: { id: true, workflow_id: true, task: true, status: true, created_at: true, updated_at: true },
     });
 
     const recentDone = await prisma.run.findMany({
       where: { status: { in: ["completed", "failed"] } },
       orderBy: { created_at: "desc" },
       take: 10,
-      select: { id: true, task: true, status: true, created_at: true, updated_at: true },
+      select: { id: true, workflow_id: true, task: true, status: true, created_at: true, updated_at: true },
     });
 
     const allRuns = [...activeRuns, ...recentDone];
@@ -2266,6 +2304,7 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
         return {
           runId: run.id,
           shortHash: run.id.slice(0, 8),
+          workflowId: run.workflow_id,
           task: run.task,
           status: run.status,
           currentPhase,

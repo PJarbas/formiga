@@ -164,7 +164,12 @@ function RunRow({
       <StatusBadge status={run.status} />
 
       <div className="min-w-[140px] shrink-0">
-        <span className="text-sm font-mono font-medium text-[var(--accent-blue)]">{run.shortHash}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-mono font-medium text-[var(--accent-blue)]">{run.shortHash}</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
+            {run.workflowId === "ml-autoresearch" ? "autoresearch" : "pipeline"}
+          </span>
+        </div>
         {isActive && run.currentPhase !== "idle" && (
           <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
             {run.currentPhase.replace(/_/g, " ")}

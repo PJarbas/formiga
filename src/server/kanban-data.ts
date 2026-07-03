@@ -403,7 +403,8 @@ function _buildSnapshotFromRows(
 
   const lanes: KanbanLane[] = steps.map((step) => {
     const agent = laneAgentSuffix(step.agent_id);
-    const label = humanLabel(agent);
+    const labelSource = step.step_id !== agent ? step.step_id : agent;
+    const label = humanLabel(labelSource);
     let cards: KanbanCard[];
     if (step.type === "loop") {
       cards = stories.map((story) => {
