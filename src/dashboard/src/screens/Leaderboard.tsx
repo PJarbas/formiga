@@ -4,7 +4,7 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import ReactECharts from "echarts-for-react";
 import {
   useLeaderboard,
@@ -46,6 +46,9 @@ function familyColor(modelType: string): string {
 }
 
 export default function Leaderboard() {
+  const [searchParams] = useSearchParams();
+  const runIdFromUrl = searchParams.get("run") ?? undefined;
+
   const [sortBy, setSortBy] = useState<SortKey>("cvMean");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [filterAgent, setFilterAgent] = useState<string>("");
@@ -54,13 +57,14 @@ export default function Leaderboard() {
   const [chartView, setChartView] = useState<"scatter" | "convergence">("scatter");
 
   const { data, isLoading } = useLeaderboard({
+    runId: runIdFromUrl,
     agentName: filterAgent || undefined,
     sortBy,
     sortDir,
   });
 
-  // Detect arena run via active runId in first entry
-  const activeRunId = data?.entries?.[0]?.runId;
+  // Detect arena run via URL override or first entry
+  const activeRunId = runIdFromUrl ?? data?.entries?.[0]?.runId;
   const { data: arenaSession } = useArenaSession(activeRunId);
   const { data: convergence } = useArenaConvergence(activeRunId);
   const { data: confidence } = useArenaConfidence(activeRunId);

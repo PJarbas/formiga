@@ -42,36 +42,43 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function StageDots({ phases }: { phases: PipelineRunRow["phases"] }) {
+function StageDots({ phases, arenaProgress }: { phases: PipelineRunRow["phases"]; arenaProgress?: PipelineRunRow["arenaProgress"] }) {
   return (
     <div className="flex items-center gap-1">
       {phases.map((phase) => {
         const config = getStatusConfig(
           phase.status === "done" ? "completed" : phase.status === "running" ? "running" : phase.status === "failed" ? "failed" : "idle",
         );
+        const isArenaPhase = phase.id === "arena" && arenaProgress;
         return (
-          <svg
-            key={phase.id}
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            className={phase.status === "running" ? "animate-pulse" : ""}
-            aria-label={phase.label}
-          >
-            {phase.status === "pending" ? (
-              <circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--border-default)" strokeWidth="1.5" />
-            ) : (
-              <>
-                <circle cx="7" cy="7" r="6" fill={config.hex} />
-                {phase.status === "done" && (
-                  <path d="M4 7.2L6 9.2L10 4.8" stroke="white" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                )}
-                {phase.status === "failed" && (
-                  <path d="M5 5L9 9M9 5L5 9" stroke="white" strokeWidth="1.3" strokeLinecap="round" />
-                )}
-              </>
+          <div key={phase.id} className="flex items-center gap-0.5" title={phase.label}>
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 14 14"
+              className={phase.status === "running" ? "animate-pulse" : ""}
+              aria-label={phase.label}
+            >
+              {phase.status === "pending" ? (
+                <circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--border-default)" strokeWidth="1.5" />
+              ) : (
+                <>
+                  <circle cx="7" cy="7" r="6" fill={config.hex} />
+                  {phase.status === "done" && (
+                    <path d="M4 7.2L6 9.2L10 4.8" stroke="white" strokeWidth="1.3" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  )}
+                  {phase.status === "failed" && (
+                    <path d="M5 5L9 9M9 5L5 9" stroke="white" strokeWidth="1.3" strokeLinecap="round" />
+                  )}
+                </>
+              )}
+            </svg>
+            {isArenaPhase && phase.status === "running" && (
+              <span className="text-[9px] font-mono text-[var(--text-muted)]">
+                R{arenaProgress.currentRound}/{arenaProgress.maxRounds}
+              </span>
             )}
-          </svg>
+          </div>
         );
       })}
     </div>
@@ -181,7 +188,7 @@ function RunRow({
         <p className="text-sm text-[var(--text-primary)] truncate">{run.task}</p>
       </div>
 
-      <StageDots phases={run.phases} />
+      <StageDots phases={run.phases} arenaProgress={run.arenaProgress} />
 
       <div className="ml-auto flex items-center gap-4 text-xs text-[var(--text-muted)] shrink-0">
         <span>

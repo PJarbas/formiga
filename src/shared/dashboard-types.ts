@@ -99,7 +99,7 @@ export interface LeaderboardResponse {
 
 // ── Pipeline status (Tela 1) ─────────────────────────────────────────
 
-export type PipelinePhase = "idle" | "data_analysis" | "feature_engineering" | "modeling" | "audit" | "complete";
+export type PipelinePhase = "idle" | "data_analysis" | "feature_engineering" | "modeling" | "audit" | "arena" | "report" | "complete" | (string & {});
 
 export interface PipelineStatus {
   runId: string | null;
@@ -496,10 +496,19 @@ export interface AgentStripItem {
   trials: number;
 }
 
+export interface ArenaProgress {
+  currentRound: number;
+  maxRounds: number;
+  status: ArenaDashboardStatus;
+}
+
+export type WorkflowType = "ml-pipeline" | "ml-autoresearch";
+
 export interface PipelineRunRow {
   runId: string;
   shortHash: string;
   workflowId: string;
+  workflowType: WorkflowType;
   task: string;
   status: string;
   currentPhase: PipelinePhase;
@@ -509,6 +518,7 @@ export interface PipelineRunRow {
   durationMs: number | null;
   startedAt: string | null;
   updatedAt: string | null;
+  arenaProgress?: ArenaProgress;
 }
 
 export interface CommandCenterSnapshot {

@@ -595,7 +595,96 @@ export async function getKanbanSnapshot(runId: string): Promise<KanbanSnapshot |
     updated_at: dateToIso(s.updated_at),
   }));
 
-  return _buildSnapshotFromRows(runRow, stepRows, storyRows);
+  const snapshot = _buildSnapshotFromRows(runRow, stepRows, storyRows);
+  await appendArenaLanes(prisma, runId, snapshot);
+  return snapshot;
+}
+
+// ── Arena synthetic lanes ─────────────────────────────────────────────────────
+
+const ARENA_AGENT_LABELS: Record<string, string> = {
+  "modeler-classic": "Modeler (Classic)",
+  "modeler-advanced": "Modeler (Advanced)",
+};
+
+function decisionToStatus(decision: string | null): VisualStatus {
+  if (!decision) return "running";
+  switch (decision) {
+    case "keep": return "done";
+    case "discard":
+    case "crash":
+    case "checks_failed": return "failed";
+    default: return "todo";
+  }
+}
+
+function formatMetricSub(metric: number | null, decision: string | null): string {
+  if (metric == null) return "running...";
+  const metricStr = metric.toFixed(4);
+  return decision ? `${metricStr} · ${decision}` : metricStr;
+}
+
+async function appendArenaLanes(
+  prisma: ReturnType<typeof getPrisma>,
+  runId: string,
+  snapshot: KanbanSnapshot,
+): Promise<void> {
+  const arenaSession = await prisma.arenaSession.findUnique({
+    where: { run_id: runId },
+    select: { id: true },
+  });
+  if (!arenaSession) return;
+
+  const experiments = await prisma.experiment.findMany({
+    where: { run_id: runId, decision: { not: null } },
+    orderBy: { round_number: "asc" },
+    select: {
+      experiment_id: true,
+      agent_name: true,
+      round_number: true,
+      measured_metric: true,
+      decision: true,
+      created_at: true,
+    },
+  });
+
+  const byAgent = new Map<string, typeof experiments>();
+  for (const exp of experiments) {
+    const suffix = laneAgentSuffix(exp.agent_name);
+    const list = byAgent.get(suffix) ?? [];
+    list.push(exp);
+    byAgent.set(suffix, list);
+  }
+
+  const arenaStepIdx = snapshot.lanes.findIndex((l) => l.stepId === "arena");
+  const insertIdx = arenaStepIdx >= 0 ? arenaStepIdx + 1 : snapshot.lanes.length;
+
+  const arenaLanes: KanbanLane[] = [];
+  for (const [agent, exps] of byAgent) {
+    const cards: KanbanCard[] = exps.map((exp) => ({
+      id: `arena-${agent}-r${exp.round_number}`,
+      agentName: agent,
+      title: `Round ${exp.round_number}`,
+      status: decisionToStatus(exp.decision),
+      sub: formatMetricSub(exp.measured_metric, exp.decision),
+    }));
+
+    const laneStatus = exps.length > 0 && exps.every((e) => e.decision)
+      ? "done" as VisualStatus
+      : "running" as VisualStatus;
+
+    arenaLanes.push({
+      agent,
+      label: ARENA_AGENT_LABELS[agent] ?? humanLabel(agent),
+      stepId: "arena",
+      stepType: "arena",
+      status: laneStatus,
+      cards,
+      summary: summarise(cards),
+    });
+  }
+
+  snapshot.lanes.splice(insertIdx, 0, ...arenaLanes);
 }
 
 /**

@@ -132,6 +132,7 @@ export function useKanbanCardDetail(runId: string | undefined, cardId: string | 
 // ── Leaderboard ─────────────────────────────────────────────────────
 
 export function useLeaderboard(params?: {
+  runId?: string;
   agentName?: string;
   roundNumber?: number;
   status?: string;
@@ -139,6 +140,7 @@ export function useLeaderboard(params?: {
   sortDir?: "asc" | "desc";
 }) {
   const search = new URLSearchParams();
+  if (params?.runId) search.set("runId", params.runId);
   if (params?.agentName) search.set("agentName", params.agentName);
   if (params?.roundNumber !== undefined) search.set("roundNumber", String(params.roundNumber));
   if (params?.status) search.set("status", params.status);

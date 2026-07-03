@@ -114,9 +114,10 @@ function actionsForCard(_card: MLKanbanCard): Action[] {
 export default function ExperimentBoard() {
   const [searchParams] = useSearchParams();
   const roundFromUrl = searchParams.get("round") ? Number(searchParams.get("round")) : null;
+  const runIdFromUrl = searchParams.get("run") ?? undefined;
 
   const { data: status } = usePipelineStatus();
-  const runId = status?.runId ?? undefined;
+  const runId = runIdFromUrl ?? status?.runId ?? undefined;
   const { data: kanban, isLoading } = useKanbanSnapshot(runId);
   const [view, setView] = useState<ViewMode>("phase");
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
