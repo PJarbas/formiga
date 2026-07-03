@@ -556,6 +556,7 @@ export async function executePollingRound(
     // Use disk streaming for stdout to prevent OOM on large PI outputs.
     const outputFile = makePiOutputFilePath(job.id);
     let output: string;
+      let extractedMetadata: import("./streaming-metadata-extractor.js").ExtractedMetadata | undefined;
     let cleanupFile: string | undefined;
 
     try {
@@ -573,7 +574,7 @@ export async function executePollingRound(
           outputFile,
         });
       } else {
-        output = await runPi(
+        const piResult = await runPi(
           ["--print", "--mode", "json", "--no-session", pollingPrompt],
           {
             timeout,
@@ -586,6 +587,8 @@ export async function executePollingRound(
             outputFile,
           },
         );
+        output = piResult.assistantText;
+        extractedMetadata = piResult.metadata;
       }
       cleanupFile = outputFile;
     } finally {
@@ -594,7 +597,15 @@ export async function executePollingRound(
       }
     }
 
-    const metadata = parsePollingRoundMetadata(output);
+    const metadata = extractedMetadata
+      ? {
+          assistantOutput: extractedMetadata.assistantTextTail,
+          tokenUsage: extractedMetadata.tokenUsage,
+          runId: extractedMetadata.runId,
+          stepId: extractedMetadata.stepId,
+          jsonMetadataDetected: extractedMetadata.jsonMetadataDetected,
+        }
+      : parsePollingRoundMetadata(output);
     const outputSummary = summarizePollingRoundOutput(metadata.assistantOutput || output);
 
     emitEvent({

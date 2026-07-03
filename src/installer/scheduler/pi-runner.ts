@@ -3,24 +3,21 @@
 // ══════════════════════════════════════════════════════════════════════
 //
 // `runPi` spawns pi --print as a detached process group child, applies a
-// timeout, captures stdout (parsed via parsePiOutputStream) and stderr,
-// then returns the filtered stdout. The optional `onSpawn` callback lets
-// the scheduler register the pi pid + pgid into `inFlightChildren` so
-// termination paths can SIGTERM/SIGKILL the whole process tree.
+// timeout, streams stdout to disk while extracting metadata in real-time
+// via StreamingMetadataExtractor, then returns the extracted metadata.
 //
-// When `outputFile` is provided, stdout is streamed to disk instead of
-// kept entirely in memory. Only the trailing bytes required for metadata
-// extraction are retained in memory. This prevents OOM crashes when pi
-// produces very large outputs (e.g. 256 MB).
+// Always uses disk streaming — no in-memory ring buffer path.
+// Memory guarantee: O(maxAssistantBytes) regardless of pi output size.
 // ══════════════════════════════════════════════════════════════════════
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { createInterface } from "node:readline";
 import { logger } from "../../lib/logger.js";
-import { findPiBinary, formatPiCommandPreview, parsePiOutputStream } from "./binary-discovery.js";
+import { findPiBinary, formatPiCommandPreview } from "./binary-discovery.js";
 import { buildStreamLogMetadata, safeKillPgid } from "./shared.js";
+import { StreamingMetadataExtractor, type ExtractedMetadata } from "./streaming-metadata-extractor.js";
 
 export interface RunPiOptions {
   timeout?: number; // seconds, default 60
@@ -36,28 +33,38 @@ export interface RunPiOptions {
    * Optional path to stream stdout into. When provided, pi output is written
    * to disk in real time. Only a bounded tail is kept in memory for
    * metadata extraction. Prevents OOM on very large outputs.
+   * If not provided, a temp file is created automatically.
    */
   outputFile?: string;
 }
 
-/** Utility: drain stdout into a file while also buffering the tail. */
-async function streamStdoutWithBuffer(
+/** Result of runPi — structured metadata instead of raw string. */
+export interface RunPiResult {
+  /** Extracted metadata (STATUS, tokens, IDs, assistant text). */
+  metadata: ExtractedMetadata;
+  /** The assistant text tail (convenience accessor, same as metadata.assistantTextTail). */
+  assistantText: string;
+  /** Path to the output file on disk (may be deleted if FORMIGA_KEEP_PI_OUTPUT not set). */
+  outputFile: string;
+  /** Duration of pi invocation in ms. */
+  durationMs: number;
+  /** Pi process exit code. */
+  exitCode: number | null;
+  /** Pi process signal, if killed. */
+  signalCode: string | null;
+}
+
+/** Utility: drain stdout into a file while feeding lines to the streaming extractor. */
+async function streamStdoutWithExtractor(
   stdout: NodeJS.ReadableStream,
   outputFile: string,
-  maxMemoryBytes = 64 * 1024,
-): Promise<{ memoryTail: string; totalBytes: number; lines: number }> {
+  extractor: StreamingMetadataExtractor,
+): Promise<void> {
   await fs.promises.mkdir(path.dirname(outputFile), { recursive: true });
   const writeStream = fs.createWriteStream(outputFile);
 
-  let totalBytes = 0;
-  let lines = 0;
-  const memoryBuffer: string[] = [];
-  let memoryBytes = 0;
-
   for await (const chunk of stdout) {
     const str = (chunk as Buffer).toString("utf-8");
-    const chunkBytes = Buffer.byteLength(str, "utf-8");
-    totalBytes += chunkBytes;
 
     // Write to disk immediately (streaming)
     if (!writeStream.write(str)) {
@@ -65,17 +72,11 @@ async function streamStdoutWithBuffer(
       await new Promise<void>((resolve) => writeStream.once("drain", resolve));
     }
 
-    // Buffer tail in memory for metadata extraction
-    const chunkLines = str.split(/\r?\n/);
-    for (const line of chunkLines) {
-      memoryBuffer.push(line);
-      lines++;
-      const lineBytes = Buffer.byteLength(line, "utf-8") + 1; // +1 for newline
-      memoryBytes += lineBytes;
-
-      while (memoryBytes > maxMemoryBytes && memoryBuffer.length > 1) {
-        const dropped = memoryBuffer.shift()!;
-        memoryBytes -= Buffer.byteLength(dropped, "utf-8") + 1;
+    // Feed each line to the streaming metadata extractor
+    const lines = str.split(/\r?\n/);
+    for (const line of lines) {
+      if (line.length > 0) {
+        extractor.processLine(line);
       }
     }
   }
@@ -86,30 +87,18 @@ async function streamStdoutWithBuffer(
     writeStream.on("error", reject);
     writeStream.end();
   });
-
-  return { memoryTail: memoryBuffer.join("\n"), totalBytes, lines };
 }
 
-/** Utility: read the last N bytes from a file. */
-async function readTailFromFile(filePath: string, maxBytes = 512 * 1024): Promise<string> {
-  try {
-    const stats = await fs.promises.stat(filePath);
-    const start = Math.max(0, stats.size - maxBytes);
-    const stream = fs.createReadStream(filePath, { start, encoding: "utf-8" });
-    const chunks: string[] = [];
-    for await (const chunk of stream) {
-      chunks.push(chunk as string);
-    }
-    return chunks.join("");
-  } catch {
-    return "";
-  }
+/** Default temp output file path. */
+function makeDefaultOutputFile(): string {
+  const dir = path.join(os.homedir(), ".formiga", ".pi-output");
+  return path.join(dir, `pi-output-${process.pid}-${Date.now()}.log`);
 }
 
 export async function runPi(
   args: string[],
   options: RunPiOptions = {},
-): Promise<string> {
+): Promise<RunPiResult> {
   const timeoutMs = (options.timeout ?? 60) * 1000;
   const piPath = await findPiBinary();
 
@@ -120,6 +109,12 @@ export async function runPi(
 
   const preview = formatPiCommandPreview(piPath, args);
   const startedAt = Date.now();
+  const outputFile = options.outputFile ?? makeDefaultOutputFile();
+
+  // Streaming extractor: bounded memory, real-time metadata extraction
+  const maxAssistantKb = parseInt(process.env.FORMIGA_PI_OUTPUT_MAX_MEMORY_KB ?? "256", 10);
+  const maxAssistantBytes = Math.max(4 * 1024, maxAssistantKb * 1024);
+  const extractor = new StreamingMetadataExtractor(maxAssistantBytes);
 
   logger.info("pi pre-launch", {
     commandPreview: preview.commandPreview,
@@ -130,7 +125,7 @@ export async function runPi(
     argCount: preview.argCount,
     timeoutMs,
     workdir: options.workdir,
-    outputFile: options.outputFile ?? null,
+    outputFile,
   });
 
   // Spawn pi in its own process group so termination paths can kill the
@@ -160,7 +155,7 @@ export async function runPi(
     pgid,
     timeoutMs,
     workdir: options.workdir,
-    outputFile: options.outputFile ?? null,
+    outputFile,
   });
 
   // End stdin immediately — pi --print waits for stdin EOF before responding
@@ -178,33 +173,8 @@ export async function runPi(
     }
   });
 
-  // ── stdout handling: disk streaming or in-memory ─────────────────
-  let parseResult: Awaited<ReturnType<typeof parsePiOutputStream>>;
-  let totalStdoutBytes = 0;
-  let usedDiskStreaming = false;
-
-  if (options.outputFile) {
-    // Disk streaming mode: write to file + keep bounded tail in memory
-    const maxMemoryKb = parseInt(process.env.FORMIGA_PI_OUTPUT_MAX_MEMORY_KB ?? "64", 10);
-    const maxMemoryBytes = Math.max(4 * 1024, maxMemoryKb * 1024); // min 4KB
-
-    const { memoryTail, totalBytes, lines } = await streamStdoutWithBuffer(
-      child.stdout!,
-      options.outputFile,
-      maxMemoryBytes,
-    );
-    totalStdoutBytes = totalBytes;
-    usedDiskStreaming = true;
-
-    // Parse metadata from the memory tail
-    const { parsePiOutputFromString } = await import("./binary-discovery.js");
-    parseResult = parsePiOutputFromString(memoryTail, totalBytes, lines);
-  } else {
-    // Legacy in-memory mode: readline + ring buffer
-    const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
-    parseResult = await parsePiOutputStream(rl);
-    totalStdoutBytes = parseResult.totalBytesIngested;
-  }
+  // Stream stdout to disk while extracting metadata in real-time
+  await streamStdoutWithExtractor(child.stdout!, outputFile, extractor);
 
   // Wait for child exit. Apply timeout guard.
   // (stdout was already consumed above, so child should close soon)
@@ -258,6 +228,7 @@ export async function runPi(
   const durationMs = Date.now() - startedAt;
   const stderrOut = stderrPieces.join("");
   const stderrMeta = buildStreamLogMetadata(stderrOut);
+  const metadata = extractor.getMetadata();
 
   if (stderrMeta.preview) {
     logger.warn("pi stderr", {
@@ -268,27 +239,7 @@ export async function runPi(
     });
   }
 
-  // Build result string: if disk streaming, read tail from file; otherwise use buffer content
-  let resultString = "";
-  if (usedDiskStreaming && options.outputFile) {
-    const maxReadBytes = 512 * 1024; // Read up to last 512KB from file for result
-    resultString = await readTailFromFile(options.outputFile, maxReadBytes);
-  } else {
-    // Legacy path: reconstruct from parseResult
-    const filteredLines: string[] = [];
-    if (parseResult.textFallback !== null) {
-      filteredLines.push(parseResult.textFallback);
-    }
-    for (const event of parseResult.events) {
-      filteredLines.push(JSON.stringify(event));
-    }
-    if (parseResult.assistantText.length > 0) {
-      filteredLines.push(parseResult.assistantText);
-    }
-    resultString = filteredLines.join("\n");
-  }
-
-  const stdoutMeta = buildStreamLogMetadata(resultString);
+  const stdoutMeta = buildStreamLogMetadata(metadata.assistantTextTail);
 
   logger.info("pi completed", {
     pid: childPid ?? null,
@@ -296,26 +247,41 @@ export async function runPi(
     durationMs,
     exitCode: child.exitCode,
     signal: child.signalCode,
-    stdoutBytes: stdoutMeta.bytes,
+    stdoutBytes: metadata.totalBytesIngested,
+    stdoutRetainedBytes: stdoutMeta.bytes,
     stdoutPreview: stdoutMeta.preview,
-    stdoutTruncated: stdoutMeta.truncated,
-    stderrBytes: stderrMeta.bytes,
-    hasStderr: stderrMeta.bytes > 0,
-    outputTruncatedByBuffer: parseResult.truncated,
-    totalBytesIngested: parseResult.totalBytesIngested,
-    linesDropped: parseResult.linesDropped,
-    usedDiskStreaming,
+    outputTruncatedByBuffer: metadata.assistantTextTruncated,
+    linesDropped: metadata.linesDropped,
+    statusMarker: metadata.statusMarker,
+    tokenUsage: metadata.tokenUsage,
+    jsonMetadataDetected: metadata.jsonMetadataDetected,
   });
 
-  if (parseResult.truncated) {
+  if (metadata.assistantTextTruncated) {
     logger.warn("pi output exceeded buffer capacity — only tail retained", {
       pid: childPid ?? null,
-      totalBytesIngested: parseResult.totalBytesIngested,
-      linesDropped: parseResult.linesDropped,
+      totalBytesIngested: metadata.totalBytesIngested,
+      linesDropped: metadata.linesDropped,
       retainedBytes: stdoutMeta.bytes,
-      usedDiskStreaming,
     });
   }
 
-  return resultString.trim();
+  // Clean up temp output file unless FORMIGA_KEEP_PI_OUTPUT is set
+  const shouldKeep = process.env.FORMIGA_KEEP_PI_OUTPUT === "1" || process.env.FORMIGA_KEEP_PI_OUTPUT === "true";
+  if (!shouldKeep && !options.outputFile) {
+    try {
+      await fs.promises.unlink(outputFile);
+    } catch {
+      // best effort — file may already be deleted
+    }
+  }
+
+  return {
+    metadata,
+    assistantText: metadata.assistantTextTail,
+    outputFile,
+    durationMs,
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+  };
 }

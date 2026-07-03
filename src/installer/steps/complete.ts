@@ -101,6 +101,18 @@ function postAdvanceSpawn(runId: string): void {
  * Complete a step: validate expects, save output, merge context, advance pipeline.
  */
 export async function completeStep(stepId: string, output: string): Promise<{ status: string; detail?: string }> {
+  // Bound output to 500KB to prevent unbounded DB storage of pi stdout
+  const MAX_STEP_OUTPUT_BYTES = 500 * 1024;
+  if (output.length > MAX_STEP_OUTPUT_BYTES) {
+    const originalBytes = Buffer.byteLength(output, "utf-8");
+    output = output.slice(0, MAX_STEP_OUTPUT_BYTES) + "\n[… truncated]";
+    logger.warn("Step output truncated for storage", {
+      stepId,
+      originalBytes,
+      storedBytes: MAX_STEP_OUTPUT_BYTES,
+    });
+  }
+
   const prisma = getPrisma();
   let now = new Date();
 

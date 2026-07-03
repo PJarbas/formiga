@@ -37,7 +37,7 @@ export const piFanOutExecutor: FanOutExecutor = async (
     `pi-output-${agent.name}-${Date.now()}.log`,
   );
 
-  const stdout = await runPi(
+  const result = await runPi(
     ["--print", "--mode", "json", "--no-session", prompt],
     {
       timeout: AGENT_TIMEOUT_SECONDS,
@@ -46,10 +46,9 @@ export const piFanOutExecutor: FanOutExecutor = async (
     },
   );
 
-  // Determine success / failure from output markers
-  const statusMatch = stdout.match(/STATUS:\s*(\w+)/i);
-  const status = statusMatch?.[1]?.toLowerCase() ?? "unknown";
-  const isSuccess = status === "done" || status === "success";
+  // Use streaming-extracted STATUS marker (already parsed during streaming)
+  const statusMarker = result.metadata.statusMarker ?? "unknown";
+  const isSuccess = statusMarker === "done" || statusMarker === "success";
 
   // Try to read sidecar JSON for structured results (modelers)
   let sidecar: Record<string, unknown> | undefined;
@@ -66,7 +65,7 @@ export const piFanOutExecutor: FanOutExecutor = async (
     }
   }
 
-  return buildAgentResult(agent.name, isSuccess, stdout, sidecar);
+  return buildAgentResult(agent.name, isSuccess, result.assistantText, sidecar);
 };
 
 function buildAgentResult(
@@ -93,7 +92,7 @@ function buildAgentResult(
     trainMean: parseNumeric(sidecar?.train_mean),
     artifactPath: sidecar?.artifact_path as string | undefined,
     trainTimeSeconds: parseNumeric(sidecar?.train_time_seconds),
-    outputs: { fullOutput: stdout },
+    outputs: { summary: stdout.slice(-2048) },
   };
 
   return result;
