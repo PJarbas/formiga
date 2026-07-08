@@ -56,6 +56,7 @@ import {
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
+import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse } from "../shared/dashboard-types.js";
 import { generateReproductionScript } from "./script-templates.js";
 import {
   findActivePipelineRunId,
@@ -986,6 +987,105 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
       },
     });
   })().catch((err) => errorResponse(res, `Failed to get pipeline status: ${(err as Error).message}`));
+}
+
+/** GET /api/pipeline/flow — DAG view: nodes with status/harness/artifacts, edges with labels */
+function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse): void {
+  (async () => {
+    const runId = await findActivePipelineRunId();
+    const currentRound = runId
+      ? (await getPrisma().experiment.aggregate({ where: { run_id: runId }, _max: { round_number: true } }))._max.round_number ?? 0
+      : 0;
+
+    const nodes: PipelineFlowNode[] = await Promise.all(
+      Object.entries(AGENT_INFO_REGISTRY).map(async ([name, info]) => {
+        const status = runId
+          ? (await getAgentUnifiedStatus(runId, name, currentRound)).status
+          : "idle" as const;
+        return {
+          agentId: name,
+          label: info.label,
+          status,
+          harness: info.harness,
+          phase: info.phase,
+          artifactsOut: info.artifactsOut,
+          messagesCount: info.messagesCount,
+        };
+      }),
+    );
+
+    // Static edges: the DAG is fixed for the ML pipeline
+    const edges: PipelineFlowEdge[] = [
+      { from: "data-analyst", to: "feature-engineer", artifactLabel: "eda_report.json", status: "delivered" },
+      { from: "feature-engineer", to: "modeler-classic", artifactLabel: "features.parquet", status: "delivered" },
+      { from: "feature-engineer", to: "modeler-advanced", artifactLabel: "features.parquet", status: "delivered" },
+      { from: "modeler-classic", to: "ml-critic", artifactLabel: "modeler-classic_submission.json", status: "delivered" },
+      { from: "modeler-advanced", to: "ml-critic", artifactLabel: "modeler-advanced_submission.json", status: "delivered" },
+    ];
+
+    // Update edge status based on node progress
+    const nodeStatus = new Map(nodes.map((n) => [n.agentId, n.status]));
+    for (const edge of edges) {
+      const fromStatus = nodeStatus.get(edge.from);
+      const toStatus = nodeStatus.get(edge.to);
+      if (fromStatus === "idle") {
+        edge.status = "pending";
+      } else if (fromStatus === "running") {
+        edge.status = "in-transit";
+      } else if (toStatus === "idle") {
+        edge.status = "in-transit";
+      } else {
+        edge.status = "delivered";
+      }
+    }
+
+    jsonResponse(res, { nodes, edges } satisfies PipelineFlowResponse);
+  })().catch((err) => errorResponse(res, `Failed to get pipeline flow: ${(err as Error).message}`));
+}
+
+/** GET /api/agents/:name/messages — peek at inter-agent mailbox (non-destructive) */
+function handleAgentMessages(_req: http.IncomingMessage, res: http.ServerResponse, agentName: string): void {
+  // The messenger is per-RoundManager instance; in daemon mode we don't have
+  // a live RoundManager. For now, return messages from the most recent
+  // experiments in the DB as a best-effort proxy for inter-agent communication.
+  (async () => {
+    const prisma = getPrisma();
+    const runId = await findActivePipelineRunId();
+    if (!runId) {
+      jsonResponse(res, []);
+      return;
+    }
+
+    // Use experiments as a proxy: each experiment result represents a "message"
+    // from that agent to the rest of the pipeline
+    const experiments = await prisma.experiment.findMany({
+      where: {
+        run_id: runId,
+        agent_name: agentName,
+      },
+      orderBy: { created_at: "asc" },
+      take: 50,
+      select: {
+        agent_name: true,
+        model_type: true,
+        val_metric: true,
+        status: true,
+        created_at: true,
+        hypothesis: true,
+        learned: true,
+      },
+    });
+
+    const messages = experiments.map((exp) => ({
+      from: exp.agent_name,
+      to: "pipeline" as const,
+      timestamp: exp.created_at.toISOString(),
+      content: `${exp.model_type}: val_metric=${exp.val_metric?.toFixed(4) ?? "N/A"} — ${exp.status}${exp.hypothesis ? ` | ${exp.hypothesis}` : ""}`,
+      type: "finding" as const,
+    }));
+
+    jsonResponse(res, messages);
+  })().catch((err) => errorResponse(res, `Failed to get agent messages: ${(err as Error).message}`));
 }
 
 function handleAgents(_req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -2815,6 +2915,12 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
+  // GET /api/pipeline/flow — DAG nodes + edges for Pipeline Flow screen
+  if (method === "GET" && pathname === "/api/pipeline/flow") {
+    handlePipelineFlow(req, res);
+    return;
+  }
+
   // GET /api/agents
   if (method === "GET" && pathname === "/api/agents") {
     handleAgents(req, res);
@@ -2832,6 +2938,13 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   const agentLogsMatch = pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)\/logs$/);
   if (method === "GET" && agentLogsMatch) {
     handleAgentLogs(req, res, agentLogsMatch[1]);
+    return;
+  }
+
+  // GET /api/agents/:name/messages — inter-agent mailbox peek
+  const agentMessagesMatch = pathname.match(/^\/api\/agents\/([a-zA-Z0-9_-]+)\/messages$/);
+  if (method === "GET" && agentMessagesMatch) {
+    handleAgentMessages(req, res, agentMessagesMatch[1]);
     return;
   }
 

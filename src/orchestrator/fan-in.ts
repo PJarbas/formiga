@@ -3,9 +3,12 @@
 // MIGRATED TO PRISMA — repository.register() is now async
 // ══════════════════════════════════════════════════════════════════════
 
+import fs from "node:fs";
+import path from "node:path";
 import type { AgentResult } from "../agents/interfaces.js";
 import type { LeaderboardRepository, NewExperiment } from "../leaderboard/repository.js";
 import type { FanOutResult } from "./fan-out.js";
+import { logger } from "../lib/logger.js";
 
 export interface FanInResult {
   registered: number;
@@ -19,6 +22,7 @@ export async function collectAndRegister(
   repository: LeaderboardRepository,
   runId: string,
   roundNumber: number,
+  workspacePath?: string,
 ): Promise<FanInResult> {
   const collected: FanInResult = { registered: 0, failed: 0, errors: [] };
 
@@ -36,7 +40,7 @@ export async function collectAndRegister(
     }
 
     try {
-      const entry = toNewExperiment(fr.result, runId, roundNumber);
+      const entry = toNewExperiment(fr.result, runId, roundNumber, workspacePath);
       await repository.register(entry);
       collected.registered++;
     } catch (err) {
@@ -54,7 +58,19 @@ function toNewExperiment(
   result: AgentResult,
   runId: string,
   roundNumber: number,
+  workspacePath?: string,
 ): NewExperiment {
+  // Validate artifact existence when workspace is provided
+  if (workspacePath && result.artifactPath) {
+    const fullPath = path.join(workspacePath, result.artifactPath);
+    if (!fs.existsSync(fullPath)) {
+      logger.warn("Artifact not found at reported path", {
+        agentName: result.agentName,
+        artifactPath: result.artifactPath,
+      });
+    }
+  }
+
   return {
     run_id: runId,
     round_number: roundNumber,
@@ -63,7 +79,7 @@ function toNewExperiment(
     hyperparameters: result.hyperparameters ?? {},
     train_metric: result.trainMean ?? 0,
     val_metric: result.cvMean ?? 0,
-    metric_name: "primary",
+    metric_name: result.metricName ?? result.outputs?.metricName ?? "cv_mean",
     artifact_path: result.artifactPath ?? "",
   };
 }

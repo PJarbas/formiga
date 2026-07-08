@@ -49,9 +49,9 @@ async function trainScript(
 ): Promise<{ modelPath: string | null; stdout: string; stderr: string; exitCode: number | null }> {
   const expectedPkl = scriptPath.replace(/\.py$/, ".pkl");
   return new Promise((resolve) => {
-    const child = spawn(`python3 "${scriptPath}"`, {
+    const child = spawn("python3", [scriptPath], {
       cwd: workspacePath,
-      shell: true,
+      shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, FORMIGA_WORKSPACE: workspacePath },
     });
@@ -262,7 +262,7 @@ export async function runArena(
         run_id: config.runId,
         round_number: round,
         agent_name: agent.id,
-        model_type: "arena_script",
+        model_type: agent.modelType ?? agent.id,
         hypothesis: output.hypothesis,
         learned: output.learned,
         next_focus: output.nextFocus,

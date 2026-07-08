@@ -28,6 +28,8 @@ export interface ArenaAgentConfig {
   agentPersona: string;
   timeout: number;
   strategyHint: string;
+  /** Model type label for leaderboard (e.g. "xgboost", "lightgbm"). Falls back to agent id. */
+  modelType?: string;
 }
 
 export interface ArenaSession {

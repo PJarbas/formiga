@@ -150,6 +150,12 @@ export interface AgentInfo {
   phase: PipelinePhase;
   /** Step ID in the `steps` table */
   stepId: string;
+  /** Harness type: pi (direct) or hermes (workflow-driven) */
+  harness: "pi" | "hermes" | "unknown";
+  /** Output artifacts produced by this agent */
+  artifactsOut: string[];
+  /** Pending inter-agent messages count */
+  messagesCount: number;
 }
 
 export interface AgentDetail {
@@ -240,6 +246,33 @@ export interface CrossFinding {
 
 // ── Agent info registry (used by /api/agents) ────────────────────────
 
+// ── Pipeline Flow (DAG view) ──────────────────────────────────────
+
+export interface PipelineFlowNode {
+  agentId: string;
+  label: string;
+  status: DashboardAgentStatus;
+  harness: "pi" | "hermes" | "unknown";
+  phase: PipelinePhase;
+  artifactsOut: string[];
+  messagesCount: number;
+  elapsedSeconds?: number;
+  timeoutSeconds?: number;
+  lastOutputAt?: string;
+}
+
+export interface PipelineFlowEdge {
+  from: string;
+  to: string;
+  artifactLabel: string;
+  status: "pending" | "in-transit" | "delivered";
+}
+
+export interface PipelineFlowResponse {
+  nodes: PipelineFlowNode[];
+  edges: PipelineFlowEdge[];
+}
+
 export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
   "data-analyst": {
     name: "data-analyst",
@@ -249,6 +282,9 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     model: "sonnet",
     phase: "data_analysis",
     stepId: "eda",
+    harness: "pi",
+    artifactsOut: ["eda_report.json"],
+    messagesCount: 0,
   },
   "feature-engineer": {
     name: "feature-engineer",
@@ -258,6 +294,9 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     model: "sonnet",
     phase: "feature_engineering",
     stepId: "features",
+    harness: "pi",
+    artifactsOut: ["features.parquet", "split.pkl", "split.checksum"],
+    messagesCount: 0,
   },
   "modeler-classic": {
     name: "modeler-classic",
@@ -267,6 +306,9 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     model: "sonnet",
     phase: "modeling",
     stepId: "model-classic",
+    harness: "pi",
+    artifactsOut: ["modeler-classic_submission.json"],
+    messagesCount: 0,
   },
   "modeler-advanced": {
     name: "modeler-advanced",
@@ -276,6 +318,9 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     model: "sonnet",
     phase: "modeling",
     stepId: "model-advanced",
+    harness: "hermes",
+    artifactsOut: ["modeler-advanced_submission.json"],
+    messagesCount: 0,
   },
   "ml-critic": {
     name: "ml-critic",
@@ -285,6 +330,9 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     model: "sonnet",
     phase: "audit",
     stepId: "audit",
+    harness: "pi",
+    artifactsOut: ["audit_report.json"],
+    messagesCount: 0,
   },
 };
 
