@@ -20,7 +20,7 @@
 | # | Task | Status | Files Changed |
 |---|------|--------|---------------|
 | 0.9.1-2 | Inject previousFailures/previousSuccesses into context | ✅ Done | `interfaces.ts`, `round-manager.ts` |
-| 0.9.3 | Arena warm-start with getBestByDatasetSignature | ⬜ Pending | `arena-engine.ts` |
+| 0.9.3 | Arena warm-start with getBestByDatasetSignature | ✅ Done | `arena-engine.ts`, `arena-types.ts` |
 | 0.9.4 | Protocol in AGENTS.md files | ⬜ Pending | `workflows/*/AGENTS.md` |
 
 ## Phase 0.10 — Artifact Validation
@@ -30,7 +30,7 @@
 | 0.10.1 | Sidecar validation schema | ✅ Done | New `sidecar-schema.ts`, `ingest.ts` |
 | 0.10.2 | Validate artifact_path existence | ✅ Done | `fan-in.ts` |
 | 0.10.3 | Split checksum in AGENTS.md | ⬜ Pending | `workflows/*/AGENTS.md` |
-| 0.10.4 | onSpawn callback in piFanOutExecutor | ⬜ Pending | `pi-executor.ts` |
+| 0.10.4 | onSpawn callback in piFanOutExecutor | ✅ Done | `fan-out.ts` |
 
 ## Phase 1 — Backend Infrastructure for New UI
 
@@ -40,7 +40,7 @@
 | 1.2 | PipelineFlowNode/Edge types | ✅ Done | `dashboard-types.ts` |
 | 1.3 | GET /api/pipeline/flow endpoint | ✅ Done | `dashboard.ts` |
 | 1.4 | GET /api/agents/:name/messages endpoint | ✅ Done | `dashboard.ts` |
-| 1.5 | Harness field in streaming metadata | ⬜ Pending | `streaming-metadata-extractor.ts` |
+| 1.5 | Harness field in streaming metadata | ✅ Done | `streaming-metadata-extractor.ts` |
 
 ## Phase 2 — ML Leaderboard Redesign
 
@@ -75,14 +75,14 @@
 
 | # | Task | Status | Files Changed |
 |---|------|--------|---------------|
-| 5.1 | Remove unused workflows | ⬜ Pending | `workflows/` |
-| 5.2 | Remove legacy agent implementations | ⬜ Pending | `src/agents/` |
-| 5.3 | Remove orchestrator legacy | ⬜ Pending | `src/orchestrator/` |
-| 5.4 | Remove kanban components | ⬜ Pending | `screens/` |
-| 5.5 | Clean tests | ⬜ Pending | Tests |
-| 5.6 | CLI simplification | ⬜ Pending | `cli.ts` |
+| 5.1 | Remove unused workflows | ✅ Done | `workflows/` |
+| 5.2 | Remove legacy agent implementations | ✅ N/A | All agents in active use by RoundManager |
+| 5.3 | Remove orchestrator legacy | ✅ N/A | All orchestrator files in active use |
+| 5.4 | Remove kanban components | ✅ Done | `ExperimentBoard.tsx`, `kanban-data.ts`, routes |
+| 5.5 | Clean tests | ✅ Done | Removed `dashboard-kanban.test.ts`, `kanban-data.test.ts` |
+| 5.6 | CLI simplification | ⬜ Pending | `cli.ts` — backward compat concern |
 | 5.7 | Validation checklist | ⬜ Pending | — |
-| 5.8 | Migration docs | ⬜ Pending | `docs/MIGRATION-v2.md` |
+| 5.8 | Migration docs | ✅ Done | `docs/MIGRATION-v2.md` |
 
 ## Build Verification
 

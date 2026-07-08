@@ -5,12 +5,10 @@
  *
  * Routes:
  *   GET /                        -> React SPA (ML dashboard)
- *   GET /runs/:id/kanban         -> redirect to /kanban (React SPA)
  *   GET /api/autoresearch/runs   -> list workflow runs with AutoResearch state
  *   GET /api/runs                -> list all workflow runs
  *   GET /api/runs/:id            -> detail for a specific run
  *   GET /api/runs/:id/autoresearch -> AutoResearch progress for a run's harness cwd
- *   GET /api/runs/:id/kanban     -> lane-grouped snapshot for the kanban view
  *   GET /api/events              -> recent events (global)
  *   DELETE /api/runs/:id         -> permanently delete a run and all associated data
  *   GET /api/logs-tail           -> logs-tail formatted event lines (cursor based)
@@ -38,7 +36,6 @@ import { getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionByI
 import { getPrisma } from "../database/prisma.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
-import { getKanbanSnapshot, getKanbanCardDetail } from "./kanban-data.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
 import { runWorkflow } from "../installer/run.js";
 import { stopWorkflow, deleteWorkflow, getWorkflowStatus } from "../installer/status.js";
@@ -300,51 +297,6 @@ function handleRunDetail(
 
     jsonResponse(res, { run, steps, events, worktree, failure_reason, prompt: run.task });
   })().catch((err) => errorResponse(res, `Failed to get run detail: ${(err as Error).message}`));
-}
-
-function handleRunKanbanCardDetail(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  runId: string,
-): void {
-  try {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const cardId = url.searchParams.get("cardId")?.trim();
-
-    if (!cardId) {
-      errorResponse(res, "Missing required query parameter: cardId", 400);
-      return;
-    }
-
-    (async () => {
-      const events = getRunEvents(runId);
-      const detail = await getKanbanCardDetail(runId, cardId, events);
-
-      if (!detail) {
-        errorResponse(res, `Card not found: ${cardId} in run ${runId}`, 404);
-        return;
-      }
-
-      jsonResponse(res, detail);
-    })().catch((err) => errorResponse(res, `Failed to build card detail: ${(err as Error).message}`));
-  } catch (err) {
-    errorResponse(res, `Failed to build card detail: ${(err as Error).message}`);
-  }
-}
-
-function handleRunKanban(
-  _req: http.IncomingMessage,
-  res: http.ServerResponse,
-  runId: string,
-): void {
-  (async () => {
-    const snapshot = await getKanbanSnapshot(runId);
-    if (!snapshot) {
-      errorResponse(res, `Run not found: ${runId}`, 404);
-      return;
-    }
-    jsonResponse(res, snapshot);
-  })().catch((err) => errorResponse(res, `Failed to build kanban snapshot: ${(err as Error).message}`));
 }
 
 function handleRunAutoresearch(
@@ -2778,28 +2730,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // React SPA default
   if (method === "GET" && pathname === "/") {
     serveStaticFile(res, path.join(DASHBOARD_DIST, "index.html"));
-    return;
-  }
-
-  // GET /runs/:id/kanban -> redirect to new kanban
-  const kanbanHtmlMatch = pathname.match(/^\/runs\/([a-zA-Z0-9_-]+)\/kanban$/);
-  if (method === "GET" && kanbanHtmlMatch) {
-    res.writeHead(302, { Location: "/kanban" });
-    res.end();
-    return;
-  }
-
-  // GET /api/runs/:id/kanban/card-detail (registered before /api/runs/:id/kanban and /api/runs/:id)
-  const cardDetailMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/kanban\/card-detail$/);
-  if (method === "GET" && cardDetailMatch) {
-    handleRunKanbanCardDetail(req, res, cardDetailMatch[1]);
-    return;
-  }
-
-  // GET /api/runs/:id/kanban (registered before /api/runs/:id below)
-  const kanbanApiMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/kanban$/);
-  if (method === "GET" && kanbanApiMatch) {
-    handleRunKanban(req, res, kanbanApiMatch[1]);
     return;
   }
 

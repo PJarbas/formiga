@@ -148,7 +148,7 @@ async function benchmarkOne(
 export async function runArena(
   config: ArenaConfig,
   repo: ArenaRepository,
-  leaderboardRepo: { registerArena(entry: ArenaExperiment): Promise<number> },
+  leaderboardRepo: { registerArena(entry: ArenaExperiment): Promise<number>; getBestByDatasetSignature(signature: string, limit?: number): Promise<Array<{ model_type: string; hyperparameters: Record<string, unknown>; val_metric: number }>> },
   // We inject a function that runs agents in parallel and returns their outputs.
   runAgentsParallel: (
     prompts: Record<string, string>,
@@ -204,12 +204,23 @@ export async function runArena(
   // Read dataset context once for the entire arena run
   const datasetCtx = readDatasetContext(config.workspacePath);
 
+  // Warm-start: inject past best results for this dataset signature
+  let warmStartHints: string[] = [];
+  if (config.datasetSignature) {
+    try {
+      const pastBest = await leaderboardRepo.getBestByDatasetSignature(config.datasetSignature, 3);
+      warmStartHints = pastBest.map((r, i) =>
+        `  ${i + 1}. ${r.model_type} (val_metric=${r.val_metric}) — ${JSON.stringify(r.hyperparameters)}`
+      );
+    } catch { /* best-effort: warm-start is optional */ }
+  }
+
   // 3. Round loop
   for (let round = 1; round <= config.maxRounds; round++) {
     session.currentRound = round;
 
     // Build prompts with dataset context for complexity-aware generation
-    const prompts = buildPromptsForRound(config, session, allResults, datasetCtx);
+    const prompts = buildPromptsForRound(config, session, allResults, datasetCtx, warmStartHints);
 
     // Fan-out: run all agents in parallel
     const agentOutputs = await runAgentsParallel(prompts, config);
@@ -342,6 +353,7 @@ function buildPromptsForRound(
   session: ArenaSession,
   allResults: AgentRoundResult[],
   datasetCtx: DatasetContext,
+  warmStartHints: string[] = [],
 ): Record<string, string> {
   const prompts: Record<string, string> = {};
 
@@ -382,6 +394,10 @@ function buildPromptsForRound(
       }
     }
     prompt += `\n### Strategy\n${agent.strategyHint}\n\n`;
+    if (warmStartHints.length > 0 && session.currentRound === 1) {
+      prompt += `### Warm-Start: Past Best for This Dataset\n`;
+      prompt += warmStartHints.join("\n") + "\n\n";
+    }
     prompt += `### Rules\n`;
     prompt += `- Write a STANDALONE Python script that trains a model and evaluates it.\n`;
     prompt += `- The script must read benchmark_config.json from the workspace root.\n`;

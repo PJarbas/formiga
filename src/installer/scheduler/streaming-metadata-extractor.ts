@@ -36,6 +36,8 @@ export interface ExtractedMetadata {
   totalLines: number;
   /** Lines dropped from the assistant text buffer */
   linesDropped: number;
+  /** Harness type that produced this output (e.g. "pi", "arena_script") */
+  harness: string | null;
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────
@@ -91,6 +93,7 @@ export class StreamingMetadataExtractor {
   private jsonDetected = false;
   private runId: string | null = null;
   private stepId: string | null = null;
+  private harness: string | null = null;
 
   constructor(maxAssistantBytes = 256 * 1024) {
     this.maxAssistantBytes = maxAssistantBytes;
@@ -106,6 +109,12 @@ export class StreamingMetadataExtractor {
     const statusMatch = line.match(/^STATUS:\s*(\S+)/i);
     if (statusMatch) {
       this.statusMarker = statusMatch[1].toLowerCase();
+    }
+
+    // 1b. Check for HARNESS marker
+    const harnessMatch = line.match(/^HARNESS:\s*(\S+)/i);
+    if (harnessMatch) {
+      this.harness = harnessMatch[1].toLowerCase();
     }
 
     // 2. Check for JSON event (message_end, etc.)
@@ -199,6 +208,7 @@ export class StreamingMetadataExtractor {
       totalBytesIngested: this.totalBytes,
       totalLines: this.totalLines,
       linesDropped: this.linesDropped,
+      harness: this.harness,
     };
   }
 }

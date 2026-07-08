@@ -21,6 +21,8 @@ export interface ArenaConfig {
   commitOnKeep: boolean;
   revertOnDiscard: boolean;
   agents: ArenaAgentConfig[];
+  /** Dataset signature for warm-start lookups across runs */
+  datasetSignature?: string;
 }
 
 export interface ArenaAgentConfig {
