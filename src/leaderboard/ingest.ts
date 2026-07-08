@@ -8,6 +8,7 @@ import path from "node:path";
 import { LeaderboardRepositoryImpl } from "./repository.js";
 import type { NewExperiment } from "./repository.js";
 import { logger } from "../lib/logger.js";
+import { validateSubmissionSidecar } from "./sidecar-schema.js";
 
 /**
  * Agent ids (suffix-matched against scoped agent_id `<workflow>_<id>`)
@@ -73,6 +74,18 @@ function readSubmissionSidecar(
     });
     return null;
   }
+
+  // Validate against sidecar schema — reject invalid submissions explicitly
+  const validation = validateSubmissionSidecar(parsed);
+  if (!validation.valid) {
+    logger.error("Sidecar validation failed", {
+      agentId,
+      path: candidate,
+      errors: validation.errors,
+    });
+    return null;
+  }
+
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }

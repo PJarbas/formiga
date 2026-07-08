@@ -25,6 +25,8 @@ export interface FanOutConfig {
   timeoutMs: number;
   executor: FanOutExecutor;
   maxConcurrency?: number;
+  /** Called right before each agent starts — useful for logging/metrics hooks */
+  onSpawn?: (agentName: string) => void;
 }
 
 export interface FanOutResult {
@@ -36,20 +38,20 @@ export interface FanOutResult {
 
 /** Dispatch multiple agents in parallel. Each gets its own timeout. */
 export async function fanOut(config: FanOutConfig): Promise<FanOutResult[]> {
-  const { agents, context, timeoutMs, executor, maxConcurrency } = config;
+  const { agents, context, timeoutMs, executor, maxConcurrency, onSpawn } = config;
 
   // If maxConcurrency is set, run in batches
   if (maxConcurrency && maxConcurrency > 0 && agents.length > maxConcurrency) {
     const results: FanOutResult[] = [];
     for (let i = 0; i < agents.length; i += maxConcurrency) {
       const batch = agents.slice(i, i + maxConcurrency);
-      const batchResults = await runBatch(batch, context, timeoutMs, executor);
+      const batchResults = await runBatch(batch, context, timeoutMs, executor, onSpawn);
       results.push(...batchResults);
     }
     return results;
   }
 
-  return runBatch(agents, context, timeoutMs, executor);
+  return runBatch(agents, context, timeoutMs, executor, onSpawn);
 }
 
 async function runBatch(
@@ -57,8 +59,12 @@ async function runBatch(
   context: AgentContext,
   timeoutMs: number,
   executor: FanOutExecutor,
+  onSpawn?: (agentName: string) => void,
 ): Promise<FanOutResult[]> {
-  const promises = agents.map((agent) => runWithTimeout(agent, context, timeoutMs, executor));
+  const promises = agents.map((agent) => {
+    onSpawn?.(agent.name);
+    return runWithTimeout(agent, context, timeoutMs, executor);
+  });
   const settlements = await Promise.allSettled(promises);
 
   return settlements.map((s, i) => {

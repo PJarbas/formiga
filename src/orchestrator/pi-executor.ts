@@ -51,9 +51,11 @@ export const piFanOutExecutor: FanOutExecutor = async (
   const isSuccess = statusMarker === "done" || statusMarker === "success";
 
   // Try to read sidecar JSON for structured results (modelers)
+  // Canonical path: {workspace}/artifacts/{agent}_submission.json
   let sidecar: Record<string, unknown> | undefined;
   const sidecarPath = path.join(
     context.workspacePath,
+    "artifacts",
     `${agent.name}_submission.json`,
   );
   if (fs.existsSync(sidecarPath)) {
@@ -92,6 +94,7 @@ function buildAgentResult(
     trainMean: parseNumeric(sidecar?.train_mean),
     artifactPath: sidecar?.artifact_path as string | undefined,
     trainTimeSeconds: parseNumeric(sidecar?.train_time_seconds),
+    metricName: sidecar?.metric_name as string | undefined,
     outputs: { summary: stdout.slice(-2048) },
   };
 
@@ -99,11 +102,19 @@ function buildAgentResult(
 }
 
 function extractFailureReason(stdout: string): string {
-  const changesMatch = stdout.match(/CHANGES:\s*(.+?)(?:\n|$)/is);
-  if (changesMatch) return `Failed: ${changesMatch[1].trim()}`;
-  const testsMatch = stdout.match(/TESTS:\s*(.+?)(?:\n|$)/is);
-  if (testsMatch) return `Failed during tests: ${testsMatch[1].trim()}`;
-  return "Agent failed without explicit reason";
+  const patterns = [
+    /ERROR:\s*(.+?)(?:\n|$)/i,
+    /Exception:\s*(.+?)(?:\n|$)/i,
+    /Traceback[\s\S]{0,200}/,
+    /STATUS:\s*fail(?:ed)?\s*[-—]\s*(.+?)(?:\n|$)/i,
+  ];
+  for (const re of patterns) {
+    const m = stdout.match(re);
+    if (m) return m[1]?.trim() ?? m[0].slice(0, 200);
+  }
+  // Fallback: last non-empty line
+  const lastLine = stdout.trim().split("\n").at(-1)?.trim();
+  return lastLine || "Agent failed without explicit reason";
 }
 
 function parseNumeric(value: unknown): number | undefined {

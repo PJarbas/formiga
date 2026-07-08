@@ -5,6 +5,7 @@
 
 import { getPrisma } from "../database/prisma.js";
 import type { ExperimentRow } from "./repository.js";
+import { toExperimentRow } from "./serializers.js";
 
 /** All experiments for a run, newest first. */
 export async function getExperimentsForRun(runId: string): Promise<ExperimentRow[]> {
@@ -100,7 +101,10 @@ export async function getFailedConfigsForAgent(
   const prisma = getPrisma();
   const rows = await prisma.experiment.findMany({
     where: {
-      agent_name: { endsWith: `_${agentName}` },
+      OR: [
+        { agent_name: agentName },
+        { agent_name: { endsWith: `_${agentName}` } },
+      ],
       status: { in: ["FAILED", "OVERFITTED"] },
     },
     orderBy: { created_at: "desc" },
@@ -133,7 +137,10 @@ export async function getSucceededConfigsForAgent(
   const prisma = getPrisma();
   const rows = await prisma.experiment.findMany({
     where: {
-      agent_name: { endsWith: `_${agentName}` },
+      OR: [
+        { agent_name: agentName },
+        { agent_name: { endsWith: `_${agentName}` } },
+      ],
       status: { in: ["SUCCESS", "AUDITED"] },
     },
     orderBy: { val_metric: "desc" },
@@ -228,64 +235,4 @@ function safeJsonParse(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
-}
-
-function toExperimentRow(model: {
-  experiment_id: number;
-  run_id: string;
-  round_number: number;
-  agent_name: string;
-  model_type: string;
-  hyperparameters: string;
-  train_metric: number;
-  val_metric: number;
-  test_metric: number | null;
-  metric_name: string;
-  artifact_path: string;
-  status: string;
-  error_message: string | null;
-  dataset_signature: string | null;
-  created_at: Date;
-  hypothesis: string | null;
-  learned: string | null;
-  next_focus: string | null;
-  measured_metric: number | null;
-  benchmark_stdout: string | null;
-  benchmark_stderr: string | null;
-  benchmark_exit_code: number | null;
-  confidence_score: number | null;
-  confidence_band: string | null;
-  decision: string | null;
-  duration_ms: number | null;
-  artifact_script: string | null;
-}): ExperimentRow {
-  return {
-    experiment_id: model.experiment_id,
-    run_id: model.run_id,
-    round_number: model.round_number,
-    agent_name: model.agent_name,
-    model_type: model.model_type,
-    hyperparameters: safeJsonParse(model.hyperparameters),
-    train_metric: model.train_metric,
-    val_metric: model.val_metric,
-    test_metric: model.test_metric,
-    metric_name: model.metric_name,
-    artifact_path: model.artifact_path,
-    status: model.status as ExperimentRow["status"],
-    error_message: model.error_message,
-    dataset_signature: model.dataset_signature,
-    created_at: model.created_at.toISOString(),
-    hypothesis: model.hypothesis,
-    learned: model.learned,
-    next_focus: model.next_focus,
-    measured_metric: model.measured_metric,
-    benchmark_stdout: model.benchmark_stdout,
-    benchmark_stderr: model.benchmark_stderr,
-    benchmark_exit_code: model.benchmark_exit_code,
-    confidence_score: model.confidence_score,
-    confidence_band: model.confidence_band,
-    decision: model.decision,
-    duration_ms: model.duration_ms,
-    artifact_script: model.artifact_script,
-  };
 }

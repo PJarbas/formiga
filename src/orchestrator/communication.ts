@@ -6,11 +6,21 @@ import type { AgentMessage, AgentMessenger } from "../agents/interfaces.js";
 
 export class AgentMessengerImpl implements AgentMessenger {
   private mailboxes = new Map<string, AgentMessage[]>();
+  /** Registry of all known agents — broadcast iterates this, not mailboxes.keys(). */
+  private knownAgents = new Set<string>();
+
+  /** Register an agent so broadcast can reach it even before any message arrives. */
+  register(agentName: string): void {
+    this.knownAgents.add(agentName);
+    if (!this.mailboxes.has(agentName)) {
+      this.mailboxes.set(agentName, []);
+    }
+  }
 
   send(message: AgentMessage): void {
-    const box = this.mailboxes.get(message.to) ?? [];
+    this.register(message.to);
+    const box = this.mailboxes.get(message.to)!;
     box.push(message);
-    this.mailboxes.set(message.to, box);
   }
 
   receive(agentName: string): AgentMessage[] {
@@ -21,7 +31,7 @@ export class AgentMessengerImpl implements AgentMessenger {
 
   broadcast(from: string, content: string): void {
     const timestamp = new Date().toISOString();
-    for (const agentName of this.mailboxes.keys()) {
+    for (const agentName of this.knownAgents) {
       if (agentName !== from) {
         this.send({
           from,

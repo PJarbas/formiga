@@ -11,6 +11,22 @@ export interface AgentContext {
   config?: Record<string, unknown>;
   previousResults?: AgentResult[];
   messages?: AgentMessage[];
+  /** Live reference to the inter-agent messenger for sending messages. */
+  messenger?: AgentMessenger;
+  /** Metric name optimized by this agent (e.g. "cv_mean", "cv_rmse"). */
+  metricName?: string;
+  /** Cross-run history: configs that failed or were rejected. */
+  previousFailures?: Array<{
+    model_type: string;
+    hyperparameters: Record<string, unknown>;
+    reject_reason: string | null;
+  }>;
+  /** Cross-run history: configs that succeeded. */
+  previousSuccesses?: Array<{
+    model_type: string;
+    hyperparameters: Record<string, unknown>;
+    val_metric: number;
+  }>;
 }
 
 // ── Agent result (output) ──────────────────────────────────────────────
@@ -34,6 +50,8 @@ export interface AgentResult {
   errorMessage?: string;
   reportPath?: string;
   outputs?: Record<string, string>;
+  /** Metric name optimized by this agent (e.g. "cv_mean", "cv_rmse"). */
+  metricName?: string;
 }
 
 // ── Plan mode (modelers) ───────────────────────────────────────────────

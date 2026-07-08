@@ -11,8 +11,8 @@ import { Breadcrumb } from "./components/Breadcrumb";
 
 const NAV_ITEMS = [
   { to: "/", label: "Command Center", end: true },
-  { to: "/kanban", label: "Experiment Board" },
-  { to: "/leaderboard", label: "Model Arena" },
+  { to: "/pipeline", label: "Pipeline Flow" },
+  { to: "/leaderboard", label: "ML Leaderboard" },
 ];
 
 export default function App() {
