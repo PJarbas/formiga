@@ -20,7 +20,7 @@ interface TileData {
 function computeTiles(entries: LeaderboardEntry[], bestCvMean: number | null): TileData[] {
   const valid = entries.filter((e) => e.status !== "FAILED" && e.status !== "OVERFITTED");
   const bestEntry = valid.length > 0
-    ? valid.reduce((best, e) => ((e.cvMean ?? -Infinity) > (best.cvMean ?? -Infinity) ? e : best)), valid[0])
+    ? valid.reduce((best, e) => ((e.cvMean ?? -Infinity) > (best.cvMean ?? -Infinity) ? e : best), valid[0])
     : null;
 
   const modelTypes = new Set(valid.map((e) => e.modelType)).size;
