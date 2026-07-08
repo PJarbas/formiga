@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import App from "./App";
 import CommandCenter from "./screens/CommandCenter";
-import ExperimentBoard from "./screens/ExperimentBoard";
+import PipelineFlowScreen from "./screens/PipelineFlowScreen";
 import Leaderboard from "./screens/Leaderboard";
 import { ToastContainer } from "./components/Toast";
 import "./index.css";
@@ -29,9 +29,10 @@ const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <CommandCenter /> },
-      { path: "kanban", element: <ExperimentBoard /> },
+      { path: "pipeline", element: <PipelineFlowScreen /> },
       { path: "leaderboard", element: <Leaderboard /> },
-      { path: "runs/:id/kanban", element: <Navigate to="/kanban" replace /> },
+      { path: "kanban", element: <Navigate to="/pipeline" replace /> },
+      { path: "runs/:id/kanban", element: <Navigate to="/pipeline" replace /> },
       { path: "*", element: <CommandCenter /> },
     ],
   },

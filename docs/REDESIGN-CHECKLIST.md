@@ -46,30 +46,30 @@
 
 | # | Task | Status | Files Changed |
 |---|------|--------|---------------|
-| 2.1 | StatTiles component | ⬜ Pending | New `StatTiles.tsx` |
-| 2.2 | AucBarChart (CSS pure) | ⬜ Pending | New `AucBarChart.tsx` |
-| 2.3 | GapPill + FoldSparkline | ⬜ Pending | New components |
-| 2.4 | Refactor ExperimentsTable | ⬜ Pending | `ExperimentsTable.tsx` |
-| 2.5 | ArenaSectionCollapsible | ⬜ Pending | New component |
-| 2.6 | Remove ECharts from main view | ⬜ Pending | Leaderboard screen |
+| 2.1 | StatTiles component | ✅ Done | New `StatTiles.tsx` |
+| 2.2 | AucBarChart (CSS pure) | ✅ Done | New `AucBarChart.tsx` |
+| 2.3 | GapPill + FoldSparkline | ✅ Done | New `GapPill.tsx`, `FoldSparkline.tsx` |
+| 2.4 | Refactor ExperimentsTable | ✅ Done | `Leaderboard.tsx` (redesigned) |
+| 2.5 | ArenaSectionCollapsible | ✅ Done | New `ArenaSectionCollapsible.tsx` |
+| 2.6 | Remove ECharts from main view | ✅ Done | `Leaderboard.tsx` (replaced with AucBarChart) |
 
 ## Phase 3 — Pipeline Flow (replaces kanban)
 
 | # | Task | Status | Files Changed |
 |---|------|--------|---------------|
-| 3.1 | PipelineFlowScreen (DAG + CSS Grid) | ⬜ Pending | New component |
-| 3.2 | AgentNode (with timeout progress) | ⬜ Pending | New component |
-| 3.3 | ArtifactEdge (SVG animated) | ⬜ Pending | New component |
-| 3.4 | AgentSidePanel (5 tabs) | ⬜ Pending | New component |
-| 3.5 | /pipeline route, remove /kanban | ⬜ Pending | `App.tsx`, routing |
+| 3.1 | PipelineFlowScreen (DAG + CSS Grid) | ✅ Done | New `PipelineFlowScreen.tsx` |
+| 3.2 | AgentNode (with timeout progress) | ✅ Done | New `AgentNode.tsx` |
+| 3.3 | ArtifactEdge (SVG animated) | ✅ Done | New `ArtifactEdge.tsx` |
+| 3.4 | AgentSidePanel (5 tabs) | ✅ Done | New `AgentSidePanel.tsx` |
+| 3.5 | /pipeline route, remove /kanban | ✅ Done | `main.tsx`, `App.tsx` |
 
 ## Phase 4 — App Shell Refinement
 
 | # | Task | Status | Files Changed |
 |---|------|--------|---------------|
-| 4.1 | Nav: Command Center \| Pipeline Flow \| ML Leaderboard | ⬜ Pending | `App.tsx` |
-| 4.2 | Remove Phase/Agent toggle | ⬜ Pending | `App.tsx` |
-| 4.3 | Update breadcrumbs | ⬜ Pending | `App.tsx` |
+| 4.1 | Nav: Command Center | Pipeline Flow | ML Leaderboard | ✅ Done | `App.tsx` |
+| 4.2 | Remove Phase/Agent toggle | ✅ Done | `Leaderboard.tsx` (removed chart toggle) |
+| 4.3 | Update breadcrumbs | ✅ Done | Nav items updated |
 
 ## Phase 5 — Dead Code Cleanup
 
