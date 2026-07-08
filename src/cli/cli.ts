@@ -1676,6 +1676,10 @@ Examples:
   if (group === "autoresearch") {
     const cwd = readOption(args, "--cwd");
 
+    if (action && ["init", "run-experiment", "log-experiment", "status", "next", "loop", "prune", "wizard", "run-loop-iteration"].includes(action)) {
+      process.stderr.write(`[DEPRECATED] "formiga autoresearch ${action}" is deprecated. Use "formiga autoresearch <task>" instead.\n`);
+    }
+
     const legacyAutoresearchCommands = new Set([
       "init",
       "run-experiment",

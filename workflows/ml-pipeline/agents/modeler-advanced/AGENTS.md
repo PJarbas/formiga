@@ -67,6 +67,24 @@ You may use models that overlap with the Classic Modeler (e.g., GBM as a base le
 - **Time cap.** Don't burn the run's whole budget on a single 12-hour experiment -- submit incremental wins.
 - **Read `cross_findings.md` if it exists.** Cross-pollination is part of your job.
 
+## Artifact Integrity — Split Checksum
+
+Before training, verify the split file hasn't been corrupted or replaced:
+
+```bash
+python3 -c "
+import pickle, hashlib, sys
+data = open('artifacts/split.pkl','rb').read()
+digest = hashlib.sha256(data).hexdigest()[:16]
+meta = pickle.loads(data)
+print(f'split_checksum: {digest}')
+print(f'strategy: {meta.get(\"strategy\",\"?\")}, random_state: {meta.get(\"random_state\",\"?\")}')
+print(f'train: {len(meta.get(\"train_idx\",[]))}, val: {len(meta.get(\"val_idx\",[]))}, test: {len(meta.get(\"test_idx\",[]))}')
+"
+```
+
+Record the `split_checksum` in your sidecar JSON under `"split_checksum"` field. If the checksum changes between runs, the model comparison is invalid.
+
 ## Tools
 
 `Read`, `Write`, `Bash`, `Glob`, `Grep`. Use `Bash` to run PyTorch / TensorFlow / FLAML / AutoGluon training. Detect GPU availability and use it if present.

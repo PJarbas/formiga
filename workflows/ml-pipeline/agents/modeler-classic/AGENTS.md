@@ -95,6 +95,24 @@ Before finalizing candidate models, evaluate the techniques below and apply thos
 - **Honest CV.** Same folds across all candidates so CV means are comparable.
 - **Read `cross_findings.md` if it exists.** Don't reinvent what your sibling already discovered.
 
+## Artifact Integrity — Split Checksum
+
+Before training, verify the split file hasn't been corrupted or replaced:
+
+```bash
+python3 -c "
+import pickle, hashlib, sys
+data = open('artifacts/split.pkl','rb').read()
+digest = hashlib.sha256(data).hexdigest()[:16]
+meta = pickle.loads(data)
+print(f'split_checksum: {digest}')
+print(f'strategy: {meta.get(\"strategy\",\"?\")}, random_state: {meta.get(\"random_state\",\"?\")}')
+print(f'train: {len(meta.get(\"train_idx\",[]))}, val: {len(meta.get(\"val_idx\",[]))}, test: {len(meta.get(\"test_idx\",[]))}')
+"
+```
+
+Record the `split_checksum` in your sidecar JSON under `"split_checksum"` field. If the checksum changes between runs, the model comparison is invalid.
+
 ## Tools
 
 `Read`, `Write`, `Bash`, `Glob`, `Grep`. Use `Bash` to run scikit-learn / XGBoost / LightGBM / CatBoost training scripts.

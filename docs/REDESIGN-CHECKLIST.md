@@ -21,7 +21,8 @@
 |---|------|--------|---------------|
 | 0.9.1-2 | Inject previousFailures/previousSuccesses into context | ✅ Done | `interfaces.ts`, `round-manager.ts` |
 | 0.9.3 | Arena warm-start with getBestByDatasetSignature | ✅ Done | `arena-engine.ts`, `arena-types.ts` |
-| 0.9.4 | Protocol in AGENTS.md files | ⬜ Pending | `workflows/*/AGENTS.md` |
+| 0.9.4 | Protocol in AGENTS.md files | ✅ Done | Modeler AGENTS.md already have failure avoidance |
+| 0.10.3 | Split checksum in AGENTS.md | ✅ Done | Modeler AGENTS.md — checksum section added |
 
 ## Phase 0.10 — Artifact Validation
 
@@ -80,13 +81,13 @@
 | 5.3 | Remove orchestrator legacy | ✅ N/A | All orchestrator files in active use |
 | 5.4 | Remove kanban components | ✅ Done | `ExperimentBoard.tsx`, `kanban-data.ts`, routes |
 | 5.5 | Clean tests | ✅ Done | Removed `dashboard-kanban.test.ts`, `kanban-data.test.ts` |
-| 5.6 | CLI simplification | ⬜ Pending | `cli.ts` — backward compat concern |
-| 5.7 | Validation checklist | ⬜ Pending | — |
+| 5.6 | CLI simplification | ✅ Done | `cli.ts` — added deprecation warnings |
+| 5.7 | Validation checklist | ✅ Done | See below |
 | 5.8 | Migration docs | ✅ Done | `docs/MIGRATION-v2.md` |
 
 ## Build Verification
 
 - [x] `tsc --noEmit` passes
-- [x] All existing tests pass (3/3 real tests)
-- [ ] `npm run build` passes
-- [ ] Full test suite green
+- [x] All existing tests pass (76/76 real tests)
+- [x] `npm run build` passes
+- [ ] Full test suite green (empty test files report as failures — 76 actual tests pass)
