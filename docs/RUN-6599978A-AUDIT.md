@@ -970,19 +970,19 @@ Adicionar referencia a este audit e listar os BUGs 1-10 como issues conhecidos c
 - [x] **FIX-1.1b**: Aumentar threshold de thinking para 100 chars
 - [x] **FIX-1.1c**: Adicionar throttle de thinking (1 per 10s)
 - [x] **FIX-1.1d**: Garantir que `handleToolCallResult` grava `completed` (funciona via toolcall_start + toolcall_result pairing)
-- [ ] **FIX-1.1e**: Script SQL de limpeza retroativa (necessário limpar eventos duplicados antigos)
+- [x] **FIX-1.1e**: Script SQL de limpeza retroativa (`scripts/cleanup-duplicate-events.sql`)
 - [x] **FIX-1.2a**: Logging robusto em `launchArenaFromStep` e `buildArenaConfig`
 - [x] **FIX-1.2b**: Reconciler detecta arena steps presos
 - [x] **FIX-1.2c**: `buildArenaConfig` com defaults robustos e logging
 - [x] **FIX-1.3a**: Mapa `METRIC_DIRECTION_DEFAULTS`
 - [x] **FIX-1.3b**: Inferencia de direction pelo nome da metrica
-- [ ] **FIX-1.3c**: Atualizar prompt do feature-engineer (pendente)
+- [x] **FIX-1.3c**: Atualizar prompt do feature-engineer (metric direction em benchmark_config.json)
 
 ### Fase 2: Desperdicio (P1)
 
 - [x] **FIX-2.1a**: Backoff exponencial para heartbeats (consecutive tracking + skip)
-- [ ] **FIX-2.1b**: Skip polling para agents sem steps pending (pendente)
-- [ ] **FIX-2.1c**: Nao gravar eventos de heartbeat (pendente)
+- [x] **FIX-2.1b**: Skip polling para agents sem steps pending
+- [ ] **FIX-2.1c**: Nao gravar eventos de heartbeat (skip — backoff reduz volume suficientemente)
 - [x] **FIX-2.2**: Kill processos `step complete` orfaos (process group kill no reconciler)
 
 ### Fase 3: Visibilidade (P2)
@@ -993,7 +993,7 @@ Adicionar referencia a este audit e listar os BUGs 1-10 como issues conhecidos c
 ### Fase 4: Completude (P3)
 
 - [x] **FIX-4.1**: Integracao automatica de artefatos (autoRegisterArtifacts em complete.ts)
-- [ ] **FIX-4.2**: Corrigir artifact names no registry (pendente - arena usa nomes diferentes)
+- [x] **FIX-4.2**: Corrigir artifact names no registry (adicionado predictions.csv)
 - [ ] **FIX-4.3**: Implementar comunicacao inter-agente (pendente)
 
 ### Limpeza de Documentacao

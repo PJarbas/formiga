@@ -143,7 +143,7 @@ steps:
       Produce:
         - features.parquet, split.pkl
         - baseline.json, baseline.pkl
-        - benchmark_config.json (type, metric, validation, data paths)
+        - benchmark_config.json (type, metric { name, direction: "lower"|"higher" }, validation, data paths)
         - benchmark_runner.py
         - autoresearch.sh (wrapper calling the runner)
 
