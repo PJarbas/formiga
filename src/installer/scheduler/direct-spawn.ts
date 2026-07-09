@@ -156,18 +156,14 @@ export async function spawnAgentsForPendingSteps(runId: string): Promise<void> {
         workingDirectoryForHarness,
       });
 
-      if (result.ok && result.id) {
-        // Fire immediately after registration
-        const newJob = jobMetadata.get(result.id);
-        if (newJob) {
-          executePollingRound(newJob, agent, workflow).catch((err) => {
-            logger.error("direct-spawn: first polling round failed", {
-              runId,
-              agentId: shortAgentId,
-              error: String(err),
-            });
-          });
-        }
+      // createAgentCronJob now executes immediately on creation,
+      // so no need to trigger again here
+      if (!result.ok) {
+        logger.error("direct-spawn: failed to create job", {
+          runId,
+          agentId: shortAgentId,
+          error: result.error,
+        });
       }
     }
   }
@@ -199,10 +195,8 @@ function findExistingJob(
  * This is the interval used for jobs created by direct-spawn — they fire
  * immediately on creation, then act as a fallback every N minutes.
  */
-function getSupervisorInterval(workflow: WorkflowSpec): number {
-  // Use a longer interval since we rely on event-driven triggers
-  // The cron only acts as fallback for missed events
-  return workflow.polling?.timeoutSeconds
-    ? Math.max(5, Math.ceil(workflow.polling.timeoutSeconds / 60))
-    : 5;
+function getSupervisorInterval(_workflow: WorkflowSpec): number {
+  // Fast fallback: 2 minutes. Event-driven spawning handles most cases,
+  // but this catches orphaned steps quickly if events are missed.
+  return 2;
 }

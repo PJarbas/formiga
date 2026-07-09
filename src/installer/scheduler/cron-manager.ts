@@ -143,6 +143,13 @@ export async function createAgentCronJob(
       staggerMs,
       workingDirectoryForHarness,
     });
+
+    // Execute immediately on job creation - don't wait for first interval!
+    // This is critical: without this, the first polling round only happens
+    // after intervalMinutes (2-5 min), leaving the agent idle.
+    executePollingRound(jobInfo, agent, workflow).catch((err) => {
+      logger.error("Initial polling round failed", { jobId: id, runId, error: String(err) });
+    });
   };
 
   if (staggerMs > 0) {
@@ -198,13 +205,9 @@ export async function setupAgentCrons(
       continue;
     }
 
-    const intervalMinutes = options.noHurrySaveTokensMode
-      ? (workflow.polling?.timeoutSeconds
-        ? Math.max(15, Math.ceil(workflow.polling.timeoutSeconds / 60))
-        : 15)
-      : (workflow.polling?.timeoutSeconds
-        ? Math.max(5, Math.ceil(workflow.polling.timeoutSeconds / 60))
-        : 5);
+    // Fast polling: 2 min default, 5 min in save-tokens mode
+    // Previously used timeoutSeconds which caused 30 min intervals
+    const intervalMinutes = options.noHurrySaveTokensMode ? 5 : 2;
 
     const result = await createAgentCronJob({
       workflowId: workflow.id,

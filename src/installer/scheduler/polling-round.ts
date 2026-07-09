@@ -537,6 +537,16 @@ export async function executePollingRound(
       agentPersonaInstructions,
     );
 
+    // Guard against empty prompts which cause pi to hang waiting for stdin
+    if (!pollingPrompt || pollingPrompt.trim().length === 0) {
+      logger.error("Polling round aborted — empty prompt", {
+        ...context,
+        reason: "empty_prompt",
+      });
+      inFlightJobs.delete(job.id);
+      return;
+    }
+
     const harnessType = job.harnessType ?? "pi";
 
     logger.info("Polling round start", context);
@@ -573,13 +583,25 @@ export async function executePollingRound(
         orderBy: { step_index: "asc" },
       });
       activityStepId = activeStep?.id;
-    } catch {
-      // Activity recording is best-effort
+      logger.debug("Activity context resolution", {
+        runId: job.runId,
+        jobAgentId: job.agentId,
+        foundStepId: activityStepId,
+      });
+    } catch (err) {
+      logger.warn("Activity context resolution failed", { error: String(err) });
     }
 
     const activityContext = activityStepId
       ? { runId: job.runId, stepId: activityStepId, agentId: job.agentId }
       : undefined;
+
+    if (!activityContext) {
+      logger.warn("No activity context - events will not be recorded", {
+        runId: job.runId,
+        agentId: job.agentId,
+      });
+    }
 
     try {
       if (harnessType === "hermes") {

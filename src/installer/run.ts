@@ -339,6 +339,8 @@ export async function runWorkflow(
   });
 
   // Promote the first step from 'waiting' to 'pending' so an agent can claim it.
+  // This MUST happen BEFORE registerRunWithDaemon because the daemon uses
+  // requiredTimersForRun() which only counts 'pending' steps.
   // Without this kickoff, claimStep (which only matches 'pending') would never find
   // the first step and the run would loop forever on peek=HAS_WORK / claim=NO_WORK.
   advancePipeline(runId);
@@ -351,6 +353,11 @@ export async function runWorkflow(
       typeof registration?.body.error === "string"
         ? registration.body.error
         : "daemon registration failed";
+    // Rollback step promotion: reset any pending steps back to waiting
+    await prisma.step.updateMany({
+      where: { run_id: runId, status: "pending" },
+      data: { status: "waiting", updated_at: new Date() },
+    });
     await prisma.run.update({
       where: { id: runId },
       data: {
