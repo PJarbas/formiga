@@ -309,7 +309,7 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     phase: "modeling",
     stepId: "model-classic",
     harness: "pi",
-    artifactsOut: ["modeler-classic_submission.json"],
+    artifactsOut: ["modeler-classic_submission.json", "classic_predictions.csv"],
     messagesCount: 0,
   },
   "modeler-advanced": {
@@ -321,7 +321,7 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     phase: "modeling",
     stepId: "model-advanced",
     harness: "pi",
-    artifactsOut: ["modeler-advanced_submission.json"],
+    artifactsOut: ["modeler-advanced_submission.json", "advanced_predictions.csv"],
     messagesCount: 0,
   },
   "ml-critic": {

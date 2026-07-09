@@ -470,6 +470,39 @@ export async function executePollingRound(
     return;
   }
 
+  // ── Skip if no pending work ───────────────────────────────────────
+  // Don't poll an agent that has no pending/waiting steps. This avoids
+  // firing harness processes that will just produce heartbeat output.
+  try {
+    const prisma = getPrisma();
+    const hasWork = await prisma.step.findFirst({
+      where: {
+        run_id: job.runId,
+        agent_id: { endsWith: `_${job.agentId}` },
+        status: { in: ["pending", "waiting"] },
+      },
+      select: { id: true },
+    });
+    if (!hasWork) {
+      // Record this as a heartbeat so backoff kicks in faster
+      recordHeartbeat(job.id);
+      inFlightJobs.delete(job.id);
+      logger.debug("Polling round skipped — no pending steps for agent", {
+        ...context,
+        reason: "no_pending_work",
+      });
+      return;
+    } else {
+      // There is work — reset heartbeat counter
+      resetHeartbeatBackoff(job.id);
+    }
+  } catch (err) {
+    logger.warn("Pending-work check failed; continuing polling round", {
+      ...context,
+      error: String(err),
+    });
+  }
+
   // ── Run-scoped status check ──────────────────────────────────────
   // If this run is no longer 'running' (terminal/paused) tear down the
   // job and skip. Without this check, timers leaked from previous CLI
