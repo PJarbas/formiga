@@ -26,6 +26,10 @@ polling:
 run:
   workspace: direct
 
+# Template variables injected into all steps
+variables:
+  formiga_api: "{{FORMIGA_API_URL}}"
+
 agents:
   - id: data-analyst
     name: Data Analyst
@@ -106,14 +110,15 @@ steps:
       INPUTS:
       - dataset_path: {{dataset_path}}
       - target_column: {{target_column}}
+      - run_id: {{run_id}}
+      - formiga_api: {{formiga_api}}
       - workspace: {{workspace}}
 
-      Produce the EDA report at {{workspace}}/reports/01_eda.md and a machine-readable
-      config at {{workspace}}/artifacts/eda_config.json.
+      Read your AGENTS.md for database API instructions.
+      Save EDA artifacts to the database using formiga_save_artifact.
 
-      End your output with the protocol fields:
-        REPORT_PATH: <relative path>
-        FIGURES_COUNT: <integer>
+      End your output with:
+        ARTIFACTS_SAVED: <comma-separated artifact keys>
         KEY_FINDINGS: <one line>
         STATUS: done
     expects: "STATUS: done"
@@ -129,34 +134,26 @@ steps:
       INPUTS:
       - dataset_path: {{dataset_path}}
       - target_column: {{target_column}}
-      - report_path: {{report_path}}
-      - workspace: {{workspace}}
       - run_id: {{run_id}}
+      - formiga_api: {{formiga_api}}
+      - workspace: {{workspace}}
 
-      Read the EDA report and config. Produce:
+      Read your AGENTS.md for database API instructions.
+      Read EDA artifacts from the database.
+      Produce:
         - features.parquet, split.pkl
         - baseline.json, baseline.pkl
         - benchmark_config.json (type, metric, validation, data paths)
         - benchmark_runner.py
         - autoresearch.sh (wrapper calling the runner)
 
-      Write your report to {{workspace}}/reports/02_features.md.
-
-      BEFORE emitting STATUS: done, you MUST write the leaderboard sidecar
-      submission as JSON to {{workspace}}/artifacts/feature-engineer_submission.json
-      with keys: MODEL_TYPE, CV_MEAN, TRAIN_MEAN, HYPERPARAMETERS, ARTIFACT_PATH, METRIC_NAME.
+      Save all artifacts to the database.
 
       End your output with:
-        REPORT_PATH: <relative path>
-        BASELINE_CV_MEAN: <float>
-        BASELINE_CV_STD: <float>
-        BASELINE_JSON_PATH: artifacts/baseline.json
+        ARTIFACTS_SAVED: <comma-separated artifact keys>
         FEATURES_SHAPE: <rows>x<cols>
         MODEL_TYPE: baseline-<algorithm>
         CV_MEAN: <float>
-        TRAIN_MEAN: <float>
-        HYPERPARAMETERS: <compact JSON>
-        ARTIFACT_PATH: artifacts/baseline.pkl
         STATUS: done
     expects: "STATUS: done"
     max_retries: 2
@@ -170,8 +167,12 @@ steps:
     # with competing agents configured in the arena engine.
     input: |
       ARENA_STEP: this step is handled by the arena competition engine.
-      Workspace: {{workspace}}
-      Run ID: {{run_id}}
+
+      INPUTS:
+      - run_id: {{run_id}}
+      - formiga_api: {{formiga_api}}
+      - workspace: {{workspace}}
+
       Benchmark config should be at {{workspace}}/artifacts/benchmark_config.json
     expects: "STATUS: done"
     max_retries: 0
@@ -185,16 +186,21 @@ steps:
 
       INPUTS:
       - run_id: {{run_id}}
+      - formiga_api: {{formiga_api}}
       - workspace: {{workspace}}
 
-      Read the arena session from the API and leaderboard data.
-      Produce a final report at {{workspace}}/reports/07_arena_report.md.
+      Read your AGENTS.md for database API instructions.
+      Read all artifacts from the database (leaderboard, audit, modeler reports).
+      Query the arena session and leaderboard data via the API.
+      Produce the final competition report.
 
       End your output with:
-        REPORT_PATH: <relative path>
+        ARTIFACTS_SAVED: <comma-separated artifact keys>
         TOTAL_ROUNDS: <integer>
+        TOTAL_MODELS: <integer>
         BEST_METRIC: <float>
         BEST_AGENT: <id>
+        BEST_MODEL_TYPE: <type>
         STATUS: done
     expects: "STATUS: done"
     max_retries: 2
