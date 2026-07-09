@@ -271,6 +271,7 @@ export interface PipelineFlowEdge {
 export interface PipelineFlowResponse {
   nodes: PipelineFlowNode[];
   edges: PipelineFlowEdge[];
+  runId: string | null;
 }
 
 export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {

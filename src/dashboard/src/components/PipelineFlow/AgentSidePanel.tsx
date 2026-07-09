@@ -1,17 +1,23 @@
 // ══════════════════════════════════════════════════════════════════════
-// AgentSidePanel.tsx — Slide-in panel with 5 tabs for agent details
-// Logs · Reasoning · Messages · Artifacts · History
+// AgentSidePanel.tsx — Slide-in panel with tabs for agent details
+// Activity · Reasoning · Messages · Artifacts · History
 // ══════════════════════════════════════════════════════════════════════
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
-import type { AgentMessage } from "@shared/dashboard-types";
+import { AgentActivityStream } from "../AgentActivityStream";
 
-type TabId = "logs" | "reasoning" | "messages" | "artifacts" | "history";
+interface AgentMessage {
+  from: string;
+  timestamp: string;
+  content: string;
+}
+
+type TabId = "activity" | "reasoning" | "messages" | "artifacts" | "history";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "logs", label: "Logs" },
+  { id: "activity", label: "Activity" },
   { id: "reasoning", label: "Reasoning" },
   { id: "messages", label: "Messages" },
   { id: "artifacts", label: "Artifacts" },
@@ -20,11 +26,12 @@ const TABS: { id: TabId; label: string }[] = [
 
 interface AgentSidePanelProps {
   agentId: string;
+  runId?: string;
   onClose: () => void;
 }
 
-export function AgentSidePanel({ agentId, onClose }: AgentSidePanelProps) {
-  const [activeTab, setActiveTab] = useState<TabId>("logs");
+export function AgentSidePanel({ agentId, runId, onClose }: AgentSidePanelProps) {
+  const [activeTab, setActiveTab] = useState<TabId>("activity");
 
   const info = AGENT_INFO_REGISTRY[agentId];
 
@@ -89,45 +96,18 @@ export function AgentSidePanel({ agentId, onClose }: AgentSidePanelProps) {
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-4">
-        {activeTab === "logs" && <LogsContent agentId={agentId} />}
+        {activeTab === "activity" && (
+          <AgentActivityStream
+            runId={runId}
+            stepId={info?.stepId}
+            isRunning={agentDetail?.currentStatus === "running"}
+          />
+        )}
         {activeTab === "reasoning" && <ReasoningContent agentId={agentId} detail={agentDetail} />}
         {activeTab === "messages" && <MessagesContent messages={messages ?? []} />}
         {activeTab === "artifacts" && <ArtifactsContent agentId={agentId} info={info} />}
         {activeTab === "history" && <HistoryContent agentId={agentId} />}
       </div>
-    </div>
-  );
-}
-
-function LogsContent({ agentId }: { agentId: string }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["agent-logs", agentId],
-    queryFn: async () => {
-      const res = await fetch(`/api/agents/${agentId}/logs?limit=100`);
-      if (!res.ok) return { entries: [] };
-      return res.json();
-    },
-    refetchInterval: 5000,
-  });
-
-  if (isLoading) return <div className="text-xs text-[var(--text-muted)]">Loading logs...</div>;
-
-  const entries = (data as { entries?: Array<{ timestamp: string; level: string; message: string }> })?.entries ?? [];
-
-  if (entries.length === 0) {
-    return <div className="text-xs text-[var(--text-muted)]">No logs yet</div>;
-  }
-
-  return (
-    <div className="space-y-1 font-mono text-[11px]">
-      {entries.map((entry, i) => (
-        <div key={i} className="flex gap-2">
-          <span className="text-[var(--text-muted)] shrink-0">{new Date(entry.timestamp).toLocaleTimeString()}</span>
-          <span className={entry.level === "error" ? "text-[var(--accent-red)]" : "text-[var(--text-secondary)]"}>
-            {entry.message}
-          </span>
-        </div>
-      ))}
     </div>
   );
 }

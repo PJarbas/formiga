@@ -152,7 +152,7 @@ function EventItem({ event, isLatest }: EventItemProps) {
 }
 
 interface Props {
-  runId: string;
+  runId?: string;
   stepId?: string;
   isRunning?: boolean;
 }
@@ -166,6 +166,18 @@ export function AgentActivityStream({ runId, stepId, isRunning }: Props) {
     limit: 100,
     refetchInterval: isRunning ? 2000 : false,
   });
+
+  if (!runId) {
+    return (
+      <div className="flex flex-col items-center justify-center py-8 text-center">
+        <span className="text-2xl mb-2">💤</span>
+        <p className="text-xs text-[var(--text-muted)]">No active pipeline run</p>
+        <p className="text-[10px] text-[var(--text-muted)] mt-1">
+          Start a run to see agent activity
+        </p>
+      </div>
+    );
+  }
 
   // Auto-scroll to bottom when new events arrive
   useEffect(() => {
