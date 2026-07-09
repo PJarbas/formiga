@@ -60,20 +60,41 @@ async function handlePiEvent(
   const eventType = event.type as string | undefined;
   if (!eventType) return;
 
-  // Tool call start
+  // Handle message_update events which wrap tool calls and thinking
+  if (eventType === "message_update") {
+    const assistantEvent = event.assistantMessageEvent as Record<string, unknown> | undefined;
+    if (assistantEvent) {
+      const innerType = assistantEvent.type as string | undefined;
+      if (innerType === "toolcall_start" || innerType === "toolcall_delta") {
+        await handleToolCallStart(event, context);
+        return;
+      }
+      if (innerType === "toolcall_result") {
+        await handleToolCallResult(event, context);
+        return;
+      }
+      if (innerType === "thinking_start" || innerType === "thinking_delta") {
+        await handleThinking(event, context);
+        return;
+      }
+    }
+    return;
+  }
+
+  // Direct tool call events (legacy format)
   if (eventType === "toolcall_start" || eventType === "tool_use") {
     await handleToolCallStart(event, context);
     return;
   }
 
-  // Tool call result
+  // Direct tool result events (legacy format)
   if (eventType === "toolcall_result" || eventType === "tool_result") {
     await handleToolCallResult(event, context);
     return;
   }
 
-  // Thinking block
-  if (eventType === "thinking" || (eventType === "message_update" && hasThinking(event))) {
+  // Direct thinking events (legacy format)
+  if (eventType === "thinking") {
     await handleThinking(event, context);
     return;
   }
