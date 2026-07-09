@@ -2,7 +2,7 @@
 // Breadcrumb.tsx — Navigation trail derived from NAV_ITEMS + useLocation
 // ══════════════════════════════════════════════════════════════════════
 // No duplicate mapping tables — derives labels from NAV_ITEMS config.
-// Shows: Formiga ML › [Run shortId] › Current Page › [Agent name]
+// Shows: Formiga › [Run shortId] › Current Page › [Agent name]
 // ══════════════════════════════════════════════════════════════════════
 
 import { Link, useLocation } from "react-router-dom";
@@ -41,7 +41,7 @@ export function Breadcrumb() {
 
   return (
     <nav aria-label="Breadcrumb" className="text-xs text-[var(--text-muted)] py-2 flex items-center gap-1.5">
-      <Link to="/" className="hover:text-[var(--text-primary)]">Formiga ML</Link>
+      <Link to="/" className="hover:text-[var(--text-primary)]">Formiga</Link>
       {runSegment && (
         <>
           <span aria-hidden="true">›</span>

@@ -25,7 +25,7 @@ export default function App() {
       <header className="flex items-center justify-between px-6 py-3 border-b border-[var(--border-default)] bg-[var(--bg-secondary)] shrink-0">
         <div className="flex items-center gap-4">
           <h1 className="text-lg font-semibold tracking-tight text-[var(--text-primary)]">
-            Formiga ML
+            Formiga
           </h1>
           <nav className="flex gap-1">
             {NAV_ITEMS.map((item) => (

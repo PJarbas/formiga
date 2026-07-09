@@ -56,7 +56,7 @@ export default function CommandCenter() {
           detail="Start a pipeline from the CLI to see runs here."
         />
         <code className="inline-block text-xs font-mono text-[var(--accent-blue)] bg-[var(--bg-tertiary)] px-3 py-1.5 rounded mt-3">
-          formiga run --task &quot;predict churn&quot; --rounds 5
+          formiga autoresearch &quot;dataset_path=./data.csv target_column=price&quot;
         </code>
       </div>
     );
