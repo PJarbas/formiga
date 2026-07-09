@@ -389,7 +389,10 @@ export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ p
     const out = fs.openSync(logFile, "a");
     const errFd = fs.openSync(logFile, "a");
 
-    const daemonScript = path.resolve(__dirname, "daemon.js");
+    // Always use dist/server/daemon.js — works whether running from src (tsx) or dist
+    const daemonScript = __dirname.includes("/src/")
+      ? path.resolve(__dirname, "..", "..", "dist", "server", "daemon.js")
+      : path.resolve(__dirname, "daemon.js");
     const spawnOpts: Parameters<typeof spawn>[2] = {
       detached: true,
       stdio: ["ignore", out, errFd],

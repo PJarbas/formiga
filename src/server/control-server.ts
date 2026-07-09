@@ -906,7 +906,8 @@ export function startReconciler(): { stop: () => void } {
 
       // Detect orphaned steps: "running" with a dead claim_pid.
       // This catches cases where the daemon crashed or pi was killed externally.
-      const ORPHAN_STEP_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+      // Reduced from 5 min to 2 min for faster recovery.
+      const ORPHAN_STEP_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
       const orphanCutoff = new Date(Date.now() - ORPHAN_STEP_THRESHOLD_MS);
       const orphanedSteps = await prisma.step.findMany({
         where: {

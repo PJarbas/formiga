@@ -997,7 +997,7 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
       }
     }
 
-    jsonResponse(res, { nodes, edges } satisfies PipelineFlowResponse);
+    jsonResponse(res, { nodes, edges, runId: runId ?? null } satisfies PipelineFlowResponse);
   })().catch((err) => errorResponse(res, `Failed to get pipeline flow: ${(err as Error).message}`));
 }
 
