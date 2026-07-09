@@ -955,6 +955,18 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
       ? (await getPrisma().experiment.aggregate({ where: { run_id: runId }, _max: { round_number: true } }))._max.round_number ?? 0
       : 0;
 
+    // Get harness type from run context (defaults to "pi")
+    let runHarnessType: "pi" | "hermes" | "unknown" = "pi";
+    if (runId) {
+      const run = await getPrisma().run.findUnique({ where: { id: runId }, select: { context: true } });
+      if (run?.context) {
+        try {
+          const ctx = JSON.parse(run.context);
+          if (ctx.harness_type === "hermes") runHarnessType = "hermes";
+        } catch { /* ignore parse errors */ }
+      }
+    }
+
     const nodes: PipelineFlowNode[] = await Promise.all(
       Object.entries(AGENT_INFO_REGISTRY).map(async ([name, info]) => {
         const status = runId
@@ -964,7 +976,7 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
           agentId: name,
           label: info.label,
           status,
-          harness: info.harness,
+          harness: runHarnessType, // Use actual harness from run context
           phase: info.phase,
           artifactsOut: info.artifactsOut,
           messagesCount: info.messagesCount,
