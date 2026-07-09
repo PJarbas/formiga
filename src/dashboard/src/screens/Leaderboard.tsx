@@ -9,9 +9,6 @@ import {
   useLeaderboard,
   useCompareExperiments,
   useArenaSession,
-  useArenaConvergence,
-  useArenaConfidence,
-  useArenaRounds,
 } from "../api/api";
 import { ComparePanel } from "../components/ComparePanel";
 import { ModelDetailPanel } from "../components/ModelDetailPanel";
@@ -21,7 +18,6 @@ import { StatTiles } from "../components/StatTiles";
 import { AucBarChart } from "../components/AucBarChart";
 import { GapPill } from "../components/GapPill";
 import { FoldSparkline } from "../components/FoldSparkline";
-import { ArenaSectionCollapsible } from "../components/ArenaSectionCollapsible";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
 
 const MODEL_FAMILY_COLORS: Record<string, string> = {
@@ -60,13 +56,13 @@ export default function Leaderboard() {
     sortDir,
   });
 
-  // Arena data
+  // Arena session (for metric name)
   const activeRunId = runIdFromUrl ?? data?.entries?.[0]?.runId;
   const { data: arenaSession } = useArenaSession(activeRunId);
-  const { data: convergence } = useArenaConvergence(activeRunId);
-  const { data: confidence } = useArenaConfidence(activeRunId);
-  const { data: rounds } = useArenaRounds(activeRunId);
-  const isArenaRun = !!arenaSession;
+
+  // Metric configuration from arena session
+  const metricName = arenaSession?.metricName ?? "AUC";
+  const metricDirection = arenaSession?.metricDirection ?? "higher";
 
   const selectedIdArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
   const compareQuery = useCompareExperiments(selectedIdArray);
@@ -119,12 +115,11 @@ export default function Leaderboard() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-lg font-semibold text-[var(--text-primary)] flex items-center gap-2">
-            ML Leaderboard
+            Leaderboard
             <span className="w-2 h-2 rounded-full bg-[var(--accent-green)] animate-pulse" title="Live — refreshes every 5s" />
           </h2>
           <p className="text-xs text-[var(--text-muted)] mt-0.5">
-            {data?.total ?? 0} experiments · Best: {data?.bestCvMean?.toFixed(4) ?? "—"}
-            {isArenaRun && arenaSession?.metricName ? ` · Metric: ${arenaSession.metricName} (${arenaSession.metricDirection})` : ""}
+            {data?.total ?? 0} experiments · Best: {data?.bestCvMean?.toFixed(4) ?? "—"} · Metric: {metricName} ({metricDirection})
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -152,15 +147,15 @@ export default function Leaderboard() {
       </div>
 
       {/* Stat tiles */}
-      <StatTiles entries={sortedEntries} bestCvMean={data?.bestCvMean ?? null} />
+      <StatTiles entries={sortedEntries} bestCvMean={data?.bestCvMean ?? null} metricName={metricName} />
 
-      {/* AUC bar chart */}
+      {/* Metric bar chart */}
       {sortedEntries.length > 0 && (
         <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-4">
           <h3 className="text-xs uppercase tracking-wider text-[var(--text-muted)] font-medium mb-3">
-            AUC by experiment · validation · cross-validation
+            {metricName.toUpperCase()} by experiment · validation · cross-validation
           </h3>
-          <AucBarChart entries={sortedEntries} maxBars={10} />
+          <AucBarChart entries={sortedEntries} maxBars={10} metricName={metricName} />
         </div>
       )}
 
@@ -176,10 +171,10 @@ export default function Leaderboard() {
                   ["modelId", "Experiment"],
                   ["modelType", "Model"],
                   ["roundNumber", "Category"],
-                  ["cvMean", "AUC CV"],
+                  ["cvMean", `${metricName} CV`],
                   ["cvStd", "±Std"],
                   ["trainValGap", "GAP"],
-                ] as const).map(([key, label]) => (
+                ] as [string, string][]).map(([key, label]) => (
                   <th
                     key={key}
                     className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide select-none cursor-pointer"
@@ -284,14 +279,6 @@ export default function Leaderboard() {
           )}
         </div>
       )}
-
-      {/* Arena Section — collapsible, only when arena data exists */}
-      <ArenaSectionCollapsible
-        session={arenaSession}
-        convergence={convergence}
-        confidence={confidence}
-        rounds={rounds ?? []}
-      />
     </div>
   );
 }

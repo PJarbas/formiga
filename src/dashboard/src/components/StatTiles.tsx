@@ -8,6 +8,7 @@ import type { LeaderboardEntry } from "@shared/dashboard-types";
 interface StatTilesProps {
   entries: LeaderboardEntry[];
   bestCvMean: number | null;
+  metricName?: string;
 }
 
 interface TileData {
@@ -17,7 +18,7 @@ interface TileData {
   accent: string;
 }
 
-function computeTiles(entries: LeaderboardEntry[], bestCvMean: number | null): TileData[] {
+function computeTiles(entries: LeaderboardEntry[], bestCvMean: number | null, metricName: string): TileData[] {
   const valid = entries.filter((e) => e.status !== "FAILED" && e.status !== "OVERFITTED");
   const bestEntry = valid.length > 0
     ? valid.reduce((best, e) => ((e.cvMean ?? -Infinity) > (best.cvMean ?? -Infinity) ? e : best), valid[0])
@@ -30,7 +31,7 @@ function computeTiles(entries: LeaderboardEntry[], bestCvMean: number | null): T
 
   return [
     {
-      label: "BEST AUC",
+      label: `BEST ${metricName.toUpperCase()}`,
       value: bestCvMean != null ? bestCvMean.toFixed(4) : "—",
       sub: bestEntry?.modelType ?? "",
       accent: "var(--accent-green)",
@@ -56,8 +57,8 @@ function computeTiles(entries: LeaderboardEntry[], bestCvMean: number | null): T
   ];
 }
 
-export function StatTiles({ entries, bestCvMean }: StatTilesProps) {
-  const tiles = computeTiles(entries, bestCvMean);
+export function StatTiles({ entries, bestCvMean, metricName = "AUC" }: StatTilesProps) {
+  const tiles = computeTiles(entries, bestCvMean, metricName);
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

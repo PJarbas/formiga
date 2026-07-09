@@ -26,6 +26,7 @@ function familyColor(modelType: string): string {
 interface AucBarChartProps {
   entries: LeaderboardEntry[];
   maxBars?: number;
+  metricName?: string;
 }
 
 interface BarData {
@@ -66,7 +67,7 @@ function buildBars(entries: LeaderboardEntry[], maxBars: number): BarData[] {
   }));
 }
 
-export function AucBarChart({ entries, maxBars = 10 }: AucBarChartProps) {
+export function AucBarChart({ entries, maxBars = 10, metricName = "AUC" }: AucBarChartProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const bars = useMemo(() => buildBars(entries, maxBars), [entries, maxBars]);
 
@@ -104,7 +105,7 @@ export function AucBarChart({ entries, maxBars = 10 }: AucBarChartProps) {
           {hovered === bar.id && (
             <div className="absolute z-10 top-full left-1/2 -translate-x-1/2 mt-1 bg-[var(--bg-primary)] border border-[var(--border-default)] rounded-lg p-3 shadow-lg text-xs space-y-1 min-w-[200px]">
               <div className="font-semibold text-[var(--text-primary)]">{bar.modelType}</div>
-              <div className="text-[var(--text-secondary)]">AUC: {bar.auc.toFixed(4)} ± {bar.std.toFixed(4)}</div>
+              <div className="text-[var(--text-secondary)]">{metricName}: {bar.auc.toFixed(4)} ± {bar.std.toFixed(4)}</div>
               <div className="text-[var(--text-secondary)]">Train: {bar.trainAuc.toFixed(4)}</div>
               <div className="text-[var(--text-secondary)]">Gap: {bar.gap.toFixed(4)}</div>
               {bar.hypothesis && (
