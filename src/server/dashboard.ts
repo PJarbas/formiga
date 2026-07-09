@@ -63,6 +63,12 @@ import {
 } from "./pipeline-status.js";
 import { ArenaRepositoryImpl } from "../arena/arena-repository.js";
 import type { ArenaSession } from "../arena/arena-types.js";
+import {
+  handleGetEvents,
+  handleGetArtifacts,
+  handleGetArtifactByKey,
+  handleEventStream,
+} from "./routes/agent-activity.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
@@ -2834,6 +2840,36 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   const relaunchMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/relaunch$/);
   if (method === "POST" && relaunchMatch) {
     handleRelaunchRun(req, res, relaunchMatch[1]);
+    return;
+  }
+
+  // ── Agent Activity API routes ─────────────────────────────────────
+
+  // GET /api/runs/:id/agent-events — list events for a run
+  const agentEventsMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/agent-events$/);
+  if (method === "GET" && agentEventsMatch) {
+    handleGetEvents(req, res, agentEventsMatch[1]);
+    return;
+  }
+
+  // GET /api/runs/:id/agent-artifacts — list artifacts for a run
+  const agentArtifactsMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/agent-artifacts$/);
+  if (method === "GET" && agentArtifactsMatch) {
+    handleGetArtifacts(req, res, agentArtifactsMatch[1]);
+    return;
+  }
+
+  // GET /api/runs/:id/agent-artifacts/:key — get specific artifact
+  const agentArtifactKeyMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/agent-artifacts\/([a-zA-Z0-9_-]+)$/);
+  if (method === "GET" && agentArtifactKeyMatch) {
+    handleGetArtifactByKey(req, res, agentArtifactKeyMatch[1], agentArtifactKeyMatch[2]);
+    return;
+  }
+
+  // GET /api/runs/:id/steps/:stepId/activity-stream — SSE stream
+  const activityStreamMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/steps\/([a-zA-Z0-9_-]+)\/activity-stream$/);
+  if (method === "GET" && activityStreamMatch) {
+    handleEventStream(req, res, activityStreamMatch[1], activityStreamMatch[2]);
     return;
   }
 

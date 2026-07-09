@@ -18,11 +18,17 @@ import { logger } from "../../lib/logger.js";
 import { findPiBinary, formatPiCommandPreview } from "./binary-discovery.js";
 import { buildStreamLogMetadata, safeKillPgid } from "./shared.js";
 import { StreamingMetadataExtractor, type ExtractedMetadata } from "./streaming-metadata-extractor.js";
+import { processActivityLine, type ActivityContext } from "./activity-recorder.js";
 
 export interface RunPiOptions {
   timeout?: number; // seconds, default 60
   workdir?: string;
   env?: Record<string, string>;
+  /**
+   * Activity context for recording tool calls to the database.
+   * When provided, tool calls are recorded in real-time for dashboard visualization.
+   */
+  activityContext?: ActivityContext;
   /**
    * Optional callback invoked once the child process is spawned. Used by
    * `executePollingRound` to register the child + pgid in `inFlightChildren`
@@ -59,6 +65,7 @@ async function streamStdoutWithExtractor(
   stdout: NodeJS.ReadableStream,
   outputFile: string,
   extractor: StreamingMetadataExtractor,
+  activityContext?: ActivityContext,
 ): Promise<void> {
   await fs.promises.mkdir(path.dirname(outputFile), { recursive: true });
   const writeStream = fs.createWriteStream(outputFile);
@@ -77,6 +84,13 @@ async function streamStdoutWithExtractor(
     for (const line of lines) {
       if (line.length > 0) {
         extractor.processLine(line);
+
+        // Record activity to database (fire-and-forget)
+        if (activityContext) {
+          processActivityLine(line, activityContext).catch(() => {
+            // Ignore errors - activity recording is best-effort
+          });
+        }
       }
     }
   }
@@ -174,7 +188,7 @@ export async function runPi(
   });
 
   // Stream stdout to disk while extracting metadata in real-time
-  await streamStdoutWithExtractor(child.stdout!, outputFile, extractor);
+  await streamStdoutWithExtractor(child.stdout!, outputFile, extractor, options.activityContext);
 
   // Wait for child exit. Apply timeout guard.
   // (stdout was already consumed above, so child should close soon)

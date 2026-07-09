@@ -419,3 +419,33 @@ export function usePendingDecisions(runId?: string) {
     queryFn: () => fetchJSON<PendingDecision[]>(`${BASE}/decisions/pending${qs}`),
   });
 }
+
+// ── Agent Activity Stream ───────────────────────────────────────────
+
+import type { AgentEventsResponse, AgentArtifactsResponse } from "@shared/dashboard-types";
+
+export function useAgentEvents(
+  runId: string | undefined,
+  options?: { stepId?: string; since?: string; limit?: number; refetchInterval?: number | false },
+) {
+  const params = new URLSearchParams();
+  if (options?.stepId) params.set("stepId", options.stepId);
+  if (options?.since) params.set("since", options.since);
+  if (options?.limit) params.set("limit", String(options.limit));
+  const qs = params.toString() ? `?${params.toString()}` : "";
+
+  return useQuery({
+    queryKey: ["agent-events", runId, options?.stepId, options?.since, options?.limit],
+    queryFn: () => fetchJSON<AgentEventsResponse>(`${BASE}/runs/${encodeURIComponent(runId ?? "")}/agent-events${qs}`),
+    enabled: !!runId,
+    refetchInterval: options?.refetchInterval ?? false,
+  });
+}
+
+export function useAgentArtifacts(runId: string | undefined) {
+  return useQuery({
+    queryKey: ["agent-artifacts", runId],
+    queryFn: () => fetchJSON<AgentArtifactsResponse>(`${BASE}/runs/${encodeURIComponent(runId ?? "")}/agent-artifacts`),
+    enabled: !!runId,
+  });
+}

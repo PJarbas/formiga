@@ -1,8 +1,3 @@
-// ══════════════════════════════════════════════════════════════════════
-// Prisma schema for Formiga
-// Full ORM migration from raw SQLite to Prisma Client
-// ══════════════════════════════════════════════════════════════════════
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,18 +6,14 @@ datasource db {
   provider = "sqlite"
 }
 
-// ── Models ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ──
-// SQLite doesn't have native enums, so status fields use String
-// with application-level validation instead.
-
 model Run {
-  id                      String  @id
+  id                      String           @id
   run_number              Int?
   workflow_id             String
   task                    String
-  status                  String  @default("running")
-  context                 String  @default("{}")
-  tokens_spent            Int     @default(0)
+  status                  String           @default("running")
+  context                 String           @default("{}")
+  tokens_spent            Int              @default(0)
   notify_url              String?
   scheduling_status       String?
   scheduling_requested_at DateTime?
@@ -31,35 +22,36 @@ model Run {
   last_progress_at        DateTime?
   created_at              DateTime
   updated_at              DateTime
+  agent_artifacts         AgentArtifact[]
+  agent_events            AgentEvent[]
+  arena_session           ArenaSession?
+  checklist_states        ChecklistState[]
+  experiments             Experiment[]
+  spec_approvals          SpecApproval[]
+  steps                   Step[]
+  stories                 Story[]
 
-  steps            Step[]
-  stories          Story[]
-  experiments      Experiment[]
-  arena_session    ArenaSession?
-  spec_approvals   SpecApproval[]
-  checklist_states ChecklistState[]
-
-  @@map("runs")
   @@index([status, scheduling_status, scheduling_requested_at])
   @@index([scheduling_status, scheduling_requested_at, created_at])
+  @@map("runs")
 }
 
 model Step {
-  id               String  @id
+  id               String    @id
   run_id           String
   step_id          String
   agent_id         String
   step_index       Int
   input_template   String
   expects          String
-  status           String  @default("waiting")
+  status           String    @default("waiting")
   output           String?
-  retry_count      Int     @default(0)
-  max_retries      Int     @default(4)
-  type             String  @default("single")
+  retry_count      Int       @default(0)
+  max_retries      Int       @default(4)
+  type             String    @default("single")
   loop_config      String?
   current_story_id String?
-  abandoned_count  Int     @default(0)
+  abandoned_count  Int       @default(0)
   parallel_group   String?
   claim_job_id     String?
   claim_pid        Int?
@@ -67,73 +59,70 @@ model Step {
   claim_updated_at DateTime?
   created_at       DateTime
   updated_at       DateTime
+  run              Run       @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
-  run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
-
-  @@map("steps")
   @@index([agent_id, run_id, status])
+  @@map("steps")
 }
 
 model Story {
-  id                  String  @id
+  id                  String   @id
   run_id              String
   story_index         Int
   story_id            String
   title               String
-  description         String  @default("")
-  acceptance_criteria String  @default("[]")
-  status              String  @default("pending")
+  description         String   @default("")
+  acceptance_criteria String   @default("[]")
+  status              String   @default("pending")
   output              String?
-  retry_count         Int     @default(0)
-  max_retries         Int     @default(4)
+  retry_count         Int      @default(0)
+  max_retries         Int      @default(4)
   created_at          DateTime
   updated_at          DateTime
-
-  run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  run                 Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
   @@map("stories")
 }
 
 model Experiment {
-  experiment_id     Int     @id @default(autoincrement())
-  run_id            String
-  round_number      Int
-  agent_name        String
-  model_type        String
-  hyperparameters   String  @default("{}")
-  hypothesis        String?
-  learned           String?
-  next_focus        String?
-  measured_metric   Float?
-  benchmark_stdout  String?
-  benchmark_stderr  String?
+  experiment_id       Int       @id @default(autoincrement())
+  run_id              String
+  round_number        Int
+  agent_name          String
+  model_type          String
+  hyperparameters     String    @default("{}")
+  hypothesis          String?
+  learned             String?
+  next_focus          String?
+  measured_metric     Float?
+  benchmark_stdout    String?
+  benchmark_stderr    String?
   benchmark_exit_code Int?
-  confidence_score  Float?
-  confidence_band   String?
-  decision          String?
-  duration_ms       Int?
-  artifact_script   String?
-  train_metric      Float
-  val_metric        Float
-  test_metric       Float?
-  metric_name       String
-  artifact_path     String
-  status            String  @default("PENDING")
-  error_message     String?
-  dataset_signature String?
-  promoted_at       DateTime?
-  rejected_at       DateTime?
-  reject_reason     String?
-  created_at        DateTime @default(now())
+  confidence_score    Float?
+  confidence_band     String?
+  decision            String?
+  duration_ms         Int?
+  artifact_script     String?
+  train_metric        Float
+  val_metric          Float
+  test_metric         Float?
+  metric_name         String
+  artifact_path       String
+  status              String    @default("PENDING")
+  error_message       String?
+  dataset_signature   String?
+  promoted_at         DateTime?
+  rejected_at         DateTime?
+  reject_reason       String?
+  created_at          DateTime  @default(now())
+  run                 Run       @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
-  run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
-
-  @@map("experiments")
   @@index([run_id, round_number])
   @@index([val_metric])
   @@index([status])
   @@index([agent_name, run_id])
   @@index([dataset_signature, val_metric])
+  @@map("experiments")
 }
 
 model DatasetSignature {
@@ -145,38 +134,34 @@ model DatasetSignature {
 }
 
 model ArenaSession {
-  id                      String   @id @default(uuid())
-  run_id                  String   @unique
-  run                     Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  id                     String   @id @default(uuid())
+  run_id                 String   @unique
+  metric_name            String
+  metric_direction       String
+  benchmark_script       String
+  checks_script          String?
+  target_metric          Float?
+  max_rounds             Int      @default(10)
+  max_no_improve         Int      @default(3)
+  current_round          Int      @default(0)
+  best_metric            Float?
+  best_agent             String?
+  best_experiment_id     Int?
+  baseline_metric        Float?
+  noise_floor_mad        Float?
+  status                 String   @default("running")
+  total_keep             Int      @default(0)
+  total_discard          Int      @default(0)
+  total_crash            Int      @default(0)
+  total_checks_failed    Int      @default(0)
+  consecutive_no_improve Int      @default(0)
+  created_at             DateTime @default(now())
+  updated_at             DateTime @updatedAt
+  run                    Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
-  metric_name             String
-  metric_direction        String
-  benchmark_script        String
-  checks_script             String?
-  target_metric             Float?
-  max_rounds              Int      @default(10)
-  max_no_improve          Int      @default(3)
-
-  current_round           Int      @default(0)
-  best_metric             Float?
-  best_agent              String?
-  best_experiment_id      Int?
-  baseline_metric         Float?
-  noise_floor_mad         Float?
-
-  status                  String   @default("running")
-  total_keep              Int      @default(0)
-  total_discard           Int      @default(0)
-  total_crash             Int      @default(0)
-  total_checks_failed     Int      @default(0)
-  consecutive_no_improve  Int      @default(0)
-
-  created_at              DateTime @default(now())
-  updated_at              DateTime @updatedAt
-
-  @@map("arena_sessions")
   @@index([run_id])
   @@index([status])
+  @@map("arena_sessions")
 }
 
 model AutoresearchSession {
@@ -197,31 +182,31 @@ model AutoresearchSession {
   best_run        Int?
   files_missing   Int       @default(0)
 
-  @@map("autoresearch_sessions")
   @@index([updated_at])
   @@index([last_seen_at])
+  @@map("autoresearch_sessions")
 }
 
 model RunWorktree {
-  run_id                         String  @id
+  run_id                         String    @id
   worktree_origin_repository     String
   worktree_origin_git_common_dir String
   worktree_path                  String
   worktree_origin_ref            String?
   worktree_origin_sha            String?
   original_branch                String?
-  status                         String  @default("creating")
-  cleanup_policy                 String  @default("remove_on_success")
+  status                         String    @default("creating")
+  cleanup_policy                 String    @default("remove_on_success")
   created_at                     DateTime
   removed_at                     DateTime?
   error                          String?
 
-  @@map("run_worktrees")
   @@index([status])
+  @@map("run_worktrees")
 }
 
 model SpecApproval {
-  spec_id     String   @id
+  spec_id     String    @id
   run_id      String
   phase       String
   status      String
@@ -231,12 +216,11 @@ model SpecApproval {
   rejected_at DateTime?
   rejected_by String?
   updated_at  DateTime  @default(now())
+  run         Run       @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
-  run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
-
-  @@map("spec_approvals")
   @@index([run_id])
   @@index([status])
+  @@map("spec_approvals")
 }
 
 model ChecklistState {
@@ -244,26 +228,25 @@ model ChecklistState {
   phase      String
   items_json String
   updated_at DateTime @default(now())
-
-  run Run @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  run        Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
   @@id([run_id, phase])
   @@map("checklist_state")
 }
 
 model JobRegistry {
-  id             String   @id
-  workflow_id    String
-  run_id         String
-  agent_id       String
-  status         String   @default("active")
-  harness_type   String?
-  pid            Int?
-  pgid           Int?
-  interval_minutes Int    @default(5)
-  started_at     DateTime @default(now())
-  updated_at     DateTime @updatedAt
-  metadata       String?
+  id               String   @id
+  workflow_id      String
+  run_id           String
+  agent_id         String
+  status           String   @default("active")
+  harness_type     String?
+  pid              Int?
+  pgid             Int?
+  interval_minutes Int      @default(5)
+  started_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+  metadata         String?
 
   @@index([run_id])
   @@index([status])
@@ -271,7 +254,7 @@ model JobRegistry {
 }
 
 model FormigaStat {
-  id                  Int @id @default(1)
+  id                  Int @id @default(autoincrement())
   system_tokens_spent Int @default(0)
 
   @@map("formiga_stats")
@@ -285,6 +268,49 @@ model MedicCheck {
   summary       String?
   details       String?
 
-  @@map("medic_checks")
   @@index([checked_at])
+  @@map("medic_checks")
+}
+
+model AgentEvent {
+  id          Int       @id @default(autoincrement())
+  run_id      String
+  step_id     String
+  agent_id    String
+  event_type  String
+  tool_name   String?
+  tool_args   String?
+  tool_result String?
+  tool_status String?
+  duration_ms Int?
+  thinking    String?
+  step_event  String?
+  created_at  DateTime? @default(now())
+  run         Run       @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([agent_id, run_id], map: "idx_agent_events_agent_run")
+  @@index([step_id, created_at], map: "idx_agent_events_step_created")
+  @@index([run_id, created_at], map: "idx_agent_events_run_created")
+  @@map("agent_events")
+}
+
+model AgentArtifact {
+  id            Int       @id @default(autoincrement())
+  run_id        String
+  step_id       String
+  agent_id      String
+  artifact_key  String
+  artifact_path String?
+  content       String
+  content_type  String?   @default("json")
+  size_bytes    Int?
+  checksum      String?
+  created_at    DateTime? @default(now())
+  updated_at    DateTime? @default(now()) @updatedAt
+  run           Run       @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([run_id, artifact_key], map: "sqlite_autoindex_agent_artifacts_1")
+  @@index([artifact_key], map: "idx_agent_artifacts_key")
+  @@index([run_id], map: "idx_agent_artifacts_run")
+  @@map("agent_artifacts")
 }

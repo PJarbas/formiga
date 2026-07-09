@@ -318,7 +318,7 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     model: "sonnet",
     phase: "modeling",
     stepId: "model-advanced",
-    harness: "hermes",
+    harness: "pi",
     artifactsOut: ["modeler-advanced_submission.json"],
     messagesCount: 0,
   },
@@ -587,4 +587,51 @@ export interface PipelineRunRow {
 
 export interface CommandCenterSnapshot {
   runs: PipelineRunRow[];
+}
+
+// ── Agent Activity Stream ───────────────────────────────────────────
+
+export type AgentEventType = "tool_call" | "thinking" | "step_event" | "artifact" | "error";
+export type ToolStatus = "running" | "completed" | "failed";
+export type StepEventKind = "claimed" | "completed" | "failed" | "retrying";
+
+export interface AgentEventRow {
+  id: number;
+  runId: string;
+  stepId: string;
+  agentId: string;
+  eventType: AgentEventType;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolResult?: string;
+  toolStatus?: ToolStatus;
+  durationMs?: number;
+  thinking?: string;
+  stepEvent?: StepEventKind;
+  createdAt: string;
+}
+
+export interface AgentEventsResponse {
+  events: AgentEventRow[];
+  total: number;
+  hasMore: boolean;
+}
+
+export interface AgentArtifactRow {
+  id: number;
+  runId: string;
+  stepId: string;
+  agentId: string;
+  artifactKey: string;
+  artifactPath?: string;
+  content: Record<string, unknown>;
+  contentType: string;
+  sizeBytes?: number;
+  checksum?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentArtifactsResponse {
+  artifacts: AgentArtifactRow[];
 }

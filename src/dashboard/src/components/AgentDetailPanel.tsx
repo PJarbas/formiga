@@ -10,13 +10,15 @@ import { AgentReasoning } from "./AgentReasoning";
 import { AgentExperiments } from "./AgentExperiments";
 import { TraceTimeline } from "./TraceTimeline";
 import { InteractiveChecklist } from "./InteractiveChecklist";
+import { AgentActivityStream } from "./AgentActivityStream";
 import { getStatusConfig } from "../lib/status-config";
 import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
 import type { ChecklistItem } from "@shared/dashboard-types";
 
-type Tab = "reasoning" | "experiments" | "timeline" | "logs";
+type Tab = "activity" | "reasoning" | "experiments" | "timeline" | "logs";
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: "activity", label: "Activity" },
   { id: "reasoning", label: "Reasoning" },
   { id: "experiments", label: "Experiments" },
   { id: "timeline", label: "Timeline" },
@@ -40,7 +42,7 @@ interface Props {
 }
 
 export function AgentDetailPanel({ agentName, runId, onClose }: Props) {
-  const [activeTab, setActiveTab] = useState<Tab>("reasoning");
+  const [activeTab, setActiveTab] = useState<Tab>("activity");
   const [logOffset, setLogOffset] = useState(0);
 
   const agentInfo = AGENT_INFO_REGISTRY[agentName];
@@ -121,6 +123,14 @@ export function AgentDetailPanel({ agentName, runId, onClose }: Props) {
 
       {/* Tab content */}
       <div className="p-5">
+        {activeTab === "activity" && (
+          <AgentActivityStream
+            runId={runId}
+            stepId={agentInfo?.stepId}
+            isRunning={isRunning}
+          />
+        )}
+
         {activeTab === "reasoning" && (
           <div className="space-y-5">
             {reasoning && <AgentReasoning reasoning={reasoning} />}

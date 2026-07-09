@@ -559,6 +559,28 @@ export async function executePollingRound(
       let extractedMetadata: import("./streaming-metadata-extractor.js").ExtractedMetadata | undefined;
     let cleanupFile: string | undefined;
 
+    // Resolve current step for activity recording (best-effort)
+    let activityStepId: string | undefined;
+    try {
+      const db = getPrisma();
+      const activeStep = await db.step.findFirst({
+        where: {
+          run_id: job.runId,
+          agent_id: job.agentId,
+          status: { in: ["running", "pending"] },
+        },
+        select: { id: true },
+        orderBy: { step_index: "asc" },
+      });
+      activityStepId = activeStep?.id;
+    } catch {
+      // Activity recording is best-effort
+    }
+
+    const activityContext = activityStepId
+      ? { runId: job.runId, stepId: activityStepId, agentId: job.agentId }
+      : undefined;
+
     try {
       if (harnessType === "hermes") {
         const hermesPath = findHermesBinary();
@@ -585,6 +607,7 @@ export async function executePollingRound(
             },
             onSpawn,
             outputFile,
+            activityContext,
           },
         );
         output = piResult.assistantText;
