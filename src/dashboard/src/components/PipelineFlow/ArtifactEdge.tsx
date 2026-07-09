@@ -21,11 +21,11 @@ export function ArtifactEdge({ edge, positions }: ArtifactEdgeProps) {
   const to = positions[edge.to];
   if (!from || !to) return null;
 
-  // Approximate SVG positions based on grid (3 cols, 4 rows)
-  const COL_WIDTH = 240;
-  const ROW_HEIGHT = 140;
-  const OFFSET_X = 90; // center offset for node width
-  const OFFSET_Y = 60; // center offset for node height
+  // Match grid layout: 3 cols × 4 rows, each cell ~320px × 140px with 24px/32px gap
+  const COL_WIDTH = 320 + 24; // cell width + horizontal gap
+  const ROW_HEIGHT = 140 + 32; // cell height + vertical gap
+  const OFFSET_X = 160; // center of cell (320/2)
+  const OFFSET_Y = 70; // center of cell (140/2)
 
   const x1 = from.col * COL_WIDTH + OFFSET_X;
   const y1 = from.row * ROW_HEIGHT + OFFSET_Y;

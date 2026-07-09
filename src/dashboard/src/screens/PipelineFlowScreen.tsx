@@ -52,21 +52,21 @@ export default function PipelineFlowScreen() {
         </p>
       </div>
 
-      {/* DAG grid layout */}
+      {/* DAG grid layout - fixed positions with explicit grid areas */}
       <div
-        className="relative"
+        className="relative mx-auto"
         style={{
           display: "grid",
-          gridTemplateRows: "repeat(4, auto)",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          gap: "24px 16px",
-          minHeight: 400,
-          padding: "0 40px",
+          gridTemplateRows: "repeat(4, 140px)",
+          gridTemplateColumns: "repeat(3, minmax(200px, 320px))",
+          gap: "32px 24px",
+          maxWidth: "1100px",
+          justifyContent: "center",
         }}
       >
-        {/* SVG edges layer */}
+        {/* SVG edges layer - full overlay */}
         <svg
-          className="absolute inset-0 w-full h-full pointer-events-none"
+          className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
           style={{ zIndex: 0 }}
         >
           {edges.map((edge) => (
@@ -74,13 +74,14 @@ export default function PipelineFlowScreen() {
           ))}
         </svg>
 
-        {/* Nodes */}
+        {/* Nodes - each placed in explicit grid cell */}
         {nodes.map((node) => {
           const pos = gridPositions[node.agentId];
           if (!pos) return null;
           return (
             <div
               key={node.agentId}
+              className="flex justify-center"
               style={{
                 gridRow: pos.row + 1,
                 gridColumn: pos.col + 1,
@@ -101,6 +102,7 @@ export default function PipelineFlowScreen() {
       {selectedAgent && (
         <AgentSidePanel
           agentId={selectedAgent}
+          runId={data?.runId}
           onClose={() => setSelectedAgent(null)}
         />
       )}
