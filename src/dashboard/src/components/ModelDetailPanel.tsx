@@ -1,14 +1,14 @@
 import { useState } from "react";
-import Markdown from "react-markdown";
 import { useModelReport, useReproductionScript } from "../api/api";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
+import { StructuredReportTab } from "./report";
 
 type Tab = "overview" | "report" | "script";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "report", label: "Report" },
-  { id: "script", label: "Reproduction Script" },
+  { id: "overview", label: "Visão Geral" },
+  { id: "report", label: "Relatório" },
+  { id: "script", label: "Script de Reprodução" },
 ];
 
 interface Props {
@@ -69,7 +69,7 @@ export function ModelDetailPanel({ entry, onClose }: Props) {
       <div className="p-5">
         {activeTab === "overview" && <OverviewTab entry={entry} />}
         {activeTab === "report" && (
-          <ReportTab content={report?.content} loading={reportLoading} />
+          <StructuredReportTab content={report?.content} loading={reportLoading} />
         )}
         {activeTab === "script" && (
           <ScriptTab script={scriptData?.script} filename={scriptData?.filename} loading={scriptLoading} />
@@ -106,13 +106,13 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
       {/* Metrics grid */}
       <div>
         <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
-          Metrics
+          Métricas
         </h4>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <MetricCard label="CV Mean" value={entry.cvMean?.toFixed(4)} />
-          <MetricCard label="CV Std" value={entry.cvStd?.toFixed(4)} />
-          <MetricCard label="Train Mean" value={entry.trainMean?.toFixed(4)} />
-          <MetricCard label="Train/Val Gap" value={entry.trainValGap?.toFixed(4)} highlight={entry.trainValGap > 0.1} />
+          <MetricCard label="Média CV" value={entry.cvMean?.toFixed(4)} />
+          <MetricCard label="Desvio CV" value={entry.cvStd?.toFixed(4)} />
+          <MetricCard label="Média Treino" value={entry.trainMean?.toFixed(4)} />
+          <MetricCard label="Gap Treino/Val" value={entry.trainValGap?.toFixed(4)} highlight={entry.trainValGap > 0.1} />
         </div>
       </div>
 
@@ -120,7 +120,7 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
       {hpEntries.length > 0 && (
         <div>
           <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
-            Hyperparameters
+            Hiperparâmetros
           </h4>
           <div className="rounded border border-[var(--border-default)] overflow-hidden">
             <table className="w-full text-xs">
@@ -155,17 +155,17 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
       {(entry.hypothesis || entry.learned) && (
         <div>
           <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
-            Arena Insights
+            Insights da Arena
           </h4>
           {entry.hypothesis && (
             <div className="mb-2">
-              <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">Hypothesis</div>
+              <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">Hipótese</div>
               <p className="text-xs text-[var(--text-secondary)]">{entry.hypothesis}</p>
             </div>
           )}
           {entry.learned && (
             <div>
-              <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">Learned</div>
+              <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">Aprendizado</div>
               <p className="text-xs text-[var(--text-secondary)]">{entry.learned}</p>
             </div>
           )}
@@ -175,7 +175,7 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
       {/* Artifact path */}
       {entry.artifactPath && (
         <div className="text-xs text-[var(--text-muted)]">
-          <span className="font-medium">Artifact:</span>{" "}
+          <span className="font-medium">Artefato:</span>{" "}
           <code className="bg-[var(--bg-tertiary)] px-1.5 py-0.5 rounded">{entry.artifactPath}</code>
         </div>
       )}
@@ -218,20 +218,10 @@ function FeatureBars({ features }: { features: Array<[string, number]> }) {
   );
 }
 
-function ReportTab({ content, loading }: { content?: string; loading: boolean }) {
-  if (loading) return <LoadingIndicator text="Loading report..." />;
-  if (!content) return <EmptyState text="No report available for this experiment." />;
-
-  return (
-    <div className="prose prose-invert prose-sm max-w-none max-h-[500px] overflow-y-auto rounded border border-[var(--border-default)] bg-[var(--bg-tertiary)] p-4">
-      <Markdown>{content}</Markdown>
-    </div>
-  );
-}
 
 function ScriptTab({ script, filename, loading }: { script?: string; filename?: string; loading: boolean }) {
-  if (loading) return <LoadingIndicator text="Generating script..." />;
-  if (!script) return <EmptyState text="Could not generate reproduction script." />;
+  if (loading) return <LoadingIndicator text="Gerando script..." />;
+  if (!script) return <EmptyState text="Não foi possível gerar o script de reprodução." />;
 
   function handleCopy() {
     navigator.clipboard.writeText(script!);
@@ -254,13 +244,13 @@ function ScriptTab({ script, filename, loading }: { script?: string; filename?: 
           onClick={handleCopy}
           className="text-xs px-3 py-1.5 rounded border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
         >
-          Copy to clipboard
+          Copiar
         </button>
         <button
           onClick={handleDownload}
           className="text-xs px-3 py-1.5 rounded border border-[var(--accent-blue)] text-[var(--accent-blue)] hover:bg-[var(--accent-blue)]/10 transition-colors"
         >
-          Download .py
+          Baixar .py
         </button>
         {filename && (
           <span className="text-[10px] text-[var(--text-muted)] font-mono">{filename}</span>

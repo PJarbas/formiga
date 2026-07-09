@@ -7,13 +7,9 @@ import { useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   useLeaderboard,
-  useCompareExperiments,
   useArenaSession,
 } from "../api/api";
-import { ComparePanel } from "../components/ComparePanel";
 import { ModelDetailPanel } from "../components/ModelDetailPanel";
-import { ActionBar } from "../components/ActionBar";
-import { addToast } from "../components/Toast";
 import { StatTiles } from "../components/StatTiles";
 import { AucBarChart } from "../components/AucBarChart";
 import { GapPill } from "../components/GapPill";
@@ -45,7 +41,6 @@ export default function Leaderboard() {
 
   const [sortBy, setSortBy] = useState<SortKey>("cvMean");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [detailEntryId, setDetailEntryId] = useState<string | null>(null);
 
   const { data, isLoading } = useLeaderboard({
@@ -62,8 +57,6 @@ export default function Leaderboard() {
   const metricName = arenaSession?.metricName ?? "AUC";
   const metricDirection = arenaSession?.metricDirection ?? "higher";
 
-  const selectedIdArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
-  const compareQuery = useCompareExperiments(selectedIdArray);
 
   const sortedEntries = useMemo(() => {
     if (!data?.entries) return [];
@@ -84,25 +77,10 @@ export default function Leaderboard() {
     return best?.id ?? null;
   }, [sortedEntries]);
 
-  function toggleId(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  const compareEntries = compareQuery.data?.entries ?? [];
-  const panelActions = useMemo(() => [
-    { id: "export", label: "Export comparison" },
-    { id: "rerun", label: "Re-run with tweaks" },
-  ], []);
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64 text-[var(--text-muted)]">
-        Loading leaderboard...
+        Carregando leaderboard...
       </div>
     );
   }
@@ -119,19 +97,6 @@ export default function Leaderboard() {
           <p className="text-xs text-[var(--text-muted)] mt-0.5">
             {data?.total ?? 0} experiments · Best: {data?.bestCvMean?.toFixed(4) ?? "—"} · Metric: {metricName} ({metricDirection})
           </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            disabled={selectedIds.size < 2}
-            className="text-sm rounded px-3 py-1.5 border border-[var(--border-default)] text-[var(--text-primary)] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Compare ({selectedIds.size})
-          </button>
-          {selectedIds.size > 0 && (
-            <button onClick={() => setSelectedIds(new Set())} className="text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)]">
-              Clear
-            </button>
-          )}
         </div>
       </div>
 
@@ -154,7 +119,6 @@ export default function Leaderboard() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[var(--border-default)] text-left">
-                <th className="px-3 py-2.5 w-8" />
                 <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide">#</th>
                 {([
                   ["modelId", "Experiment"],
@@ -203,9 +167,6 @@ export default function Leaderboard() {
                         isDetail ? "border-l-2 border-l-[var(--accent-blue)] bg-[var(--bg-tertiary)]" : ""
                       }`}
                     >
-                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" checked={selectedIds.has(entry.id)} onChange={() => toggleId(entry.id)} />
-                      </td>
                       <td className="px-4 py-2.5 text-xs text-[var(--text-muted)]">
                         {isBest ? <span className="text-[var(--accent-orange)]">🏆</span> : idx + 1}
                       </td>
@@ -253,21 +214,6 @@ export default function Leaderboard() {
         return <ModelDetailPanel entry={detailEntry} onClose={() => setDetailEntryId(null)} />;
       })()}
 
-      {/* Compare Panel */}
-      {selectedIds.size >= 2 && (
-        <div data-testid="compare-section" className="space-y-3">
-          {compareQuery.isLoading ? (
-            <div className="text-xs text-[var(--text-muted)]">Loading comparison...</div>
-          ) : compareQuery.error ? (
-            <div className="text-xs text-[var(--accent-red)]">Compare failed: {(compareQuery.error as Error).message}</div>
-          ) : (
-            <>
-              <ComparePanel experiments={compareEntries} />
-              <ActionBar actions={panelActions} onAction={(id) => addToast("info", `"${id}" not yet wired`)} />
-            </>
-          )}
-        </div>
-      )}
     </div>
   );
 }
