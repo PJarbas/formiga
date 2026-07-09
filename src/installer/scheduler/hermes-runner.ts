@@ -18,6 +18,7 @@ import { logger } from "../../lib/logger.js";
 import { findHermesBinary } from "./binary-discovery.js";
 import { buildStreamLogMetadata, safeKillPgid } from "./shared.js";
 import type { RunPiOptions } from "./pi-runner.js";
+import { extractHermesSessionId, importHermesSession } from "./hermes-activity-importer.js";
 
 /** Internal helper: stream stdout to a file while keeping a bounded tail in memory. */
 async function streamHermesStdout(
@@ -255,6 +256,12 @@ export async function runHermes(
     });
   }
 
+  // Extract session_id before filtering (for activity import)
+  const sourceForSessionId = usedDiskStreaming && options.outputFile
+    ? await readTail(options.outputFile, 512 * 1024)
+    : rawStdout;
+  const hermesSessionId = extractHermesSessionId(sourceForSessionId);
+
   // Determine filtered stdout
   let filteredStdout = "";
   if (usedDiskStreaming && options.outputFile) {
@@ -293,7 +300,18 @@ export async function runHermes(
     hasStderr: stderrMeta.bytes > 0,
     usedDiskStreaming,
     totalStdoutBytes,
+    hermesSessionId,
   });
+
+  // Import Hermes session events to Formiga database (fire-and-forget)
+  if (hermesSessionId && options.activityContext) {
+    importHermesSession(hermesSessionId, options.activityContext).catch((err) => {
+      logger.warn("Failed to import Hermes session activity", {
+        sessionId: hermesSessionId,
+        error: String(err),
+      });
+    });
+  }
 
   return filteredStdout;
 }

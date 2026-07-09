@@ -594,6 +594,7 @@ export async function executePollingRound(
           },
           onSpawn,
           outputFile,
+          activityContext,
         });
       } else {
         const piResult = await runPi(
