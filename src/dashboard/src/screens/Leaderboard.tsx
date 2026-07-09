@@ -45,13 +45,11 @@ export default function Leaderboard() {
 
   const [sortBy, setSortBy] = useState<SortKey>("cvMean");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [filterAgent, setFilterAgent] = useState<string>("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [detailEntryId, setDetailEntryId] = useState<string | null>(null);
 
   const { data, isLoading } = useLeaderboard({
     runId: runIdFromUrl,
-    agentName: filterAgent || undefined,
     sortBy,
     sortDir,
   });
@@ -134,15 +132,6 @@ export default function Leaderboard() {
               Clear
             </button>
           )}
-          <select
-            value={filterAgent}
-            onChange={(e) => setFilterAgent(e.target.value)}
-            className="text-sm bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded px-3 py-1.5 text-[var(--text-primary)]"
-          >
-            <option value="">All agents</option>
-            <option value="modeler-classic">Modeler Classic</option>
-            <option value="modeler-advanced">Modeler Advanced</option>
-          </select>
         </div>
       </div>
 
