@@ -156,6 +156,55 @@ Poll tick (or formiga nudge):
     -> parse output -> complete/fail/retry step
 ```
 
+## 5. Event Explosion — Duplicate `agent_events` Rows
+
+### Symptoms
+- `agent_events` table grows by ~330 rows/min for a single stuck run
+- All `tool_call` events have `tool_status = "running"`, none `"completed"` or `"failed"`
+- Same timestamp has 10-20 duplicate events
+- Dashboard Activity Stream shows duplicated entries
+
+### Root Cause
+`activity-recorder.ts:68-71` treats `toolcall_delta` the same as `toolcall_start`. The delta is an incremental streaming chunk that arrives multiple times per tool call, each creating a new `"running"` event. The matching `toolcall_result` that should create a `"completed"` event is never matched.
+
+Additionally, `handleThinking` threshold of 20 chars is too low — even heartbeat responses generate thinking events.
+
+### Fix
+See `docs/RUN-6599978A-AUDIT.md` FIX-1.1.
+
+---
+
+## 6. Arena Step Stuck / Never Executes
+
+### Symptoms
+- Step `arena` is marked `running` but `arena_sessions.current_round = 0`
+- `artifacts/models/` directory is empty
+- No experiments in `experiments` table for the run
+- Modeler agents remain `idle` indefinitely
+- Scheduler keeps heartbeat-polling the feature-engineer
+
+### Root Cause
+`launchArenaFromStep()` marks the step as `running` then calls `runArena()`. If `buildArenaConfig()` returns `null` or `runArena()` throws silently, the step stays `running` forever. The reconciler only checks for dead `claim_pid`, which arena steps don't use.
+
+### Fix
+See `docs/RUN-6599978A-AUDIT.md` FIX-1.2.
+
+---
+
+## 7. Metric Direction Wrong for RMSE
+
+### Symptoms
+- `arena_sessions.metric_direction = "higher"` when `metric_name = "rmse"`
+- Arena engine will select the **worst** model as winner
+
+### Root Cause
+`benchmark_config.json` doesn't include `metric.direction`. The fallback in `arena-workflow.ts` defaults to `"higher"`, which is wrong for error metrics (RMSE, MSE, MAE).
+
+### Fix
+See `docs/RUN-6599978A-AUDIT.md` FIX-1.3.
+
+---
+
 ### Key Configuration
 - `FORMIGA_CONTROL_PORT`: Control plane port (default 3339)
 - `FORMIGA_PI_BINARY`: Explicit path to pi binary

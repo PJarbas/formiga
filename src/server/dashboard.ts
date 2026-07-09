@@ -955,20 +955,35 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
       ? (await getPrisma().experiment.aggregate({ where: { run_id: runId }, _max: { round_number: true } }))._max.round_number ?? 0
       : 0;
 
-    // Get harness type from run context (defaults to "pi")
+    // Determine workflow type from run
+    let workflowType: "ml-autoresearch" | "ml-pipeline" = "ml-pipeline";
     let runHarnessType: "pi" | "hermes" | "unknown" = "pi";
     if (runId) {
-      const run = await getPrisma().run.findUnique({ where: { id: runId }, select: { context: true } });
-      if (run?.context) {
-        try {
-          const ctx = JSON.parse(run.context);
-          if (ctx.harness_type === "hermes") runHarnessType = "hermes";
-        } catch { /* ignore parse errors */ }
+      const run = await getPrisma().run.findUnique({ where: { id: runId }, select: { context: true, workflow_id: true } });
+      if (run) {
+        if (run.workflow_id?.includes("autoresearch") || run.workflow_id?.includes("arena")) {
+          workflowType = "ml-autoresearch";
+        }
+        if (run.context) {
+          try {
+            const ctx = JSON.parse(run.context);
+            if (ctx.harness_type === "hermes") runHarnessType = "hermes";
+          } catch { /* ignore parse errors */ }
+        }
       }
     }
 
+    // Filter nodes by workflow type
+    const relevantAgents = Object.entries(AGENT_INFO_REGISTRY).filter(([name]) => {
+      if (workflowType === "ml-autoresearch") {
+        // Arena workflow: eda, features, arena, report
+        return ["data-analyst", "feature-engineer", "modeler-classic", "modeler-advanced", "ml-critic"].includes(name);
+      }
+      return true; // ml-pipeline shows all registered agents
+    });
+
     const nodes: PipelineFlowNode[] = await Promise.all(
-      Object.entries(AGENT_INFO_REGISTRY).map(async ([name, info]) => {
+      relevantAgents.map(async ([name, info]) => {
         const status = runId
           ? (await getAgentUnifiedStatus(runId, name, currentRound)).status
           : "idle" as const;
@@ -984,14 +999,27 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
       }),
     );
 
-    // Static edges: the DAG is fixed for the ML pipeline
-    const edges: PipelineFlowEdge[] = [
-      { from: "data-analyst", to: "feature-engineer", artifactLabel: "eda_report.json", status: "delivered" },
-      { from: "feature-engineer", to: "modeler-classic", artifactLabel: "features.parquet", status: "delivered" },
-      { from: "feature-engineer", to: "modeler-advanced", artifactLabel: "features.parquet", status: "delivered" },
-      { from: "modeler-classic", to: "ml-critic", artifactLabel: "modeler-classic_submission.json", status: "delivered" },
-      { from: "modeler-advanced", to: "ml-critic", artifactLabel: "modeler-advanced_submission.json", status: "delivered" },
-    ];
+    // Build edges dynamically based on workflow type
+    let edges: PipelineFlowEdge[];
+    if (workflowType === "ml-autoresearch") {
+      // Arena workflow: eda → features → arena (modelers + critic) → report
+      edges = [
+        { from: "data-analyst", to: "feature-engineer", artifactLabel: "eda_report.json", status: "delivered" },
+        { from: "feature-engineer", to: "modeler-classic", artifactLabel: "features.parquet", status: "delivered" },
+        { from: "feature-engineer", to: "modeler-advanced", artifactLabel: "features.parquet", status: "delivered" },
+        { from: "modeler-classic", to: "ml-critic", artifactLabel: "classic_predictions.csv", status: "delivered" },
+        { from: "modeler-advanced", to: "ml-critic", artifactLabel: "advanced_predictions.csv", status: "delivered" },
+      ];
+    } else {
+      // Standard pipeline: eda → features → modelers → critic
+      edges = [
+        { from: "data-analyst", to: "feature-engineer", artifactLabel: "eda_report.json", status: "delivered" },
+        { from: "feature-engineer", to: "modeler-classic", artifactLabel: "features.parquet", status: "delivered" },
+        { from: "feature-engineer", to: "modeler-advanced", artifactLabel: "features.parquet", status: "delivered" },
+        { from: "modeler-classic", to: "ml-critic", artifactLabel: "modeler-classic_submission.json", status: "delivered" },
+        { from: "modeler-advanced", to: "ml-critic", artifactLabel: "modeler-advanced_submission.json", status: "delivered" },
+      ];
+    }
 
     // Update edge status based on node progress
     const nodeStatus = new Map(nodes.map((n) => [n.agentId, n.status]));
@@ -1009,7 +1037,7 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
       }
     }
 
-    jsonResponse(res, { nodes, edges, runId: runId ?? null } satisfies PipelineFlowResponse);
+    jsonResponse(res, { nodes, edges, runId: runId ?? null, workflowType });
   })().catch((err) => errorResponse(res, `Failed to get pipeline flow: ${(err as Error).message}`));
 }
 
@@ -1292,6 +1320,7 @@ function handleAgentReasoning(
     let learned: string | null = null;
     let nextFocus: string | null = null;
 
+    // Fallback chain: 1) autoresearch log  2) step output markers  3) agent_events thinking
     const run = await prisma.run.findUnique({ where: { id: runId }, select: { context: true } });
     if (run?.context) {
       try {
@@ -1315,6 +1344,40 @@ function handleAgentReasoning(
           }
         }
       } catch (err) { logger.warn("handleAgentReasoning: context not parseable", { agentName, error: (err as Error).message }); }
+    }
+
+    // Fallback 2: extract HYPOTHESIS/LEARNED/NEXT_FOCUS markers from step output
+    if (!hypothesis && step?.output) {
+      const hMatch = step.output.match(/HYPOTHESIS:\s*(.+?)(?:\n|$)/i);
+      if (hMatch) hypothesis = hMatch[1].trim();
+    }
+    if (!learned && step?.output) {
+      const lMatch = step.output.match(/LEARNED:\s*(.+?)(?:\n|$)/i);
+      if (lMatch) learned = lMatch[1].trim();
+    }
+    if (!nextFocus && step?.output) {
+      const nMatch = step.output.match(/NEXT_FOCUS:\s*(.+?)(?:\n|$)/i);
+      if (nMatch) nextFocus = nMatch[1].trim();
+    }
+
+    // Fallback 3: try agent_events thinking for this agent
+    if (!learned) {
+      try {
+        const thinkingEvents = await prisma.agentEvent.findMany({
+          where: {
+            run_id: runId,
+            agent_id: { endsWith: `_${agentName}` },
+            event_type: "thinking",
+            thinking: { not: null },
+          },
+          orderBy: { created_at: "desc" },
+          take: 1,
+          select: { thinking: true },
+        });
+        if (thinkingEvents.length > 0 && thinkingEvents[0].thinking) {
+          learned = thinkingEvents[0].thinking.slice(0, 500);
+        }
+      } catch { /* best effort */ }
     }
 
     // Spec diff from rounds

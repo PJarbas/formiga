@@ -922,6 +922,7 @@ export function startReconciler(): { stop: () => void } {
           agent_id: true,
           run_id: true,
           claim_pid: true,
+          claim_pgid: true,
         },
       });
 
@@ -936,6 +937,15 @@ export function startReconciler(): { stop: () => void } {
           // Process is dead
         }
         if (!alive) {
+          // Kill the process group to clean up any orphan children
+          // (e.g. `formiga step complete` subprocesses left behind)
+          if (step.claim_pgid) {
+            try {
+              process.kill(-step.claim_pgid, "SIGKILL");
+            } catch {
+              // Process group already dead — that's fine
+            }
+          }
           logger.warn(
             `control-server: step ${step.step_id} (agent ${step.agent_id}, run ${step.run_id.slice(0, 8)}) has dead claim_pid ${step.claim_pid} — resetting to pending`,
           );
@@ -953,6 +963,43 @@ export function startReconciler(): { stop: () => void } {
       }
 
       await admitQueuedRuns();
+
+      // ── Arena Step Stuck Detection ──────────────────────────────────
+      // Arena steps don't use claim_pid (they run in-process via launchArenaFromStep).
+      // If an arena step is "running" but has no claim_pid and hasn't updated in
+      // 5 minutes, it's likely stuck (buildArenaConfig returned null silently,
+      // or runArena threw without marking the step failed).
+      try {
+        const ARENA_STUCK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+        const arenaCutoff = new Date(Date.now() - ARENA_STUCK_THRESHOLD_MS);
+        const stuckArenaSteps = await prisma.step.findMany({
+          where: {
+            status: "running",
+            step_id: "arena",
+            claim_pid: null,
+            updated_at: { lt: arenaCutoff },
+            run: { status: "running" },
+          },
+          select: { id: true, step_id: true, run_id: true, updated_at: true },
+        });
+
+        for (const step of stuckArenaSteps) {
+          logger.warn(
+            `control-server: arena step ${step.id} (run ${step.run_id.slice(0, 8)}) stuck in 'running' with no claim_pid since ${step.updated_at.toISOString()} — marking failed`,
+          );
+          const now = new Date();
+          await prisma.step.update({
+            where: { id: step.id },
+            data: { status: "failed", output: "Arena step stuck: no claim_pid and no update for 5 minutes. Reconciler auto-recovery.", updated_at: now },
+          });
+          await prisma.run.update({
+            where: { id: step.run_id },
+            data: { status: "failed", updated_at: now },
+          });
+        }
+      } catch (err) {
+        logger.warn("control-server: arena stuck-step check failed", { error: String(err) });
+      }
 
       // ── Stale Pending Step Recovery ──────────────────────────────────
       // Re-nudge runs that have steps stuck in "pending" without any claim.

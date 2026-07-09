@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { getPrisma } from "../../db.js";
 import { emitEvent } from "../events.js";
 import { logger } from "../../lib/logger.js";
@@ -460,6 +462,10 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
       updated_at: now,
     },
   });
+
+  // Auto-register artifacts from workspace for this agent
+  await autoRegisterArtifacts(step.run_id, stepId, step.agent_id, context);
+
   await recordProgress(step.run_id);
   emitEvent({ ts: new Date().toISOString(), event: "step.done", runId: step.run_id, workflowId: await getWorkflowId(step.run_id), stepId: step.step_id, agentId: step.agent_id });
   logger.info(`Step completed: ${step.step_id}`, { runId: step.run_id, stepId: step.step_id });
@@ -708,4 +714,64 @@ async function checkLoopContinuation(runId: string, loopStepId: string): Promise
     postAdvanceSpawn(runId);
   }
   return result;
+}
+
+// ── Artifact Auto-Registration ──────────────────────────────────────────
+
+/** Known artifact files per agent, relative to workspace/artifacts/ */
+const AGENT_ARTIFACT_FILES: Record<string, string[]> = {
+  "data-analyst": ["eda_report.json", "eda_config.json"],
+  "feature-engineer": ["features_meta.json", "features.parquet", "split.pkl", "split.checksum"],
+  "modeler-classic": ["modeler-classic_submission.json"],
+  "modeler-advanced": ["modeler-advanced_submission.json"],
+  "ml-critic": ["audit_report.json"],
+};
+
+/**
+ * Auto-register artifacts produced by an agent into the agent_artifacts table.
+ * Called after step completion. Best-effort: missing files are silently skipped.
+ */
+async function autoRegisterArtifacts(
+  runId: string,
+  stepId: string,
+  agentId: string,
+  context: Record<string, string>,
+): Promise<void> {
+  const workspace = context.workspace ?? context.working_directory_for_harness;
+  if (!workspace) return;
+
+  const knownFiles = AGENT_ARTIFACT_FILES[agentId];
+  if (!knownFiles) return;
+
+  try {
+    const { recordAgentArtifact } = await import("../../server/routes/agent-activity.js");
+    const artifactsDir = path.join(workspace, "artifacts");
+
+    for (const fileName of knownFiles) {
+      const filePath = path.join(artifactsDir, fileName);
+      if (!fs.existsSync(filePath)) continue;
+
+      try {
+        const stat = fs.statSync(filePath);
+        const content = fileName.endsWith(".json")
+          ? JSON.parse(fs.readFileSync(filePath, "utf-8"))
+          : { path: filePath, size: stat.size };
+
+        await recordAgentArtifact({
+          runId,
+          stepId,
+          agentId,
+          artifactKey: `${agentId}/${fileName}`,
+          artifactPath: filePath,
+          content: content as Record<string, unknown>,
+          contentType: fileName.endsWith(".json") ? "json" : "binary",
+          sizeBytes: stat.size,
+        });
+      } catch (err) {
+        logger.debug("Artifact auto-register skipped", { agentId, fileName, error: String(err) });
+      }
+    }
+  } catch (err) {
+    logger.debug("Artifact auto-registration unavailable", { agentId, error: String(err) });
+  }
 }

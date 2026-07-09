@@ -40,12 +40,16 @@ import {
 import { buildAgentPersonaInstructions, buildPollingPrompt } from "./prompts.js";
 import {
   buildBoundedPreview,
+  consecutiveHeartbeats,
   inFlightChildren,
   inFlightJobs,
   setInFlightChild,
   teardownRunJobs,
   tryMarkJobInFlight,
   type CronJobInfo,
+  getHeartbeatBackoff,
+  recordHeartbeat,
+  resetHeartbeatBackoff,
 } from "./shared.js";
 
 /** Generate a temporary file path for PI/hermes stdout streaming. */
@@ -451,6 +455,21 @@ export async function executePollingRound(
     return;
   }
 
+  // ── Heartbeat backoff ────────────────────────────────────────────
+  // If this agent has had consecutive heartbeat rounds, skip some to
+  // avoid wasting tokens on agents with no pending work.
+  const backoffSkip = getHeartbeatBackoff(job.id);
+  if (backoffSkip > 0) {
+    inFlightJobs.delete(job.id);
+    logger.info("Polling round skipped — heartbeat backoff", {
+      ...context,
+      reason: "heartbeat_backoff",
+      consecutiveHeartbeats: consecutiveHeartbeats.get(job.id) ?? 0,
+      skipCount: backoffSkip,
+    });
+    return;
+  }
+
   // ── Run-scoped status check ──────────────────────────────────────
   // If this run is no longer 'running' (terminal/paused) tear down the
   // job and skip. Without this check, timers leaked from previous CLI
@@ -673,6 +692,13 @@ export async function executePollingRound(
       tokenUsage: metadata.tokenUsage,
       metadataFormat: metadata.jsonMetadataDetected ? "json" : "text",
     });
+
+    // Track heartbeat backoff: record or reset based on outcome
+    if (outputSummary.outcome === "heartbeat") {
+      recordHeartbeat(job.id);
+    } else {
+      resetHeartbeatBackoff(job.id);
+    }
 
     await attributePollingRoundTokenUsage(context, outputSummary, metadata);
 

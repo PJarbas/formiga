@@ -272,6 +272,7 @@ export interface PipelineFlowResponse {
   nodes: PipelineFlowNode[];
   edges: PipelineFlowEdge[];
   runId: string | null;
+  workflowType?: "ml-autoresearch" | "ml-pipeline";
 }
 
 export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {

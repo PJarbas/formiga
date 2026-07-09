@@ -78,6 +78,38 @@ function normalizeDirection(dir: string | undefined): "lower" | "higher" | undef
   return undefined;
 }
 
+// ── Infer metric direction from metric name ────────────────────────────────
+// When benchmark_config.json doesn't specify direction and the run context
+// doesn't provide one, infer it from the metric name.
+
+const METRIC_DIRECTION_DEFAULTS: Record<string, "lower" | "higher"> = {
+  // Lower is better (error/loss metrics)
+  rmse: "lower",
+  mse: "lower",
+  mae: "lower",
+  mape: "lower",
+  rmsle: "lower",
+  logloss: "lower",
+  brier: "lower",
+  hamming: "lower",
+  // Higher is better (score/accuracy metrics)
+  accuracy: "higher",
+  auc: "higher",
+  f1: "higher",
+  r2: "higher",
+  precision: "higher",
+  recall: "higher",
+  map: "higher",
+  ndcg: "higher",
+  roc_auc: "higher",
+  average_precision: "higher",
+};
+
+function inferMetricDirection(metricName: string): "lower" | "higher" {
+  const key = metricName.toLowerCase().replace(/[^a-z_]/g, "");
+  return METRIC_DIRECTION_DEFAULTS[key] ?? "higher";
+}
+
 function readBenchmarkConfig(workspace: string): BenchmarkConfigJson | null {
   // Look in workspace root first, then artifacts/
   const candidates = [
@@ -215,24 +247,31 @@ async function buildArenaConfig(runId: string): Promise<ArenaConfig | null> {
     where: { id: runId },
     select: { context: true },
   });
-  if (!run?.context) return null;
+  if (!run?.context) {
+    logger.error("Arena buildArenaConfig: run has no context", { runId });
+    return null;
+  }
 
   let ctx: Record<string, string>;
   try {
     ctx = JSON.parse(run.context) as Record<string, string>;
-  } catch {
+  } catch (err) {
+    logger.error("Arena buildArenaConfig: failed to parse run context", { runId, error: String(err) });
     return null;
   }
 
   const workspace = ctx.workspace ?? ctx.working_directory_for_harness ?? process.cwd();
   const benchmarkConfig = readBenchmarkConfig(workspace);
+  if (!benchmarkConfig) {
+    logger.warn("Arena buildArenaConfig: no benchmark_config.json found, using defaults", { runId, workspace });
+  }
 
   const metricName =
     benchmarkConfig?.metric?.name ?? ctx.metric_name ?? "cv_score";
   const metricDirection: "lower" | "higher" =
     benchmarkConfig?.metric?.direction ??
     (ctx.metric_direction as "lower" | "higher") ??
-    "higher";
+    inferMetricDirection(metricName);
   const targetMetric =
     benchmarkConfig?.targetMetric ??
     (ctx.target_metric ? Number(ctx.target_metric) : undefined);

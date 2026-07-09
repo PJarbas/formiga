@@ -65,16 +65,26 @@ async function handlePiEvent(
     const assistantEvent = event.assistantMessageEvent as Record<string, unknown> | undefined;
     if (assistantEvent) {
       const innerType = assistantEvent.type as string | undefined;
-      if (innerType === "toolcall_start" || innerType === "toolcall_delta") {
+      // Only record tool_call on "start" — deltas are incremental streaming chunks
+      // that would create duplicate "running" events in the database.
+      if (innerType === "toolcall_start") {
         await handleToolCallStart(event, context);
+        return;
+      }
+      // toolcall_delta: skip — no DB event. The start already recorded the call.
+      if (innerType === "toolcall_delta") {
         return;
       }
       if (innerType === "toolcall_result") {
         await handleToolCallResult(event, context);
         return;
       }
-      if (innerType === "thinking_start" || innerType === "thinking_delta") {
+      if (innerType === "thinking_start") {
         await handleThinking(event, context);
+        return;
+      }
+      // thinking_delta: skip — only record substantial thinking blocks, not chunks
+      if (innerType === "thinking_delta") {
         return;
       }
     }
@@ -177,14 +187,22 @@ async function handleToolCallResult(
   }
 }
 
+// Throttle thinking events — at most one per step per 10 seconds
+let lastThinkingTimestamp = 0;
+
 async function handleThinking(
   event: Record<string, unknown>,
   context: ActivityContext,
 ): Promise<void> {
   const thinking = extractThinking(event);
-  if (!thinking || thinking.length < 20) return; // Skip very short thinking
+  if (!thinking || thinking.length < 100) return; // Skip short/fragment thinking
 
-  // Record to database (throttled — only record substantial thinking)
+  // Throttle: max 1 thinking event per step per 10s to prevent DB bloat
+  const now = Date.now();
+  if (now - lastThinkingTimestamp < 10_000) return;
+  lastThinkingTimestamp = now;
+
+  // Record to database
   try {
     const { recordAgentEvent } = await import("../../server/routes/agent-activity.js");
     await recordAgentEvent({
@@ -326,4 +344,5 @@ function extractThinking(event: Record<string, unknown>): string | null {
 
 export function clearInFlightToolCalls(): void {
   inFlightToolCalls.clear();
+  lastThinkingTimestamp = 0;
 }

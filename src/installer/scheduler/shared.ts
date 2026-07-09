@@ -77,6 +77,40 @@ export interface InFlightChild {
  */
 export const inFlightChildren = new Map<string, InFlightChild>();
 
+// ── Heartbeat backoff ──────────────────────────────────────────────────
+// Track consecutive heartbeat rounds per job. When an agent keeps getting
+// heartbeat (no work) responses, we back off polling to save tokens.
+
+/** Maps job id → number of consecutive heartbeat rounds. */
+export const consecutiveHeartbeats = new Map<string, number>();
+
+/** Maximum consecutive heartbeats before we start skipping rounds. */
+export const MAX_CONSECUTIVE_HEARTBEATS = 3;
+
+/**
+ * Check whether a polling round should be skipped due to heartbeat backoff.
+ * Returns the current backoff skip count (0 = don't skip).
+ */
+export function getHeartbeatBackoff(jobId: string): number {
+  const count = consecutiveHeartbeats.get(jobId) ?? 0;
+  if (count < MAX_CONSECUTIVE_HEARTBEATS) return 0;
+  // Exponential: skip 1 round at 3, 2 at 4, 4 at 5, etc. Cap at 8.
+  const skipCount = Math.min(1 << (count - MAX_CONSECUTIVE_HEARTBEATS), 8);
+  return skipCount;
+}
+
+/** Record a heartbeat outcome for this job. */
+export function recordHeartbeat(jobId: string): void {
+  const current = consecutiveHeartbeats.get(jobId) ?? 0;
+  evictIfFull(consecutiveHeartbeats);
+  consecutiveHeartbeats.set(jobId, current + 1);
+}
+
+/** Record a non-heartbeat (work_done/other) outcome — resets backoff. */
+export function resetHeartbeatBackoff(jobId: string): void {
+  consecutiveHeartbeats.delete(jobId);
+}
+
 /**
  * Bounded insert for jobMetadata. Evicts the oldest entry when at capacity.
  * Fire-and-forget write-through to job_registry for crash recovery.
