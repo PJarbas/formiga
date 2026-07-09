@@ -6,7 +6,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg" alt="Node.js >= 22">
   <img src="https://img.shields.io/badge/install-from%20source-orange.svg" alt="Install from source">
-  <img src="https://img.shields.io/badge/workflows-4%20bundled-8a2be2.svg" alt="4 bundled workflows">
+  <img src="https://img.shields.io/badge/workflows-2%20bundled-8a2be2.svg" alt="2 bundled workflows">
 </p>
 
 Formiga is a **Data Science and AutoResearch Multi-Agent Platform**. Point it at a dataset and walk away. The agents share artifacts through SQLite, cross-pollinate findings, and submit experiments to a live leaderboard you can watch in the browser. Every run is deterministic, resumable, and fully auditable.
@@ -140,27 +140,24 @@ Everything Formiga knows lives in a single SQLite database at `~/.formiga/formig
 - `steps` — agent steps with claim/complete/fail lifecycle
 - `stories` — user stories for story-based workflows
 - `experiments` — the leaderboard
+- `arena_sessions` — arena competition state
 - `autoresearch_sessions` — durable optimization loop state
+- `dataset_signatures` — dataset fingerprint registry for cross-run warm-start
 - `run_worktrees` — git worktree isolation metadata
 
 ## Dashboard
 
-A React 19 SPA with real-time polling (TanStack Query, 3s), served by the same HTTP server on **port 3334**. The dashboard is organized around the four things a scientist actually does during a run — watching the pipeline, triaging experiments, comparing models, and drilling into an agent.
+A React 19 SPA with real-time polling (TanStack Query, 3s), served by the same HTTP server on **port 3334**. The dashboard has three views: pipeline monitoring, model leaderboard, and agent detail.
 
 | Path | Screen | What you do here |
 |------|--------|------------------|
 | `/` | **Command Center** | Pipeline Runs table — status badge, stage dots, metrics, and duration per round (GitLab CI-style) |
-| `/kanban` | **Experiment Board** | Phase / Agent / Status lanes with inline Approve · Reject · Promote |
-| `/leaderboard` | **Model Arena** | Sortable table + scatter; select 2+ rows to compare side-by-side |
-| `/agents/:name` | **Agent Detail** | Trace timeline, checklist, spec diff, rounds history, and logs |
+| `/pipeline` | **Pipeline Flow** | DAG view of agents with animated artifact edges, timeout progress, and side panel for logs/messages/artifacts |
+| `/leaderboard` | **ML Leaderboard** | Sortable table with CSS bar charts, overfitting gap pills, fold sparklines, and arena section |
 
 <p align="center">
-  <img src="docs/screenshots/experiment-board.png" alt="Experiment Board" width="48%">
-  <img src="docs/screenshots/model-arena.png" alt="Model Arena" width="48%">
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/agent-detail.png" alt="Agent Detail — Feature Engineer" width="48%">
+  <img src="docs/screenshots/command-center.png" alt="Command Center" width="48%">
+  <img src="docs/screenshots/model-arena.png" alt="ML Leaderboard" width="48%">
 </p>
 
 ### REST surface
@@ -168,29 +165,38 @@ A React 19 SPA with real-time polling (TanStack Query, 3s), served by the same H
 The ML endpoints all live under `/api/`:
 
 ```bash
-# Aggregated payload powering the Command Center
-curl http://localhost:3334/api/command-center
+# Pipeline status + DAG view
+curl http://localhost:3334/api/pipeline/status
+curl http://localhost:3334/api/pipeline/flow
 
-# Promote / reject experiments
-curl -X POST http://localhost:3334/api/experiments/<id>/promote
-curl -X POST http://localhost:3334/api/experiments/<id>/reject \
-  -H 'content-type: application/json' -d '{"reason":"…"}'
+# Agents — list, detail, logs, inter-agent messages
+curl http://localhost:3334/api/agents
+curl http://localhost:3334/api/agents/modeler-classic
+curl http://localhost:3334/api/agents/modeler-classic/logs?limit=50
+curl http://localhost:3334/api/agents/modeler-classic/messages
 
-# Approve or reject a phase spec
-curl -X PATCH http://localhost:3334/api/specs/<runId>:<phase>/approve
-curl -X PATCH http://localhost:3334/api/specs/<runId>:<phase>/reject
-
-# Interactive checklist per (run, phase)
-curl http://localhost:3334/api/checklist/<runId>/feat-eng
-curl -X PUT http://localhost:3334/api/checklist/<runId>/feat-eng \
-  -H 'content-type: application/json' -d '{"items":[…]}'
-
-# Trace events for an agent at a given round
-curl http://localhost:3334/api/trace/<agentName>/<roundNumber>
-
-# Leaderboard + side-by-side compare
+# Leaderboard + compare + agent history
 curl 'http://localhost:3334/api/leaderboard?sortBy=cvMean&sortDir=desc'
 curl 'http://localhost:3334/api/leaderboard/compare?id=1&id=2'
+curl 'http://localhost:3334/api/leaderboard/agent-history?agent=modeler-classic'
+curl 'http://localhost:3334/api/leaderboard/current-best?runId=<id>'
+
+# Runs — list, detail, delete
+curl http://localhost:3334/api/runs
+curl http://localhost:3334/api/runs/<id>
+curl -X DELETE http://localhost:3334/api/runs/<id>
+
+# Events + logs
+curl http://localhost:3334/api/events
+curl http://localhost:3334/api/logs-tail
+
+# Rounds + cross-findings
+curl http://localhost:3334/api/rounds
+curl http://localhost:3334/api/cross-findings
+
+# Health + stats
+curl http://localhost:3334/api/health
+curl http://localhost:3334/api/stats
 ```
 
 Pause, resume, and cancel are also one-liners:
@@ -203,20 +209,18 @@ curl -X POST http://localhost:3334/api/pipeline/cancel
 
 ## Bundled workflows
 
-Formiga ships with four workflows you can use today:
+Formiga ships with two workflows you can use today:
 
 | Workflow | Agents | What it does |
 |----------|--------|--------------|
-| `do-now` | 1 | Single-shot task. No planning. |
-| `just-do-it` | 1 | Describe a goal, get it done. Auto-dispatches the approach. |
-| `do-review-do-verify` | 3 | Two-pass execution: do, review, revise, verify. |
 | `ml-pipeline` | 5 | The full ML pipeline above. |
+| `ml-autoresearch` | Arena agents | Durable optimization loop with competing agents and convergence detection. |
 
 Any of them auto-installs the first time you run it:
 
 ```bash
-formiga workflow run do-now "Fix the failing test in tests/foo.test.ts"
 formiga workflow run ml-pipeline "dataset_path=data/train.csv target_column=price"
+formiga autoresearch "dataset_path=data/train.csv target_column=price max_rounds=5"
 ```
 
 ## Roll your own workflow
@@ -246,33 +250,22 @@ Full guide: [docs/creating-workflows.md](docs/creating-workflows.md)
 
 ## AutoResearch
 
-A separate, lighter mode for **durable optimization loops** — your agent runs an experiment, logs what it learned, and resumes after restarts. Project-local state, append-only history.
+A **durable optimization loop** powered by the `ml-autoresearch` workflow. Arena agents compete to beat the current best model, share findings, and converge automatically.
 
 ```bash
-# Initialize a session
-formiga autoresearch init \
-  --goal "reduce validation loss" \
-  --metric val_bpb \
-  --direction lower \
-  --command "uv run train.py"
-
-# Run one experiment + log what was learned
-formiga autoresearch run-experiment
-formiga autoresearch log-experiment --status auto \
-  --description "lower learning rate" \
-  --learned "validation improved, training slowed" \
-  --next-focus "test warmup schedule"
-
-# Or run a bounded loop
-formiga autoresearch loop --max-iterations 10
+# One command — auto-installs the workflow and starts the arena
+formiga autoresearch "dataset_path=data/train.csv target_column=price max_rounds=10"
 ```
 
-Lives entirely in your project directory:
+The arena agents:
+1. Read the dataset and baseline metric
+2. Fan out in parallel, each proposing a different model
+3. Benchmark each model against the held-out folds
+4. Keep improvements, discard regressions
+5. Cross-pollinate findings between agents
+6. Stop when the target metric is reached or no improvement after N rounds
 
-- `autoresearch.config.json` — goal, metric, direction, benchmark command
-- `autoresearch.md` — agent-facing objective and operating loop
-- `autoresearch.jsonl` — append-only run history
-- `autoresearch.sh` — your benchmark command
+Legacy subcommands (`init`, `run-experiment`, `log-experiment`, `status`, `next`, `loop`, `prune`, `wizard`) still work but emit deprecation warnings. Prefer the workflow-based invocation above.
 
 ## Command reference
 
@@ -301,10 +294,20 @@ Lives entirely in your project directory:
 - `formiga logs-tail [<lines>|<run-id>|#<run-number>]` — follow events live
 - `formiga nudge` — wake all scheduled agents immediately
 
+**Step operations** *(low-level, for custom harness integration)*
+
+- `formiga step peek <agent-id>` · `step claim <agent-id>` · `step complete <step-id>` · `step fail <step-id>`
+- `formiga step stories <run-id>`
+
+**Stale run management**
+
+- `formiga runs list-stale --min-minutes N [--json]` — list runs stale for N+ minutes
+- `formiga runs cancel-stale --min-minutes N [--force]` — cancel stale runs
+
 **AutoResearch**
 
-- `formiga autoresearch init` · `run-experiment` · `log-experiment` · `next`
-- `formiga autoresearch status` · `loop` · `prune`
+- `formiga autoresearch "<task>"` — start the ml-autoresearch workflow *(recommended)*
+- Legacy: `init` · `run-experiment` · `log-experiment` · `status` · `next` · `loop` · `prune` · `wizard` *(deprecated)*
 
 Every command has `--help`.
 
