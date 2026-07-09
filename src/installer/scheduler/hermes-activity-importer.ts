@@ -223,3 +223,48 @@ export function extractHermesSessionId(stdout: string): string | null {
   const match = stdout.match(/^session_id:\s*(\S+)/m);
   return match?.[1] ?? null;
 }
+
+/**
+ * Query hermes state.db for the most recent session created after startTime.
+ * Used as fallback when hermes -Q suppresses the session_id line in stdout.
+ */
+export async function getMostRecentHermesSessionId(startTimeMs: number): Promise<string | null> {
+  const hermesDbPath = path.join(os.homedir(), ".hermes", "state.db");
+
+  let db: Database.Database;
+  try {
+    db = new Database(hermesDbPath, { readonly: true });
+  } catch {
+    return null;
+  }
+
+  try {
+    // Hermes session IDs are formatted as YYYYMMDD_HHMMSS_XXXXXX
+    // Parse the timestamp portion to find sessions created after startTime
+    const sessions = db.prepare<[], { id: string }>(`
+      SELECT id FROM sessions ORDER BY rowid DESC LIMIT 10
+    `).all();
+
+    for (const session of sessions) {
+      // Parse session ID: 20260709_112833_5a76ad → 2026-07-09 11:28:33
+      const match = session.id.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_/);
+      if (match) {
+        const [, year, month, day, hour, min, sec] = match;
+        const sessionDate = new Date(`${year}-${month}-${day}T${hour}:${min}:${sec}`);
+        const sessionMs = sessionDate.getTime();
+
+        // Allow 5 second tolerance before startTime (hermes may start slightly earlier)
+        if (sessionMs >= startTimeMs - 5000) {
+          return session.id;
+        }
+      }
+    }
+
+    return null;
+  } catch (err) {
+    logger.warn("Failed to query hermes state.db for session", { error: String(err) });
+    return null;
+  } finally {
+    db.close();
+  }
+}

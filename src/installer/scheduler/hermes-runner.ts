@@ -18,7 +18,7 @@ import { logger } from "../../lib/logger.js";
 import { findHermesBinary } from "./binary-discovery.js";
 import { buildStreamLogMetadata, safeKillPgid } from "./shared.js";
 import type { RunPiOptions } from "./pi-runner.js";
-import { extractHermesSessionId, importHermesSession } from "./hermes-activity-importer.js";
+import { extractHermesSessionId, getMostRecentHermesSessionId, importHermesSession } from "./hermes-activity-importer.js";
 
 /** Internal helper: stream stdout to a file while keeping a bounded tail in memory. */
 async function streamHermesStdout(
@@ -256,11 +256,17 @@ export async function runHermes(
     });
   }
 
-  // Extract session_id before filtering (for activity import)
+  // Extract session_id for activity import.
+  // Try stdout first, fall back to querying hermes state.db for the most recent session.
   const sourceForSessionId = usedDiskStreaming && options.outputFile
     ? await readTail(options.outputFile, 512 * 1024)
     : rawStdout;
-  const hermesSessionId = extractHermesSessionId(sourceForSessionId);
+  let hermesSessionId = extractHermesSessionId(sourceForSessionId);
+
+  // If no session_id in output (hermes -Q suppresses it), query state.db for recent session
+  if (!hermesSessionId) {
+    hermesSessionId = await getMostRecentHermesSessionId(startedAt);
+  }
 
   // Determine filtered stdout
   let filteredStdout = "";
