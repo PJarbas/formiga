@@ -455,30 +455,19 @@ export async function executePollingRound(
     return;
   }
 
-  // ── Heartbeat backoff ────────────────────────────────────────────
-  // If this agent has had consecutive heartbeat rounds, skip some to
-  // avoid wasting tokens on agents with no pending work.
-  const backoffSkip = getHeartbeatBackoff(job.id);
-  if (backoffSkip > 0) {
-    inFlightJobs.delete(job.id);
-    logger.info("Polling round skipped — heartbeat backoff", {
-      ...context,
-      reason: "heartbeat_backoff",
-      consecutiveHeartbeats: consecutiveHeartbeats.get(job.id) ?? 0,
-      skipCount: backoffSkip,
-    });
-    return;
-  }
-
   // ── Skip if no pending work ───────────────────────────────────────
   // Don't poll an agent that has no pending/waiting steps. This avoids
   // firing harness processes that will just produce heartbeat output.
+  // IMPORTANT: This check must come BEFORE heartbeat backoff so that
+  // we reset the backoff counter when new work appears, preventing
+  // a stuck agent that skips rounds even when work is available.
+  let hasPendingWork = false;
   try {
     const prisma = getPrisma();
     const hasWork = await prisma.step.findFirst({
       where: {
         run_id: job.runId,
-        agent_id: { endsWith: `_${job.agentId}` },
+        agent_id: job.agentId,
         status: { in: ["pending", "waiting"] },
       },
       select: { id: true },
@@ -495,12 +484,32 @@ export async function executePollingRound(
     } else {
       // There is work — reset heartbeat counter
       resetHeartbeatBackoff(job.id);
+      hasPendingWork = true;
     }
   } catch (err) {
     logger.warn("Pending-work check failed; continuing polling round", {
       ...context,
       error: String(err),
     });
+  }
+
+  // ── Heartbeat backoff ────────────────────────────────────────────
+  // If this agent has had consecutive heartbeat rounds AND no work is
+  // pending, skip some rounds to avoid wasting tokens.
+  // This runs AFTER the pending-work check above, so it only applies
+  // when the DB query failed (hasPendingWork=false from catch block).
+  if (!hasPendingWork) {
+    const backoffSkip = getHeartbeatBackoff(job.id);
+    if (backoffSkip > 0) {
+      inFlightJobs.delete(job.id);
+      logger.info("Polling round skipped — heartbeat backoff", {
+        ...context,
+        reason: "heartbeat_backoff",
+        consecutiveHeartbeats: consecutiveHeartbeats.get(job.id) ?? 0,
+        skipCount: backoffSkip,
+      });
+      return;
+    }
   }
 
   // ── Run-scoped status check ──────────────────────────────────────
