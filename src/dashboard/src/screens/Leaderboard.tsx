@@ -109,7 +109,7 @@ export default function Leaderboard() {
           <h3 className="text-xs uppercase tracking-wider text-[var(--text-muted)] font-medium mb-3">
             {metricName.toUpperCase()} by experiment · validation · cross-validation
           </h3>
-          <AucBarChart entries={sortedEntries} maxBars={10} metricName={metricName} />
+          <AucBarChart entries={sortedEntries} maxBars={10} metricName={metricName} metricDirection={metricDirection as "higher" | "lower"} />
         </div>
       )}
 
@@ -165,7 +165,7 @@ export default function Leaderboard() {
                       onClick={() => setDetailEntryId(isDetail ? null : entry.id)}
                       className={`border-b border-[var(--border-default)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer ${
                         isDetail ? "border-l-2 border-l-[var(--accent-blue)] bg-[var(--bg-tertiary)]" : ""
-                      }`}
+                      } ${isBest ? "bg-blue-500/10" : ""}`}
                     >
                       <td className="px-4 py-2.5 text-xs text-[var(--text-muted)]">
                         {isBest ? <span className="text-[var(--accent-orange)]">🏆</span> : idx + 1}
@@ -183,10 +183,10 @@ export default function Leaderboard() {
                       <td className="px-4 py-2.5 text-xs text-[var(--text-muted)]">
                         {statusCategory === "failed" ? "FAILED" : statusCategory === "audited" ? "AUDITED" : "MODEL_SEL"}
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs" style={{ color: isBest ? "var(--accent-green)" : "var(--accent-blue)" }}>
+                      <td className="px-4 py-2.5 font-mono text-xs text-right tabular-nums" style={{ color: isBest ? "var(--accent-green)" : "var(--accent-blue)" }}>
                         {entry.cvMean.toFixed(4)}
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-[var(--text-muted)]">
+                      <td className="px-4 py-2.5 font-mono text-xs text-[var(--text-muted)] text-right tabular-nums">
                         {entry.cvStd.toFixed(4)}
                       </td>
                       <td className="px-4 py-2.5">
