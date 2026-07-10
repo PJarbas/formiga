@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveFormigaCli, resolveWorkflowWorkspaceDir } from "../paths.js";
 import { AGENT_PERSONA_FILES } from "./shared.js";
+import { getUnreadMessagesHeader } from "../message-ops.js";
 
 // ── Persona file loading ───────────────────────────────────────────────
 
@@ -136,12 +137,12 @@ TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
  * Both peek + claim are scoped to a specific runId so concurrent runs of
  * the same workflow can't cross-claim each other's steps.
  */
-export function buildPollingPrompt(
+export async function buildPollingPrompt(
   workflowId: string,
   agentId: string,
   runId: string,
   agentPersonaInstructions = "",
-): string {
+): Promise<string> {
   const cli = resolveFormigaCli();
 
   const persona = agentPersonaInstructions.trim();
@@ -157,6 +158,16 @@ export function buildPollingPrompt(
       persona,
       `─── END PROVISIONED AGENT PERSONA ───`,
     );
+  }
+
+  // Inject unread messages from other agents (non-blocking)
+  try {
+    const messagesHeader = await getUnreadMessagesHeader(agentId, runId);
+    if (messagesHeader) {
+      prompt.push(messagesHeader);
+    }
+  } catch (err) {
+    // Message injection is best-effort — never block polling
   }
 
   prompt.push(

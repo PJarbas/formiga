@@ -19,6 +19,8 @@ export interface ActivityContext {
   runId: string;
   stepId: string;
   agentId: string;
+  /** When true, skip all DB event recording for this round (used during heartbeat backoff). */
+  suppressRecording?: boolean;
 }
 
 export interface ToolCallEvent {
@@ -43,6 +45,7 @@ export async function processActivityLine(
   context: ActivityContext | null,
 ): Promise<void> {
   if (!context) return;
+  if (context.suppressRecording) return;
   if (!line.startsWith("{")) return;
 
   try {
