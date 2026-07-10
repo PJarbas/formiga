@@ -11,9 +11,9 @@ interface ArtifactEdgeProps {
 }
 
 const EDGE_COLORS: Record<string, { stroke: string; label: string }> = {
-  delivered: { stroke: "var(--accent-green)", label: "delivered" },
-  "in-transit": { stroke: "var(--accent-blue)", label: "in transit" },
-  pending: { stroke: "var(--text-muted)", label: "pending" },
+  delivered: { stroke: "#3fb950", label: "delivered" },
+  "in-transit": { stroke: "#58a6ff", label: "in transit" },
+  pending: { stroke: "#A0AEC0", label: "pending" },
 };
 
 export function ArtifactEdge({ edge, positions }: ArtifactEdgeProps) {
@@ -44,9 +44,9 @@ export function ArtifactEdge({ edge, positions }: ArtifactEdgeProps) {
         d={path}
         fill="none"
         stroke={style.stroke}
-        strokeWidth={1.5}
+        strokeWidth={2}
         strokeDasharray={edge.status === "in-transit" ? "6 4" : "none"}
-        opacity={edge.status === "pending" ? 0.4 : 0.8}
+        opacity={edge.status === "pending" ? 0.6 : 0.9}
       >
         {edge.status === "in-transit" && (
           <animate
@@ -63,7 +63,8 @@ export function ArtifactEdge({ edge, positions }: ArtifactEdgeProps) {
         x={(x1 + x2) / 2}
         y={(y1 + y2) / 2 - 4}
         textAnchor="middle"
-        className="text-[9px] fill-[var(--text-muted)]"
+        className="text-[10px]"
+        fill="#A0AEC0"
       >
         {edge.artifactLabel}
       </text>

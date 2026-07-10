@@ -5,6 +5,17 @@
 
 import type { PipelineFlowNode } from "@shared/dashboard-types";
 
+const AGENT_ICONS: Record<string, string> = {
+  "data-analyst": "📊",
+  "feature-engineer": "⚙️",
+  "modeler-classic": "🧠",
+  "modeler-advanced": "🧠",
+  "arena-modeler-classic": "🧠",
+  "arena-modeler-advanced": "🧠",
+  "ml-critic": "🔍",
+  "reporter": "📋",
+};
+
 interface AgentNodeProps {
   node: PipelineFlowNode;
   isSelected: boolean;
@@ -28,6 +39,7 @@ const HARNESS_LABELS: Record<string, { text: string; color: string }> = {
 export function AgentNode({ node, isSelected, onClick }: AgentNodeProps) {
   const style = STATUS_STYLES[node.status] ?? STATUS_STYLES.idle;
   const harness = HARNESS_LABELS[node.harness] ?? HARNESS_LABELS.unknown;
+  const icon = AGENT_ICONS[node.agentId] ?? "🤖";
 
   return (
     <div
@@ -39,7 +51,7 @@ export function AgentNode({ node, isSelected, onClick }: AgentNodeProps) {
       `}
       style={{
         borderColor: style.border,
-        backgroundColor: style.bg,
+        backgroundColor: "#2d333b",
       }}
       data-testid={`agent-node-${node.agentId}`}
     >
@@ -49,8 +61,11 @@ export function AgentNode({ node, isSelected, onClick }: AgentNodeProps) {
         <span className="text-xs font-medium" style={{ color: style.dot }}>{style.label}</span>
       </div>
 
-      {/* Agent name */}
-      <h3 className="text-sm font-semibold text-[var(--text-primary)]">{node.label}</h3>
+      {/* Agent name with icon */}
+      <h3 className="text-sm font-semibold text-[var(--text-primary)] flex items-center gap-1.5">
+        <span>{icon}</span>
+        <span>{node.label}</span>
+      </h3>
 
       {/* Harness badge */}
       <div className="mt-2 flex items-center gap-2">

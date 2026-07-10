@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useModelReport, useReproductionScript } from "../api/api";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
 import { StructuredReportTab } from "./report";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 type Tab = "overview" | "report" | "script";
 
@@ -56,8 +58,8 @@ export function ModelDetailPanel({ entry, onClose }: Props) {
             onClick={() => setActiveTab(tab.id)}
             className={`px-3 py-2.5 text-xs font-medium border-b-2 transition-colors ${
               activeTab === tab.id
-                ? "border-[var(--accent-blue)] text-[var(--accent-blue)]"
-                : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                ? "border-[var(--accent-blue)] text-[var(--accent-blue)] opacity-100"
+                : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] opacity-50 hover:opacity-80"
             }`}
           >
             {tab.label}
@@ -127,10 +129,10 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
               <tbody>
                 {hpEntries.map(([key, val]) => (
                   <tr key={key} className="border-b border-[var(--border-default)] last:border-0">
-                    <td className="px-3 py-1.5 font-mono text-[var(--text-secondary)] bg-[var(--bg-tertiary)] w-1/3">
+                    <td className="px-3 py-3 font-mono text-gray-400 bg-[var(--bg-tertiary)] w-1/3">
                       {key}
                     </td>
-                    <td className="px-3 py-1.5 font-mono text-[var(--text-primary)]">
+                    <td className="px-3 py-3 font-mono text-white">
                       {formatValue(val)}
                     </td>
                   </tr>
@@ -185,9 +187,9 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
 
 function MetricCard({ label, value, highlight }: { label: string; value?: string; highlight?: boolean }) {
   return (
-    <div className="rounded border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-3 py-2">
-      <div className="text-[10px] text-[var(--text-muted)] uppercase">{label}</div>
-      <div className={`text-sm font-mono font-medium ${highlight ? "text-[var(--accent-orange)]" : "text-[var(--text-primary)]"}`}>
+    <div className="px-3 py-2">
+      <div className="text-[10px] text-gray-400 uppercase tracking-wide">{label}</div>
+      <div className={`text-xl font-mono font-bold mt-1 ${highlight ? "text-[var(--accent-orange)]" : "text-white"}`}>
         {value ?? "—"}
       </div>
     </div>
@@ -220,11 +222,15 @@ function FeatureBars({ features }: { features: Array<[string, number]> }) {
 
 
 function ScriptTab({ script, filename, loading }: { script?: string; filename?: string; loading: boolean }) {
+  const [isCopied, setIsCopied] = useState(false);
+
   if (loading) return <LoadingIndicator text="Gerando script..." />;
   if (!script) return <EmptyState text="Não foi possível gerar o script de reprodução." />;
 
   function handleCopy() {
     navigator.clipboard.writeText(script!);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
   }
 
   function handleDownload() {
@@ -241,12 +247,6 @@ function ScriptTab({ script, filename, loading }: { script?: string; filename?: 
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <button
-          onClick={handleCopy}
-          className="text-xs px-3 py-1.5 rounded border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-        >
-          Copiar
-        </button>
-        <button
           onClick={handleDownload}
           className="text-xs px-3 py-1.5 rounded border border-[var(--accent-blue)] text-[var(--accent-blue)] hover:bg-[var(--accent-blue)]/10 transition-colors"
         >
@@ -256,9 +256,32 @@ function ScriptTab({ script, filename, loading }: { script?: string; filename?: 
           <span className="text-[10px] text-[var(--text-muted)] font-mono">{filename}</span>
         )}
       </div>
-      <pre className="max-h-[500px] overflow-auto rounded border border-[var(--border-default)] bg-[var(--bg-tertiary)] p-4 text-xs font-mono text-[var(--text-secondary)] whitespace-pre">
-        {script}
-      </pre>
+      <div className="relative rounded-lg overflow-hidden" style={{ backgroundColor: "#282c34" }}>
+        <button
+          onClick={handleCopy}
+          className={`absolute top-2 right-2 z-10 text-xs px-2 py-1 rounded transition-colors ${
+            isCopied
+              ? "bg-green-500/20 text-green-400"
+              : "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+          }`}
+        >
+          {isCopied ? "✓ Copiado!" : "📋 Copiar"}
+        </button>
+        <SyntaxHighlighter
+          language="python"
+          style={oneDark}
+          customStyle={{
+            margin: 0,
+            padding: "1rem",
+            maxHeight: "500px",
+            fontSize: "12px",
+            backgroundColor: "#282c34",
+          }}
+          showLineNumbers
+        >
+          {script}
+        </SyntaxHighlighter>
+      </div>
     </div>
   );
 }

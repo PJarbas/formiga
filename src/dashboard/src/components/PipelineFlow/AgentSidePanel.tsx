@@ -6,7 +6,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AGENT_INFO_REGISTRY } from "@shared/dashboard-types";
-import { AgentActivityStream } from "../AgentActivityStream";
 
 interface AgentMessage {
   from: string;
@@ -14,10 +13,9 @@ interface AgentMessage {
   content: string;
 }
 
-type TabId = "activity" | "reasoning" | "messages" | "artifacts" | "history";
+type TabId = "reasoning" | "messages" | "artifacts" | "history";
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "activity", label: "Activity" },
   { id: "reasoning", label: "Reasoning" },
   { id: "messages", label: "Messages" },
   { id: "artifacts", label: "Artifacts" },
@@ -31,7 +29,7 @@ interface AgentSidePanelProps {
 }
 
 export function AgentSidePanel({ agentId, runId, onClose }: AgentSidePanelProps) {
-  const [activeTab, setActiveTab] = useState<TabId>("activity");
+  const [activeTab, setActiveTab] = useState<TabId>("reasoning");
 
   const info = AGENT_INFO_REGISTRY[agentId];
 
@@ -85,8 +83,8 @@ export function AgentSidePanel({ agentId, runId, onClose }: AgentSidePanelProps)
             onClick={() => setActiveTab(tab.id)}
             className={`flex-1 px-2 py-2 text-xs font-medium transition-colors ${
               activeTab === tab.id
-                ? "text-[var(--accent-blue)] border-b-2 border-[var(--accent-blue)]"
-                : "text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                ? "text-[var(--accent-blue)] border-b-2 border-[var(--accent-blue)] opacity-100"
+                : "text-[var(--text-muted)] hover:text-[var(--text-primary)] opacity-50 hover:opacity-80"
             }`}
           >
             {tab.label}
@@ -96,13 +94,6 @@ export function AgentSidePanel({ agentId, runId, onClose }: AgentSidePanelProps)
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto p-4">
-        {activeTab === "activity" && (
-          <AgentActivityStream
-            runId={runId}
-            stepId={info?.stepId}
-            isRunning={agentDetail?.currentStatus === "running"}
-          />
-        )}
         {activeTab === "reasoning" && <ReasoningContent agentId={agentId} detail={agentDetail} />}
         {activeTab === "messages" && <MessagesContent messages={messages ?? []} />}
         {activeTab === "artifacts" && <ArtifactsContent agentId={agentId} info={info} />}

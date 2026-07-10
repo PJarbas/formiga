@@ -65,12 +65,12 @@ export function StatTiles({ entries, bestCvMean, metricName = "AUC" }: StatTiles
       {tiles.map((t) => (
         <div
           key={t.label}
-          className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-3 flex flex-col"
+          className="rounded-lg bg-[var(--bg-secondary)] p-4 flex flex-col"
         >
-          <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-medium">
+          <span className="text-[10px] uppercase tracking-wider text-gray-400 font-medium">
             {t.label}
           </span>
-          <span className="text-xl font-mono font-bold mt-1" style={{ color: t.accent }}>
+          <span className="text-2xl font-mono font-bold mt-1 tabular-nums" style={{ color: t.accent }}>
             {t.value}
           </span>
           <span className="text-xs text-[var(--text-muted)] mt-0.5 truncate">
