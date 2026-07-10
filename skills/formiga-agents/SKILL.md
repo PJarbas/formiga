@@ -192,11 +192,33 @@ Compare with `formiga workflow uninstall <name> [--force]` which removes a
 single workflow without stopping services, and `formiga workflow uninstall
 --all [--force]` which removes all workflows (also no service stops).
 
-### 2.10) AutoResearch experiment commands
+### 2.10) AutoResearch workflow (recommended)
 
-AutoResearch runs durable optimization experiment loops. Sessions are stored
-in project-local files (`autoresearch.config.json`, `autoresearch.jsonl`,
-`autoresearch.md`). The three core commands are init, run-experiment, and
+The simplest way to run AutoResearch is with the workflow command:
+
+```bash
+formiga autoresearch "dataset_path=/path/to/data.csv target_column=price"
+```
+
+This starts a multi-agent ML arena where:
+- **Data Analyst** performs EDA
+- **Feature Engineer** builds features and benchmark scripts
+- **Arena Engine** runs competing modelers (Classic vs Advanced) in rounds
+- **Reporter** summarizes results when the arena converges
+
+The arena continues until convergence or max rounds. Use the dashboard to
+monitor progress:
+
+```bash
+formiga dashboard start
+open http://localhost:3334/
+```
+
+### 2.11) AutoResearch experiment commands (legacy)
+
+For fine-grained control, AutoResearch also supports durable experiment loops
+with project-local files (`autoresearch.config.json`, `autoresearch.jsonl`,
+`autoresearch.md`). The core commands are init, run-experiment, and
 log-experiment.
 
 #### Init
@@ -291,7 +313,7 @@ formiga autoresearch log-experiment \
   --next-focus "fix cache invalidation"
 ```
 
-### 2.11) AutoResearch loop and iteration commands
+### 2.12) AutoResearch loop and iteration commands
 
 AutoResearch supports running bounded experiment loops and transactional
 single-iteration execution. The loop command orchestrates the full
@@ -390,7 +412,7 @@ formiga autoresearch run-loop-iteration --command "uv run train.py" --iteration 
 formiga autoresearch run-loop-iteration --prompt test --iteration 1
 ```
 
-### 2.12) AutoResearch monitoring and setup commands
+### 2.13) AutoResearch monitoring and setup commands
 
 AutoResearch provides commands for inspecting experiment status, generating
 evidence-driven prompts, pruning stale sessions, and interactive setup.
@@ -702,6 +724,55 @@ formiga workflow run <workflow-id> "<task>" --hermes-as-harness
 If `FORMIGA_HERMES_BINARY` is not set, Formiga searches for `hermes` on
 `PATH`. The binary is validated at scheduling time — if it is not found or
 not executable, the run fails at startup.
+
+### 4) Inter-agent messaging
+
+Agents can send structured messages to each other during a run. Messages are
+stored in SQLite and can be read by the recipient agent.
+
+```bash
+# Send a message to another agent
+formiga message send <to-agent> '<json>' --run-id <run-id>
+
+# List messages for an agent (optionally filter by sender)
+formiga message list --run-id <run-id> [--from <agent>]
+
+# Read a specific message
+formiga message read <message-key> --run-id <run-id>
+```
+
+Example:
+
+```bash
+# Data analyst sends findings to feature engineer
+formiga message send feature-engineer '{"type":"eda_complete","findings":["high_cardinality_cols","missing_values"]}' --run-id abc123
+
+# Feature engineer reads messages
+formiga message list --run-id abc123
+formiga message read eda_complete --run-id abc123
+```
+
+### 4.1) Stale run management
+
+Identify and clean up runs that have been idle for too long.
+
+```bash
+# List runs idle for more than N minutes (default: 60)
+formiga runs list-stale [--min-minutes N] [--json]
+
+# Cancel stale runs in bulk (requires --force)
+formiga runs cancel-stale [--min-minutes N] --force
+```
+
+Examples:
+
+```bash
+# Find runs idle for over 2 hours
+formiga runs list-stale --min-minutes 120
+
+# Cancel all runs idle for over 3 hours
+formiga runs cancel-stale --min-minutes 180 --force
+```
 
 ### 5) Review artifacts on changes
 

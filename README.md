@@ -5,273 +5,202 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg" alt="Node.js >= 22">
-  <img src="https://img.shields.io/badge/install-from%20source-orange.svg" alt="Install from source">
 </p>
 
-Formiga is a **Multi-Agent ML Platform**. Point it at a dataset, walk away, and let AI agents compete to build the best model. Every experiment is tracked, every decision is auditable, and you can watch it all unfold in real-time.
+**AutoResearch for Data Science Teams** — A multi-agent system that automates the ML experimentation cycle: EDA, feature engineering, model training, and hyperparameter tuning.
 
-<p align="center"><b>A CLI that orchestrates a team of specialist AI agents — Data Analyst, Feature Engineer, competing Modelers, and an adversarial ML Critic — through a deterministic, resumable workflow.</b></p>
+### Why Formiga?
 
-No Redis. No Kubernetes. No YAML soup. Just Node, SQLite, and a live dashboard.
+Data scientists spend 80% of their time on repetitive tasks: exploring data, engineering features, tuning hyperparameters, comparing models. Formiga automates this with a team of AI agents that work like data scientists — they explore, experiment, compete, and report back.
 
+**What you get:**
+- **Parallel experimentation** — Classic ML and Deep Learning agents compete simultaneously
+- **Iterative improvement** — Arena runs multiple rounds until models converge
+- **Full auditability** — Every experiment tracked, every decision logged
+- **Live dashboard** — Watch agents work in real-time
 ---
 
 ## Quick Start
 
-### 1. Install
+### 1. Prerequisites
+
+- **Node.js 22+** — check with `node -v`
+- **Coding-agent harness** — install one:
+  - [pi](https://github.com/mariozechner/pi-coding-agent) (recommended)
+  - [hermes](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo)
+
+### 2. Install Formiga
 
 ```bash
-# One-line install
-curl -fsSL https://raw.githubusercontent.com/PJarbas/formiga/main/scripts/install.sh | bash
-
-# Or from source
 git clone https://github.com/PJarbas/formiga.git
 cd formiga && ./build-and-install
 ```
 
-Requires **Node.js 22+** and the [hermes](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo) or [pi](https://github.com/mariozechner/pi-coding-agent) coding-agent harness.
-
-### 2. Run AutoResearch
+### 3. Run
 
 ```bash
-# Point at your CSV and let Formiga do the rest
+# Start a competitive ML arena
 formiga autoresearch "dataset_path=data/train.csv target_column=price"
 
-# Open the dashboard to watch progress
+# Open the dashboard
 formiga dashboard start
 open http://localhost:3334/
 ```
 
-That's it! Agents will explore your data, engineer features, train models, and compete in an arena.
+Agents will explore your data, engineer features, train models, and compete until convergence.
 
-<p align="center"><img src="docs/screenshots/command-center.png" alt="Formiga Dashboard" width="820"></p>
+<p align="center"><img src="docs/screenshots/command-center.png" alt="Command Center" width="820"></p>
 
 ---
 
-## What Happens When You Run It
+## How It Works
 
-```mermaid
-flowchart TD
-    Input["Dataset + target"] --> Analyst["Data Analyst<br/>EDA & data quality"]
-    Analyst -->|"eda_report.json"| Engineer["Feature Engineer<br/>Features + split + baseline"]
-    Engineer -->|"features.parquet"| Arena{"Arena<br/>(competing agents)"}
-    Arena --> Classic["Modeler Classic<br/>GBM · Linear · Trees"]
-    Arena --> Advanced["Modeler Advanced<br/>NN · AutoML · Stacking"]
-    Classic -. cross-pollination .-> Advanced
-    Advanced -. cross-pollination .-> Classic
-    Classic --> Board["Leaderboard"]
-    Advanced --> Board
-    Board --> Report["Reporter<br/>Final summary"]
+```
+Data Analyst → Feature Engineer → Arena (Classic vs Advanced) → Reporter
+                                      ↑_________|
+                                    (repeats N rounds)
 ```
 
-1. **Data Analyst** explores your dataset — distributions, missing values, correlations — and produces an EDA report.
-2. **Feature Engineer** builds features, creates train/val/test splits, and trains a baseline model every competitor must beat.
-3. **Arena** runs multiple rounds where Classic and Advanced modelers compete in parallel, sharing insights between rounds.
-4. Each experiment is tracked on a **live leaderboard** in the dashboard.
-5. **Reporter** summarizes the competition: best model, key learnings, performance metrics.
-
-Everything is deterministic and resumable. Stop it, restart your laptop, resume it.
+1. **Data Analyst** — EDA, data quality, correlations
+2. **Feature Engineer** — features, train/val/test split, baseline model
+3. **Arena** — Classic and Advanced modelers compete in rounds
+4. **Reporter** — summarizes results when arena converges
 
 ---
 
-## The Agent Team
+## Workflows
 
-| Agent | Role | What It Does |
-|-------|------|--------------|
-| **Data Analyst** | EDA | Explores data quality, distributions, correlations, outliers |
-| **Feature Engineer** | Prep | Builds features, canonical split, baseline model |
-| **Modeler Classic** | ML | Gradient boosting, linear, tree-based, SVM, stacking |
-| **Modeler Advanced** | ML | Neural nets, AutoML, transformers, deep stacking |
-| **ML Critic** | Audit | Read-only adversarial checks (overfitting, leakage, inflation) |
-| **Reporter** | Summary | Final competition report with insights |
-
-Each agent has its own persona, workspace, and acceptance criteria. The ML Critic is read-only — it audits but cannot modify models.
+| Workflow | Description | Command |
+|----------|-------------|---------|
+| **ml-autoresearch** | Competitive arena, multiple rounds | `formiga autoresearch "..."` |
+| **ml-pipeline** | Single-pass with audit | `formiga workflow run ml-pipeline "..."` |
 
 ---
 
 ## Dashboard
 
-A real-time dashboard at `http://localhost:3334` with three views:
-
-| View | What You See |
-|------|--------------|
-| **Command Center** | All pipeline runs with status, timing, and metrics |
-| **Pipeline Flow** | Live DAG visualization of agents and artifact flow |
-| **Leaderboard** | Sortable experiment table with metrics and comparisons |
-
 <p align="center">
-  <img src="docs/screenshots/command-center.png" alt="Command Center" width="48%">
-  <img src="docs/screenshots/model-arena.png" alt="ML Leaderboard" width="48%">
+  <img src="docs/screenshots/command-center.png" alt="Command Center" width="32%">
+  <img src="docs/screenshots/pipeline-flow.png" alt="Pipeline Flow" width="32%">
+  <img src="docs/screenshots/leaderboard.png" alt="Leaderboard" width="32%">
 </p>
 
+| Tab | Description |
+|-----|-------------|
+| **Command Center** | All runs with status and metrics |
+| **Pipeline Flow** | Live DAG of agents |
+| **Leaderboard** | Experiments sorted by CV score |
+
 ```bash
-formiga dashboard start   # Start at localhost:3334
-formiga dashboard stop    # Stop the server
-formiga dashboard status  # Check if running
+formiga dashboard start   # http://localhost:3334
+formiga dashboard stop
 ```
 
 ---
 
-## Choosing a Harness
-
-Formiga uses a coding-agent harness to execute agent steps. Two options:
+## Commands
 
 ```bash
-# Hermes (default) — recommended
-formiga autoresearch "dataset_path=data/train.csv target_column=price" --hermes-as-harness
+# Workflows
+formiga autoresearch "dataset_path=... target_column=..."
+formiga workflow run ml-pipeline "..."
 
-# Pi — alternative harness
-formiga autoresearch "dataset_path=data/train.csv target_column=price" --pi-as-harness
+# Run management
+formiga workflow runs              # list
+formiga workflow status <id>       # check
+formiga workflow pause <id>        # pause
+formiga workflow resume <id>       # resume
+formiga workflow delete <id>       # delete permanently
+
+# Debugging
+formiga logs                       # recent
+formiga logs-tail                  # live
+formiga status                     # health check
+
+# Setup
+formiga get-ready                  # install workflows + start services
+formiga update                     # pull + rebuild + restart
 ```
-
-Harness binary is validated at scheduling time — if missing, the run fails immediately with a clear error.
 
 ---
 
-## Common Commands
+## Using Formiga from Other AI Agents
 
-**Running workflows:**
+Formiga exposes a skill that Claude Code or other AI agents can use to run ML experiments programmatically.
 
-```bash
-# AutoResearch (recommended) — competitive arena with multiple rounds
-formiga autoresearch "dataset_path=data/train.csv target_column=price"
-
-# ML Pipeline — single-pass 5-agent pipeline
-formiga workflow run ml-pipeline "dataset_path=data/train.csv target_column=price"
-```
-
-**Managing runs:**
+### Install the Skill
 
 ```bash
-formiga workflow runs              # List all runs
-formiga workflow status <run-id>   # Check specific run
-formiga workflow pause <run-id>    # Pause a run
-formiga workflow resume <run-id>   # Resume paused run
-formiga workflow stop <run-id>     # Cancel a run
+# Add to your Claude Code skills
+cp -r /path/to/formiga/skills/formiga-agents ~/.claude/skills/
 ```
 
-**Logs and debugging:**
+### Example: Agent-Driven AutoResearch
+
+An AI agent can run a full ML arena with this prompt:
+
+```
+You have access to Formiga, a multi-agent ML platform. 
+
+Run AutoResearch on the dataset at /data/train.csv to predict "price":
+
+formiga autoresearch "dataset_path=/data/train.csv target_column=price max_rounds=10"
+
+Monitor progress with:
+formiga logs-tail
+formiga dashboard start && open http://localhost:3334/
+
+The arena will automatically:
+- Run EDA and feature engineering
+- Spawn competing modelers (Classic ML vs Deep Learning)
+- Iterate until convergence or max rounds
+- Generate a final report with the best model
+```
+
+### Key Commands for Agents
 
 ```bash
-formiga logs                       # Recent activity
-formiga logs-tail                  # Follow live
-formiga status                     # System health check
+# Start ML arena (ml-autoresearch workflow)
+formiga autoresearch "dataset_path=/path/to/data.csv target_column=target"
+
+# With options
+formiga autoresearch "dataset_path=data.csv target_column=price max_rounds=5 metric=rmse direction=lower"
+
+# Monitor progress
+formiga logs-tail
+formiga workflow status <run-id>
+
+# Manage runs
+formiga workflow runs              # list all
+formiga workflow pause <run-id>    # pause
+formiga workflow resume <run-id>   # resume
 ```
 
-**Lifecycle:**
-
-```bash
-formiga get-ready                  # Install workflows + start services
-formiga update                     # Pull, rebuild, restart
-formiga uninstall                  # Full teardown
-```
-
-Every command has `--help` for details.
+See [skills/formiga-agents/SKILL.md](skills/formiga-agents/SKILL.md) for the complete agent API.
 
 ---
 
 ## Architecture
 
-Formiga is a **TypeScript CLI + SQLite + polling** orchestrator. No external services required.
-
-```mermaid
-flowchart TB
-    CLI["formiga CLI"] -->|workflow run| DB[("SQLite<br/>~/.formiga/formiga.db")]
-    DB --> Daemon["Background daemon"]
-    Daemon -->|schedules| Agents["Agent team"]
-    Agents -->|harness| Harness["pi / hermes"]
-    Agents -->|claim / write| DB
-    DB --> Server["HTTP :3334"]
-    Server --> Dash["React dashboard"]
+```
+CLI → SQLite (~/.formiga/formiga.db) → Daemon → Agents → Harness (pi/hermes)
+                   ↑                                           |
+            Dashboard API (:3334) ←────────────────────────────┘
 ```
 
-Everything lives in `~/.formiga/formiga.db`:
-- `runs` — workflow executions with status and timing
-- `steps` — agent steps with claim/complete/fail lifecycle
-- `experiments` — the leaderboard
-- `arena_sessions` — competition state
-- `agent_artifacts` — structured data exchange between agents
-
----
-
-## REST API
-
-The dashboard is backed by a REST API you can use programmatically:
-
-```bash
-# Pipeline
-curl http://localhost:3334/api/pipeline/status
-curl http://localhost:3334/api/pipeline/flow
-
-# Leaderboard
-curl http://localhost:3334/api/leaderboard
-curl http://localhost:3334/api/leaderboard/current-best?runId=<id>
-
-# Runs
-curl http://localhost:3334/api/runs
-curl http://localhost:3334/api/runs/<id>
-
-# Control
-curl -X POST http://localhost:3334/api/pipeline/pause
-curl -X POST http://localhost:3334/api/pipeline/resume
-```
-
----
-
-## Custom Workflows
-
-Create your own agent workflows with YAML:
-
-```yaml
-id: my-workflow
-name: My Custom Workflow
-
-agents:
-  - id: researcher
-    name: Researcher
-    workspace:
-      files:
-        AGENTS.md: agents/researcher/AGENTS.md
-
-steps:
-  - id: research
-    agent: researcher
-    input: |
-      Research {{task}} and report findings.
-      Reply with STATUS: done and FINDINGS: ...
-    expects: "STATUS: done"
-```
-
-Full guide: [docs/creating-workflows.md](docs/creating-workflows.md)
-
----
-
-## Requirements
-
-- **Node.js >= 22** (uses native `node:sqlite`)
-- **[hermes](https://github.com/anthropics/anthropic-quickstarts)** or **[pi](https://github.com/mariozechner/pi-coding-agent)** — coding-agent harness
-- **`gh` CLI** — optional, for GitHub integration
+See [docs/WORKFLOW-ARCHITECTURE.md](docs/WORKFLOW-ARCHITECTURE.md) for details.
 
 ---
 
 ## Development
 
 ```bash
-./build              # npm install + tsc + vite build
-npm test             # Unit + integration tests
-./run-all-e2e-tests  # Fast smoke tests
+./build              # builds and restarts services
+npm test             # run tests
 ```
-
-See [docs/AGENTS.md](docs/AGENTS.md) for architecture and conventions.
 
 ---
 
 ## License
 
 [MIT](LICENSE)
-
----
-
-## Origins
-
-Formiga began as a fork of [antfarm](https://github.com/snarktank/antfarm) and pursues the same goal — orchestrating teams of AI agents through deterministic, repeatable workflows. Credit to the original authors for the design and inspiration.
