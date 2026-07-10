@@ -7,8 +7,11 @@ describe("agent-cron re-exports", () => {
     assert.equal(typeof buildWorkPrompt, "function");
   });
 
-  it("exports buildPollingPrompt as a function", () => {
+  it("exports buildPollingPrompt as an async function", () => {
     assert.equal(typeof buildPollingPrompt, "function");
+    // buildPollingPrompt is now async — returns a Promise
+    const result = buildPollingPrompt("wf", "agent", "run");
+    assert.ok(result instanceof Promise);
   });
 
   it("exports buildAgentPrompt as a function", () => {

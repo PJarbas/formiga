@@ -503,6 +503,36 @@ Examples:
   formiga step stories abc12345`;
 }
 
+function getMessageHelp(): string {
+  return `formiga message — Send and receive messages between agents
+
+Usage:
+  formiga message send <to-agent> <json-payload> --run-id <run-id>
+  formiga message list --run-id <run-id> [--from <agent>]
+  formiga message read <message-key> --run-id <run-id>
+
+Commands:
+  send   Send a message to another agent
+  list   List messages addressed to the current agent
+  read   Read the full content of a specific message
+
+Environment:
+  FORMIGA_AGENT_ID  Set sender agent ID (defaults to "unknown")
+
+Examples:
+  # Send findings to another agent
+  formiga message send modeler-classic '{"tip":"check col_3 for outliers"}' --run-id abc123
+
+  # List all messages
+  formiga message list --run-id abc123
+
+  # List messages from a specific agent
+  formiga message list --run-id abc123 --from data-analyst
+
+  # Read a specific message
+  formiga message read 'message/data-analyst/modeler-classic/a1b2c3d4' --run-id abc123`;
+}
+
 function getDashboardHelp(): string {
   return `formiga dashboard — Manage the web dashboard daemon
 
@@ -1304,6 +1334,9 @@ function getUsageText(): string {
     "formiga step complete <step-id>      Complete step (reads output from stdin)",
     "formiga step fail <step-id> <error>  Fail step with retry logic",
     "formiga step stories <run-id>        List stories for a run",
+    "", "formiga message send <to-agent> <json> --run-id <run-id>  Send message to agent",
+    "formiga message list --run-id <run-id> [--from <agent>]  List messages for agent",
+    "formiga message read <message-key> --run-id <run-id>     Read a single message",
     "", "formiga logs [<lines>|<run-id>|#<run-number>] Show recent activity",
     "formiga logs-tail [<lines>|<run-id>|#<run-number>] Follow recent activity",
     "", "formiga version                      Show installed version",
@@ -1365,6 +1398,7 @@ async function main() {
       if (action === "fail") { printHelp(getStepFailHelp()); }
       if (action === "stories") { printHelp(getStepStoriesHelp()); }
     }
+    if (group === "message") { printHelp(getMessageHelp()); }
     if (group === "logs") {
       printHelp(getLogsHelp());
     }
@@ -1594,6 +1628,53 @@ Examples:
     if (action === "fail") { if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); } console.log(JSON.stringify(await failStep(target, args.slice(3).join(" ").trim() || "Unknown error"))); return; }
     if (action === "stories") { if (!target) { process.stderr.write("Missing run-id.\n"); process.exit(1); } const fullRunId = (await getWorkflowStatus(target)).id; const stories = await getStories(fullRunId); if (stories.length === 0) { console.log("No stories found."); return; } for (const s of stories) console.log(`${s.storyId.padEnd(8)} [${s.status.padEnd(7)}] ${s.title}${s.retryCount > 0 ? ` (retry ${s.retryCount})` : ""}`); return; }
     process.stderr.write(`Unknown step action: ${action}\n`); process.exit(1);
+  }
+
+  // ── Message commands ───────────────────────────────────────────────
+  if (group === "message") {
+    const runIdArg = readOption(args, "--run-id");
+
+    if (action === "send") {
+      if (!target) { process.stderr.write("Missing <to-agent>.\nUsage: formiga message send <to-agent> <json-payload> --run-id <run-id>\n"); process.exit(1); }
+      if (!runIdArg) { process.stderr.write("Missing --run-id.\n"); process.exit(1); }
+      const toAgent = target;
+      const fromAgent = process.env.FORMIGA_AGENT_ID ?? "unknown";
+      let payloadStr = args.slice(3).find((a) => !a.startsWith("--") && a !== runIdArg);
+      let payload: unknown;
+      if (payloadStr && payloadStr !== "-") {
+        try { payload = JSON.parse(payloadStr); } catch (e) { process.stderr.write(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}\n`); process.exit(1); }
+      } else {
+        const chunks: Buffer[] = [];
+        for await (const c of process.stdin) chunks.push(c);
+        const text = Buffer.concat(chunks).toString("utf-8").trim();
+        try { payload = JSON.parse(text); } catch (e) { process.stderr.write(`Invalid JSON from stdin: ${e instanceof Error ? e.message : String(e)}\n`); process.exit(1); }
+      }
+      const { sendMessage } = await import("../installer/message-ops.js");
+      const messageKey = await sendMessage(runIdArg, "system", fromAgent, toAgent, payload);
+      console.log(JSON.stringify({ success: true, messageKey }));
+      return;
+    }
+
+    if (action === "list") {
+      if (!runIdArg) { process.stderr.write("Missing --run-id.\n"); process.exit(1); }
+      const agentId = process.env.FORMIGA_AGENT_ID ?? "unknown";
+      const fromAgent = readOption(args, "--from");
+      const { listMessages } = await import("../installer/message-ops.js");
+      const messages = await listMessages(agentId, runIdArg, fromAgent ? { fromAgent } : undefined);
+      console.log(JSON.stringify(messages, null, 2));
+      return;
+    }
+
+    if (action === "read") {
+      if (!target) { process.stderr.write("Missing <message-key>.\n"); process.exit(1); }
+      if (!runIdArg) { process.stderr.write("Missing --run-id.\n"); process.exit(1); }
+      const { readMessage } = await import("../installer/message-ops.js");
+      const content = await readMessage(target, runIdArg);
+      console.log(JSON.stringify(content, null, 2));
+      return;
+    }
+
+    process.stderr.write(`Unknown message action: ${action}\n`); process.exit(1);
   }
 
   if (group === "logs") {

@@ -582,7 +582,7 @@ export async function executePollingRound(
       });
     }
 
-    const pollingPrompt = buildPollingPrompt(
+    const pollingPrompt = await buildPollingPrompt(
       job.workflowId,
       job.agentId,
       job.runId,
@@ -645,7 +645,13 @@ export async function executePollingRound(
     }
 
     const activityContext = activityStepId
-      ? { runId: job.runId, stepId: activityStepId, agentId: job.agentId }
+      ? {
+          runId: job.runId,
+          stepId: activityStepId,
+          agentId: job.agentId,
+          // Suppress event recording when in heartbeat backoff (2+ consecutive heartbeats)
+          suppressRecording: (consecutiveHeartbeats.get(job.id) ?? 0) >= 2,
+        }
       : undefined;
 
     if (!activityContext) {
