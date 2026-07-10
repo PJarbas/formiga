@@ -113,6 +113,8 @@ export interface LeaderboardResponse {
 
 // ── Pipeline status (Tela 1) ─────────────────────────────────────────
 
+export type WorkflowType = "ml-pipeline" | "ml-autoresearch";
+
 export type PipelinePhase = "idle" | "data_analysis" | "feature_engineering" | "modeling" | "audit" | "arena" | "report" | "complete" | (string & {});
 
 export interface PipelineStatus {
@@ -123,6 +125,9 @@ export interface PipelineStatus {
   maxRounds: number;
   startedAt: string | null;
   updatedAt: string | null;
+  /** Dynamic agent statuses keyed by agent ID */
+  agentStats: Record<string, AgentStatus>;
+  /** @deprecated Use agentStats instead - kept for backwards compatibility */
   phaseStats: {
     dataAnalyst: AgentStatus;
     featureEngineer: AgentStatus;
@@ -136,6 +141,7 @@ export interface PipelineStatus {
     roundsCompleted: number;
     tokensSpent: number;
   };
+  workflowType?: WorkflowType;
 }
 
 // ── Agent detail (Tela 4) ────────────────────────────────────────────
@@ -275,7 +281,10 @@ export interface PipelineFlowResponse {
   workflowType?: "ml-autoresearch" | "ml-pipeline";
 }
 
-export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
+// ── Agent registries per workflow ────────────────────────────────────
+
+/** Agents for ml-pipeline workflow */
+export const ML_PIPELINE_AGENTS: Record<string, AgentInfo> = {
   "data-analyst": {
     name: "data-analyst",
     label: "Data Analyst",
@@ -336,6 +345,92 @@ export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
     artifactsOut: ["audit_report.json"],
     messagesCount: 0,
   },
+};
+
+/** Agents for ml-autoresearch workflow */
+export const ML_AUTORESEARCH_AGENTS: Record<string, AgentInfo> = {
+  "data-analyst": {
+    name: "data-analyst",
+    label: "Data Analyst",
+    description: "Performs exploratory data analysis: distributions, correlations, missing values, outlier detection, and generates hypotheses.",
+    tools: ["Read", "Write", "Bash", "Glob", "Grep"],
+    model: "sonnet",
+    phase: "data_analysis",
+    stepId: "eda",
+    harness: "pi",
+    artifactsOut: ["eda_report.json"],
+    messagesCount: 0,
+  },
+  "feature-engineer": {
+    name: "feature-engineer",
+    label: "Feature Engineer",
+    description: "Engineers features, creates train/test split, trains a baseline model, and creates benchmark scripts for the arena.",
+    tools: ["Read", "Write", "Bash", "Glob", "Grep"],
+    model: "sonnet",
+    phase: "feature_engineering",
+    stepId: "features",
+    harness: "pi",
+    artifactsOut: ["features.parquet", "split.pkl", "benchmark_config.json", "benchmark_runner.py"],
+    messagesCount: 0,
+  },
+  "arena-modeler-classic": {
+    name: "arena-modeler-classic",
+    label: "Modeler (Classic)",
+    description: "Arena competitor using classical ML: GBM, Linear, RF, SVM, Stacking. Competes in rounds against the advanced modeler.",
+    tools: ["Read", "Write", "Bash", "Glob", "Grep"],
+    model: "sonnet",
+    phase: "arena",
+    stepId: "arena",
+    harness: "pi",
+    artifactsOut: ["modeler-classic_submission.json"],
+    messagesCount: 0,
+  },
+  "arena-modeler-advanced": {
+    name: "arena-modeler-advanced",
+    label: "Modeler (Advanced)",
+    description: "Arena competitor using advanced ML: Neural Networks, TabNet, FT-Transformer, AutoML. Competes in rounds against the classic modeler.",
+    tools: ["Read", "Write", "Bash", "Glob", "Grep"],
+    model: "sonnet",
+    phase: "arena",
+    stepId: "arena",
+    harness: "pi",
+    artifactsOut: ["modeler-advanced_submission.json"],
+    messagesCount: 0,
+  },
+  "reporter": {
+    name: "reporter",
+    label: "Arena Reporter",
+    description: "Summarizes arena competition results: best models, convergence analysis, and final leaderboard report.",
+    tools: ["Read", "Write", "Bash", "Glob", "Grep"],
+    model: "sonnet",
+    phase: "report",
+    stepId: "report",
+    harness: "pi",
+    artifactsOut: ["arena_report.json"],
+    messagesCount: 0,
+  },
+};
+
+/** Get agents for a specific workflow type */
+export function getAgentsForWorkflow(workflowType: WorkflowType | undefined): Record<string, AgentInfo> {
+  if (workflowType === "ml-autoresearch") {
+    return ML_AUTORESEARCH_AGENTS;
+  }
+  return ML_PIPELINE_AGENTS;
+}
+
+/** Get agent IDs for a specific workflow type */
+export function getAgentIdsForWorkflow(workflowType: WorkflowType | undefined): string[] {
+  return Object.keys(getAgentsForWorkflow(workflowType));
+}
+
+/**
+ * @deprecated Use getAgentsForWorkflow() instead for workflow-specific agents.
+ * This combined registry is kept for backwards compatibility.
+ */
+export const AGENT_INFO_REGISTRY: Record<string, AgentInfo> = {
+  ...ML_PIPELINE_AGENTS,
+  ...ML_AUTORESEARCH_AGENTS,
 };
 
 // ── Actions, decisions & UX primitives (front-specs §9) ──────────────
@@ -567,8 +662,6 @@ export interface ArenaProgress {
   maxRounds: number;
   status: ArenaDashboardStatus;
 }
-
-export type WorkflowType = "ml-pipeline" | "ml-autoresearch";
 
 export interface PipelineRunRow {
   runId: string;

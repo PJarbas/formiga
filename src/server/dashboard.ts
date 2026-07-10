@@ -884,6 +884,7 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
         maxRounds: 5,
         startedAt: null,
         updatedAt: null,
+        agentStats: {},
         phaseStats: {
           dataAnalyst: "idle",
           featureEngineer: "idle",
@@ -892,14 +893,20 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
           mlCritic: "idle",
         },
         quickStats: { totalExperiments: 0, bestCvMean: null, roundsCompleted: 0, tokensSpent: 0 },
+        workflowType: "ml-pipeline",
       });
       return;
     }
 
     const run = await prisma.run.findUnique({
       where: { id: runId },
-      select: { id: true, status: true, created_at: true, updated_at: true, tokens_spent: true },
+      select: { id: true, status: true, created_at: true, updated_at: true, tokens_spent: true, workflow_id: true },
     });
+
+    // Determine workflow type
+    const workflowType = (run?.workflow_id?.includes("autoresearch") || run?.workflow_id?.includes("arena"))
+      ? "ml-autoresearch" as const
+      : "ml-pipeline" as const;
 
     const stats = await getExperimentStats(runId);
 
@@ -920,12 +927,23 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
 
     const currentPhase = await getCurrentPhase(runId);
 
+    // Build agentStats dynamically based on workflow type
+    const agentIds = workflowType === "ml-autoresearch"
+      ? ["data-analyst", "feature-engineer", "arena-modeler-classic", "arena-modeler-advanced", "reporter"]
+      : ["data-analyst", "feature-engineer", "modeler-classic", "modeler-advanced", "ml-critic"];
+
+    const agentStats: Record<string, string> = {};
+    for (const agentId of agentIds) {
+      agentStats[agentId] = (await getAgentUnifiedStatus(runId, agentId, currentRound)).status;
+    }
+
+    // Legacy phaseStats for backwards compatibility
     const phaseStats = {
-      dataAnalyst: (await getAgentUnifiedStatus(runId, "data-analyst", currentRound)).status,
-      featureEngineer: (await getAgentUnifiedStatus(runId, "feature-engineer", currentRound)).status,
-      modelerClassic: (await getAgentUnifiedStatus(runId, "modeler-classic", currentRound)).status,
-      modelerAdvanced: (await getAgentUnifiedStatus(runId, "modeler-advanced", currentRound)).status,
-      mlCritic: (await getAgentUnifiedStatus(runId, "ml-critic", currentRound)).status,
+      dataAnalyst: agentStats["data-analyst"] ?? "idle",
+      featureEngineer: agentStats["feature-engineer"] ?? "idle",
+      modelerClassic: agentStats["modeler-classic"] ?? agentStats["arena-modeler-classic"] ?? "idle",
+      modelerAdvanced: agentStats["modeler-advanced"] ?? agentStats["arena-modeler-advanced"] ?? "idle",
+      mlCritic: agentStats["ml-critic"] ?? agentStats["reporter"] ?? "idle",
     };
 
     jsonResponse(res, {
@@ -936,6 +954,7 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
       maxRounds: 5,
       startedAt: run?.created_at ?? null,
       updatedAt: run?.updated_at ?? null,
+      agentStats,
       phaseStats,
       quickStats: {
         totalExperiments: stats.total,
@@ -943,6 +962,7 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
         roundsCompleted: currentRound,
         tokensSpent: run?.tokens_spent ?? 0,
       },
+      workflowType,
     });
   })().catch((err) => errorResponse(res, `Failed to get pipeline status: ${(err as Error).message}`));
 }
@@ -973,14 +993,23 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
       }
     }
 
-    // Filter nodes by workflow type
-    const relevantAgents = Object.entries(AGENT_INFO_REGISTRY).filter(([name]) => {
-      if (workflowType === "ml-autoresearch") {
-        // Arena workflow: eda, features, arena, report
-        return ["data-analyst", "feature-engineer", "modeler-classic", "modeler-advanced", "ml-critic"].includes(name);
-      }
-      return true; // ml-pipeline shows all registered agents
-    });
+    // Filter nodes by workflow type using the appropriate agent registry
+    const agentRegistry = workflowType === "ml-autoresearch"
+      ? { // ml-autoresearch agents
+          "data-analyst": AGENT_INFO_REGISTRY["data-analyst"],
+          "feature-engineer": AGENT_INFO_REGISTRY["feature-engineer"],
+          "arena-modeler-classic": AGENT_INFO_REGISTRY["arena-modeler-classic"],
+          "arena-modeler-advanced": AGENT_INFO_REGISTRY["arena-modeler-advanced"],
+          "reporter": AGENT_INFO_REGISTRY["reporter"],
+        }
+      : { // ml-pipeline agents
+          "data-analyst": AGENT_INFO_REGISTRY["data-analyst"],
+          "feature-engineer": AGENT_INFO_REGISTRY["feature-engineer"],
+          "modeler-classic": AGENT_INFO_REGISTRY["modeler-classic"],
+          "modeler-advanced": AGENT_INFO_REGISTRY["modeler-advanced"],
+          "ml-critic": AGENT_INFO_REGISTRY["ml-critic"],
+        };
+    const relevantAgents = Object.entries(agentRegistry).filter(([, info]) => info !== undefined);
 
     const nodes: PipelineFlowNode[] = await Promise.all(
       relevantAgents.map(async ([name, info]) => {
@@ -1002,13 +1031,13 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
     // Build edges dynamically based on workflow type
     let edges: PipelineFlowEdge[];
     if (workflowType === "ml-autoresearch") {
-      // Arena workflow: eda → features → arena (modelers + critic) → report
+      // Arena workflow: eda → features → arena modelers → reporter
       edges = [
         { from: "data-analyst", to: "feature-engineer", artifactLabel: "eda_report.json", status: "delivered" },
-        { from: "feature-engineer", to: "modeler-classic", artifactLabel: "features.parquet", status: "delivered" },
-        { from: "feature-engineer", to: "modeler-advanced", artifactLabel: "features.parquet", status: "delivered" },
-        { from: "modeler-classic", to: "ml-critic", artifactLabel: "classic_predictions.csv", status: "delivered" },
-        { from: "modeler-advanced", to: "ml-critic", artifactLabel: "advanced_predictions.csv", status: "delivered" },
+        { from: "feature-engineer", to: "arena-modeler-classic", artifactLabel: "features.parquet", status: "delivered" },
+        { from: "feature-engineer", to: "arena-modeler-advanced", artifactLabel: "features.parquet", status: "delivered" },
+        { from: "arena-modeler-classic", to: "reporter", artifactLabel: "modeler-classic_submission.json", status: "delivered" },
+        { from: "arena-modeler-advanced", to: "reporter", artifactLabel: "modeler-advanced_submission.json", status: "delivered" },
       ];
     } else {
       // Standard pipeline: eda → features → modelers → critic

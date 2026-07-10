@@ -1,14 +1,39 @@
 // ══════════════════════════════════════════════════════════════════════
 // PipelineFlowScreen.tsx — DAG view of the ML pipeline (replaces kanban)
-// Fixed 5-node graph with CSS Grid layout, SVG edges, clickable nodes
+// Dynamic grid layout based on workflow type, SVG edges, clickable nodes
 // ══════════════════════════════════════════════════════════════════════
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { PipelineFlowResponse, PipelineFlowNode, PipelineFlowEdge } from "@shared/dashboard-types";
+import type { PipelineFlowResponse, WorkflowType } from "@shared/dashboard-types";
 import { AgentNode } from "../components/PipelineFlow/AgentNode";
 import { ArtifactEdge } from "../components/PipelineFlow/ArtifactEdge";
 import { AgentSidePanel } from "../components/PipelineFlow/AgentSidePanel";
+
+/** Grid positions for ml-pipeline workflow (5 agents) */
+const ML_PIPELINE_POSITIONS: Record<string, { row: number; col: number }> = {
+  "data-analyst": { row: 0, col: 1 },
+  "feature-engineer": { row: 1, col: 1 },
+  "modeler-classic": { row: 2, col: 0 },
+  "modeler-advanced": { row: 2, col: 2 },
+  "ml-critic": { row: 3, col: 1 },
+};
+
+/** Grid positions for ml-autoresearch workflow (5 agents, different layout) */
+const ML_AUTORESEARCH_POSITIONS: Record<string, { row: number; col: number }> = {
+  "data-analyst": { row: 0, col: 1 },
+  "feature-engineer": { row: 1, col: 1 },
+  "arena-modeler-classic": { row: 2, col: 0 },
+  "arena-modeler-advanced": { row: 2, col: 2 },
+  "reporter": { row: 3, col: 1 },
+};
+
+function getGridPositions(workflowType: WorkflowType | undefined): Record<string, { row: number; col: number }> {
+  if (workflowType === "ml-autoresearch") {
+    return ML_AUTORESEARCH_POSITIONS;
+  }
+  return ML_PIPELINE_POSITIONS;
+}
 
 export default function PipelineFlowScreen() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
@@ -23,6 +48,11 @@ export default function PipelineFlowScreen() {
     refetchInterval: 5000,
   });
 
+  const gridPositions = useMemo(
+    () => getGridPositions(data?.workflowType),
+    [data?.workflowType]
+  );
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64 text-[var(--text-muted)]">
@@ -33,15 +63,6 @@ export default function PipelineFlowScreen() {
 
   const nodes = data?.nodes ?? [];
   const edges = data?.edges ?? [];
-
-  // Grid positions for fixed 5-node DAG
-  const gridPositions: Record<string, { row: number; col: number }> = {
-    "data-analyst": { row: 0, col: 1 },
-    "feature-engineer": { row: 1, col: 1 },
-    "modeler-classic": { row: 2, col: 0 },
-    "modeler-advanced": { row: 2, col: 2 },
-    "ml-critic": { row: 3, col: 1 },
-  };
 
   return (
     <div className="relative" data-testid="pipeline-flow">
