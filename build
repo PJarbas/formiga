@@ -15,6 +15,20 @@ if [ -z "$NODE_VERSION" ] || [ "$NODE_VERSION" -lt 22 ]; then
   exit 1
 fi
 
+# Check if services are running and stop them before build
+SERVICES_WERE_RUNNING=false
+if command -v formiga &>/dev/null; then
+  DASHBOARD_STATUS=$(formiga dashboard status 2>/dev/null || echo "stopped")
+  CONTROL_PLANE_STATUS=$(formiga control-plane status 2>/dev/null || echo "stopped")
+
+  if [[ "$DASHBOARD_STATUS" == *"running"* ]] || [[ "$CONTROL_PLANE_STATUS" == *"running"* ]]; then
+    SERVICES_WERE_RUNNING=true
+    echo "[0/3] Stopping services before build..."
+    formiga dashboard stop 2>/dev/null || true
+    formiga control-plane stop 2>/dev/null || true
+  fi
+fi
+
 echo "[1/3] Clean old build artifacts"
 rm -rf "$SCRIPT_DIR/dist"
 
@@ -23,6 +37,14 @@ npm install
 
 echo "[3/3] npm run build"
 npm run build
+
+# Restart services if they were running before
+if [ "$SERVICES_WERE_RUNNING" = true ]; then
+  echo "[4/4] Restarting services..."
+  formiga control-plane start 2>/dev/null || true
+  formiga dashboard start 2>/dev/null || true
+  echo "Services restarted."
+fi
 
 echo ""
 echo "Build complete. Dist: $SCRIPT_DIR/dist/"
