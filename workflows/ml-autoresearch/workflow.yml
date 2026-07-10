@@ -65,13 +65,13 @@ agents:
     description: Classic ML competitor in the arena (GBM, linear, trees, SVM, stacking).
     timeoutSeconds: 3600
     workspace:
-      baseDir: agents/modeler-classic
+      baseDir: agents/arena-modeler-classic
       skills:
         - formiga-agents
       files:
-        AGENTS.md: agents/modeler-classic/AGENTS.md
-        IDENTITY.md: agents/modeler-classic/IDENTITY.md
-        SOUL.md: agents/modeler-classic/SOUL.md
+        AGENTS.md: agents/arena-modeler-classic/AGENTS.md
+        IDENTITY.md: agents/arena-modeler-classic/IDENTITY.md
+        SOUL.md: agents/arena-modeler-classic/SOUL.md
 
   - id: arena-modeler-advanced
     name: Arena Modeler Advanced
@@ -79,13 +79,13 @@ agents:
     description: Advanced ML competitor in the arena (NN, AutoML, deep stacking, embeddings).
     timeoutSeconds: 3600
     workspace:
-      baseDir: agents/modeler-advanced
+      baseDir: agents/arena-modeler-advanced
       skills:
         - formiga-agents
       files:
-        AGENTS.md: agents/modeler-advanced/AGENTS.md
-        IDENTITY.md: agents/modeler-advanced/IDENTITY.md
-        SOUL.md: agents/modeler-advanced/SOUL.md
+        AGENTS.md: agents/arena-modeler-advanced/AGENTS.md
+        IDENTITY.md: agents/arena-modeler-advanced/IDENTITY.md
+        SOUL.md: agents/arena-modeler-advanced/SOUL.md
 
   - id: reporter
     name: Arena Reporter

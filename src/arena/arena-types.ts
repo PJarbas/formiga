@@ -23,6 +23,8 @@ export interface ArenaConfig {
   agents: ArenaAgentConfig[];
   /** Dataset signature for warm-start lookups across runs */
   datasetSignature?: string;
+  /** Formiga API base URL for artifact access (e.g., http://localhost:3334) */
+  formigaApi?: string;
 }
 
 export interface ArenaAgentConfig {

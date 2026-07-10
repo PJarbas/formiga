@@ -304,6 +304,7 @@ async function buildArenaConfig(runId: string): Promise<ArenaConfig | null> {
     commitOnKeep: false,
     revertOnDiscard: false,
     agents: ARENA_AGENTS,
+    formigaApi: ctx.formiga_api ?? process.env.FORMIGA_DASHBOARD_URL ?? "http://localhost:3334",
   };
 }
 

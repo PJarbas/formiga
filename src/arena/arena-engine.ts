@@ -398,6 +398,26 @@ function buildPromptsForRound(
       prompt += `### Warm-Start: Past Best for This Dataset\n`;
       prompt += warmStartHints.join("\n") + "\n\n";
     }
+    // Inject Formiga API helpers for artifact access
+    const apiUrl = config.formigaApi ?? process.env.FORMIGA_DASHBOARD_URL ?? "http://localhost:3334";
+    prompt += `### Formiga API (artifact access)\n\n`;
+    prompt += `Use these bash functions to read/save artifacts and query leaderboard:\n\n`;
+    prompt += `\`\`\`bash\n`;
+    prompt += `formiga_read_artifact() {\n`;
+    prompt += `  curl -s "${apiUrl}/api/runs/${config.runId}/agent-artifacts/$1" | jq -r '.content'\n`;
+    prompt += `}\n\n`;
+    prompt += `formiga_save_artifact() {\n`;
+    prompt += `  local key="$1"; local content="$2"\n`;
+    prompt += `  curl -s -X POST "${apiUrl}/api/runs/${config.runId}/agent-artifacts/$key" \\\n`;
+    prompt += `    -H "Content-Type: application/json" \\\n`;
+    prompt += `    -d "{\\"stepId\\": \\"arena\\", \\"agentId\\": \\"${agent.id}\\", \\"content\\": $content}"\n`;
+    prompt += `}\n\n`;
+    prompt += `formiga_leaderboard() {\n`;
+    prompt += `  curl -s "${apiUrl}/api/leaderboard/$1?runId=${config.runId}"\n`;
+    prompt += `}\n`;
+    prompt += `\`\`\`\n\n`;
+    prompt += `**Available artifacts:** eda_config, eda_report, features_metadata, baseline_submission, split_config, benchmark_config\n\n`;
+
     prompt += `### Rules\n`;
     prompt += `- Write a STANDALONE Python script that trains a model and evaluates it.\n`;
     prompt += `- The script must read benchmark_config.json from the workspace root.\n`;
