@@ -18,7 +18,7 @@ import { resolveBundledWorkflowDir, resolveWorkflowDir } from "../installer/path
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource, type FormigaEvent } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { parseLogsSelector, lookupRunIdByNumber } from "./logs-selector.js";
-import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startControlPlane, stopControlPlane, getControlPlaneStatus, isControlPlaneRunning } from "../server/daemonctl.js";
+import { startDaemon, stopDaemon, getDaemonStatus, isRunning, startControlPlane, stopControlPlane, getControlPlaneStatus, isControlPlaneRunning, discoverDaemonProcesses, cleanupOrphanDaemons } from "../server/daemonctl.js";
 import { DEFAULT_CONTROL_PORT } from "../server/control-server.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon, nudgeWithDaemon } from "../server/control-client.js";
 import { claimStep, completeStep, failStep, getStories, peekStep } from "../installer/step-ops.js";
@@ -1329,6 +1329,8 @@ function getUsageText(): string {
     "", "formiga dashboard [start] [--port N] Start dashboard (default: 3334)",
     "formiga dashboard stop               Stop dashboard",
     "formiga dashboard status             Check dashboard status",
+    "", "formiga daemon list                  List all daemon processes (active + orphans)",
+    "formiga daemon cleanup               Kill orphan daemons to free memory",
     "", "formiga step peek <agent-id> --run-id <run-id>     Check for pending work (HAS_WORK or NO_WORK)",
     "formiga step claim <agent-id> --run-id <run-id>    Claim pending step (JSON output)",
     "formiga step complete <step-id>      Complete step (reads output from stdin)",
@@ -1587,6 +1589,48 @@ Examples:
       process.stderr.write(`Failed to start control plane: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
+    return;
+  }
+
+  // ── Daemon management commands ────────────────────────────────────────
+  if (group === "daemon") {
+    if (action === "list") {
+      const processes = discoverDaemonProcesses();
+      if (processes.length === 0) {
+        console.log("No daemon processes found.");
+        return;
+      }
+      console.log("Daemon processes:");
+      for (const p of processes) {
+        const status = p.isOrphan ? "\x1b[33mORPHAN\x1b[0m" : "\x1b[32mACTIVE\x1b[0m";
+        const mem = (p.rss / 1024).toFixed(1);
+        console.log(`  [${status}] PID ${p.pid} | ${mem}MB | started ${p.startTime}`);
+      }
+      const orphans = processes.filter(p => p.isOrphan);
+      if (orphans.length > 0) {
+        const totalMem = (orphans.reduce((sum, p) => sum + p.rss, 0) / 1024).toFixed(1);
+        console.log(`\n${orphans.length} orphan(s) using ${totalMem}MB. Run 'formiga daemon cleanup' to free.`);
+      }
+      return;
+    }
+    if (action === "cleanup") {
+      const killed = await cleanupOrphanDaemons();
+      console.log(killed > 0
+        ? `Cleaned up ${killed} orphan daemon(s).`
+        : "No orphan daemons found."
+      );
+      return;
+    }
+    // Default: show help
+    console.log(`formiga daemon — Manage daemon processes
+
+Subcommands:
+  list      List all daemon processes (active and orphans)
+  cleanup   Kill orphan daemon processes to free memory
+
+Examples:
+  formiga daemon list       # See all daemons
+  formiga daemon cleanup    # Kill orphans`);
     return;
   }
 
