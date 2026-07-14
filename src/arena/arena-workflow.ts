@@ -150,11 +150,11 @@ function parseArenaAgentOutput(
   learned: string;
   nextFocus: string;
 } {
-  // Extract metadata markers
-  const hypothesisMatch = stdout.match(/HYPOTHESIS:\s*(.+?)(?:\n|$)/i);
+  // Extract metadata markers (support both English and Portuguese keys)
+  const hypothesisMatch = stdout.match(/(?:HYPOTHESIS|HIPOTESE):\s*(.+?)(?:\n|$)/i);
   const scriptPathMatch = stdout.match(/SCRIPT_PATH:\s*(.+?)(?:\n|$)/i);
-  const learnedMatch = stdout.match(/LEARNED:\s*(.+?)(?:\n|$)/i);
-  const nextFocusMatch = stdout.match(/NEXT_FOCUS:\s*(.+?)(?:\n|$)/i);
+  const learnedMatch = stdout.match(/(?:LEARNED|APRENDIZADO):\s*(.+?)(?:\n|$)/i);
+  const nextFocusMatch = stdout.match(/(?:NEXT_FOCUS|PROXIMO_FOCO):\s*(.+?)(?:\n|$)/i);
 
   // Try to read the script from the file the agent claimed to have written
   let script = "";

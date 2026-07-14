@@ -16,9 +16,9 @@ interface AgentAttempt {
 }
 
 function formatLeaderboardTable(topN: ExperimentRow[], direction: MetricDirection): string {
-  if (topN.length === 0) return "(No results yet. Be first!)";
-  const headers = "| Rank | Agent | Model | Round | Metric |";
-  const sep = "|------|-------|-------|-------|--------|";
+  if (topN.length === 0) return "(Sem resultados ainda. Seja o primeiro!)";
+  const headers = "| Rank | Agente | Modelo | Rodada | Métrica |";
+  const sep = "|------|--------|--------|--------|---------|";
   const rows = topN.map((e, idx) => {
     const metricStr = e.val_metric?.toFixed(6) ?? "N/A";
     return `| ${idx + 1} | ${e.agent_name} | ${e.model_type} | ${e.round_number} | ${metricStr} |`;
@@ -27,21 +27,21 @@ function formatLeaderboardTable(topN: ExperimentRow[], direction: MetricDirectio
 }
 
 function formatMyHistory(attempts: AgentAttempt[]): string {
-  if (attempts.length === 0) return "(None yet)\n";
-  const headers = "| Round | Hypothesis | Metric | Decision | Learned |";
-  const sep = "|-------|------------|--------|----------|---------|";
+  if (attempts.length === 0) return "(Nenhuma ainda)\n";
+  const headers = "| Rodada | Hipótese | Métrica | Decisão | Aprendizado |";
+  const sep = "|--------|----------|---------|---------|-------------|";
   const rows = attempts.map((a) => {
-    const metricStr = a.metric !== null ? a.metric.toFixed(6) : "crash";
-    const dec = a.decision === "keep" || a.decision === "baseline" ? "keep" : a.decision;
+    const metricStr = a.metric !== null ? a.metric.toFixed(6) : "falha";
+    const dec = a.decision === "keep" || a.decision === "baseline" ? "manter" : a.decision;
     return `| ${a.round} | ${a.hypothesis.slice(0, 40)} | ${metricStr} | ${dec} | ${(a.learned ?? "").slice(0, 40)} |`;
   });
   return [headers, sep, ...rows].join("\n");
 }
 
 function formatOthersInsights(keptResults: AgentRoundResult[]): string {
-  if (keptResults.length === 0) return "(No kept results from other agents yet.)";
+  if (keptResults.length === 0) return "(Nenhum resultado mantido de outros agentes ainda.)";
   return keptResults
-    .map((r) => `- ${r.agentId}: "${r.hypothesis}" → ${r.metric !== null ? r.metric.toFixed(6) : "crash"} (${r.decision})`)
+    .map((r) => `- ${r.agentId}: "${r.hypothesis}" → ${r.metric !== null ? r.metric.toFixed(6) : "falha"} (${r.decision})`)
     .join("\n");
 }
 
@@ -76,11 +76,13 @@ export function buildAgentPrompt(
       learned: h.learned,
     }));
 
-  const directionLabel = session.metricDirection === "lower" ? "(lower is better)" : "(higher is better)";
+  const directionLabel = session.metricDirection === "lower" ? "(menor é melhor)" : "(maior é melhor)";
 
-  let prompt = `## Competition Arena — Round ${round}
+  let prompt = `## Arena de Competição — Rodada ${round}
 
-You are **${agent.id}**. Your goal: beat the current best metric.
+Você é **${agent.id}**. Seu objetivo: superar a melhor métrica atual.
+
+**IMPORTANTE**: Todas as suas respostas devem ser em português brasileiro. Isso inclui hipóteses, aprendizados e próximos focos.
 
 `;
 
@@ -89,35 +91,35 @@ You are **${agent.id}**. Your goal: beat the current best metric.
     prompt += `\n`;
   }
 
-  prompt += `### Current Leaderboard (Top 10)
+  prompt += `### Leaderboard Atual (Top 10)
 ${formatLeaderboardTable(topN, session.metricDirection)}
 
-### Your Previous Attempts
+### Suas Tentativas Anteriores
 ${formatMyHistory(myAttempts)}
 
-### What Others Have Learned (kept results only)
+### O que Outros Aprenderam (apenas resultados mantidos)
 ${formatOthersInsights(othersResults)}
 
-### Strategy Guidance
+### Orientação de Estratégia
 ${agent.strategyHint}
 
-### Rules
-- Produce a Python script that defines a \`model\` variable (sklearn-compatible estimator).
-- Save it to: \`artifacts/models/${agent.id}_round${round}.py\`
-- Your model will be measured by the benchmark (cross-validation on held-out folds).
-- Metric: ${session.metricName} ${directionLabel}
-- Current best: ${session.bestMetric ?? "no baseline yet"}
-- Target: ${session.targetMetric ?? "none (just improve)"}
-- **RESPECT the complexity gates above.** Violating them produces overfit models that get discarded.
+### Regras
+- Produza um script Python que define uma variável \`model\` (estimador compatível com sklearn).
+- Salve em: \`artifacts/models/${agent.id}_round${round}.py\`
+- Seu modelo será medido pelo benchmark (validação cruzada em folds separados).
+- Métrica: ${session.metricName} ${directionLabel}
+- Melhor atual: ${session.bestMetric ?? "sem baseline ainda"}
+- Meta: ${session.targetMetric ?? "nenhuma (apenas melhorar)"}
+- **RESPEITE os limites de complexidade acima.** Violá-los produz modelos com overfitting que serão descartados.
 
-### Output Format
-After generating the script, end your response with:
+### Formato de Saída
+Após gerar o script, finalize sua resposta com:
 
 \`\`\`
-HYPOTHESIS: <one-line description of your approach>
+HIPOTESE: <descrição de uma linha da sua abordagem, em português>
 SCRIPT_PATH: artifacts/models/${agent.id}_round${round}.py
-LEARNED: <what you learned from this attempt—filled after measurement>
-NEXT_FOCUS: <what you will try next round>
+APRENDIZADO: <o que você aprendeu com esta tentativa, em português—preenchido após medição>
+PROXIMO_FOCO: <o que você tentará na próxima rodada, em português>
 STATUS: done
 \`\`\`
 `;

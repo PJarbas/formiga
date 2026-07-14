@@ -162,13 +162,13 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
           {entry.hypothesis && (
             <div className="mb-2">
               <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">Hipótese</div>
-              <p className="text-xs text-[var(--text-secondary)]">{entry.hypothesis}</p>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{cleanInsightText(entry.hypothesis)}</p>
             </div>
           )}
           {entry.learned && (
             <div>
               <div className="text-[10px] text-[var(--text-muted)] uppercase tracking-wide mb-1">Aprendizado</div>
-              <p className="text-xs text-[var(--text-secondary)]">{entry.learned}</p>
+              <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{cleanInsightText(entry.learned)}</p>
             </div>
           )}
         </div>
@@ -298,4 +298,24 @@ function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "null";
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
+}
+
+function cleanInsightText(text: string): string {
+  if (!text) return "";
+  let cleaned = text
+    .replace(/\\n/g, " ")
+    .replace(/\n/g, " ")
+    .replace(/SCRIPT_PATH:\s*\S+/gi, "")
+    .replace(/STATUS:\s*\w+/gi, "")
+    .replace(/NEXT_FOCUS:\s*.+?(?=\s*(?:STATUS|SCRIPT_PATH|$))/gi, "")
+    .replace(/PROXIMO_FOCO:\s*.+?(?=\s*(?:STATUS|SCRIPT_PATH|$))/gi, "")
+    .replace(/\{[^{}]*"api"[^{}]*\}/g, "")
+    .replace(/\{"[^"]+":[\s\S]*?\}(?=\s|$)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  const jsonStart = cleaned.indexOf('{"');
+  if (jsonStart > 0) {
+    cleaned = cleaned.substring(0, jsonStart).trim();
+  }
+  return cleaned;
 }
