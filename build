@@ -39,9 +39,9 @@ echo "[3/3] npm run build"
 npm run build
 
 # Restart services if they were running before
+# Note: dashboard already includes the control plane internally, so only start dashboard
 if [ "$SERVICES_WERE_RUNNING" = true ]; then
   echo "[4/4] Restarting services..."
-  formiga control-plane start 2>/dev/null || true
   formiga dashboard start 2>/dev/null || true
   echo "Services restarted."
 fi

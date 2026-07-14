@@ -11,7 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import net from "node:net";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_CONTROL_PORT } from "./control-server.js";
 
@@ -184,6 +184,126 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ── Orphan Daemon Management ────────────────────────────────────────
+
+export interface DaemonProcess {
+  pid: number;
+  rss: number;      // memory in KB
+  startTime: string;
+  isOrphan: boolean;
+}
+
+/**
+ * Read the active daemon PID from the PID file.
+ */
+function readActivePid(opts?: DaemonctlPathOptions): number | null {
+  try {
+    const pid = parseInt(fs.readFileSync(getPidFile(opts), "utf-8").trim(), 10);
+    return isNaN(pid) ? null : pid;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Discover all formiga daemon processes running on the system.
+ * Works on macOS and Linux.
+ */
+export function discoverDaemonProcesses(opts?: DaemonctlPathOptions): DaemonProcess[] {
+  const activePid = readActivePid(opts);
+  const processes: DaemonProcess[] = [];
+
+  try {
+    // pgrep works on both macOS and Linux
+    const pgrep = execSync(
+      `pgrep -f "node.*daemon\\.js" 2>/dev/null || true`,
+      { encoding: "utf-8" }
+    ).trim();
+
+    if (!pgrep) return [];
+
+    const pids = pgrep.split("\n").filter(Boolean).map(Number);
+
+    for (const pid of pids) {
+      try {
+        // Get process details - rss in KB, lstart for human-readable start time
+        const psOut = execSync(
+          `ps -p ${pid} -o pid=,rss=,lstart= 2>/dev/null || true`,
+          { encoding: "utf-8" }
+        ).trim();
+
+        if (!psOut) continue;
+
+        // Parse: "  PID   RSS   Dow Mon DD HH:MM:SS YYYY"
+        const match = psOut.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/);
+        if (!match) continue;
+
+        processes.push({
+          pid: parseInt(match[1], 10),
+          rss: parseInt(match[2], 10),
+          startTime: match[3].trim(),
+          isOrphan: parseInt(match[1], 10) !== activePid,
+        });
+      } catch {
+        // Process may have exited between pgrep and ps
+      }
+    }
+  } catch {
+    // pgrep not available or failed - return empty
+  }
+
+  return processes;
+}
+
+/**
+ * Kill orphan daemon processes.
+ * Uses graceful SIGTERM first, then SIGKILL after timeout for survivors.
+ * Returns the number of orphans killed.
+ */
+export async function cleanupOrphanDaemons(opts?: DaemonctlPathOptions): Promise<number> {
+  const processes = discoverDaemonProcesses(opts);
+  const orphans = processes.filter(p => p.isOrphan);
+
+  if (orphans.length === 0) return 0;
+
+  const pids = orphans.map(p => p.pid).join(", ");
+  const totalMem = (orphans.reduce((sum, p) => sum + p.rss, 0) / 1024).toFixed(1);
+  console.warn(
+    `[daemonctl] Found ${orphans.length} orphan daemon(s): PIDs ${pids} (${totalMem}MB total)`
+  );
+
+  // Phase 1: SIGTERM (graceful shutdown)
+  for (const orphan of orphans) {
+    try {
+      process.kill(orphan.pid, "SIGTERM");
+    } catch {
+      // Already dead - ignore
+    }
+  }
+
+  // Wait for graceful shutdown
+  await sleep(2000);
+
+  // Phase 2: SIGKILL for survivors
+  let forceKilled = 0;
+  for (const orphan of orphans) {
+    try {
+      process.kill(orphan.pid, 0); // Check if still alive
+      console.warn(`[daemonctl] Force-killing stubborn orphan PID ${orphan.pid}`);
+      process.kill(orphan.pid, "SIGKILL");
+      forceKilled++;
+    } catch {
+      // Dead - good
+    }
+  }
+
+  if (forceKilled > 0) {
+    await sleep(500); // Brief wait for SIGKILL to take effect
+  }
+
+  return orphans.length;
+}
+
 function acquireStartLock(lockFile: string): number | null {
   try {
     fs.mkdirSync(path.dirname(lockFile), { recursive: true });
@@ -322,6 +442,13 @@ export type StartControlPlaneResult = {
 export async function startDaemon(port?: number): Promise<{ pid: number; port: number }>;
 export async function startDaemon(port: number, opts: StartOptions & { keepHandle: true }): Promise<{ pid: number; port: number; child: ChildProcess }>;
 export async function startDaemon(port = 3334, opts?: StartOptions): Promise<{ pid: number; port: number } | { pid: number; port: number; child: ChildProcess }> {
+  // Clean up any orphan daemon processes before starting.
+  // This prevents memory accumulation from crashed/abandoned daemons.
+  const orphansKilled = await cleanupOrphanDaemons(opts);
+  if (orphansKilled > 0) {
+    console.log(`[daemonctl] Cleaned up ${orphansKilled} orphan daemon(s)`);
+  }
+
   // When homeDir is set, compute isolated paths for all filesystem operations.
   const formigaDir = getFormigaDir(opts);
   const pidFile = getPidFile(opts);
