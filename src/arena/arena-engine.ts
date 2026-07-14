@@ -371,37 +371,38 @@ function buildPromptsForRound(
     const myHistory = allResults.filter(r => r.agentId === agent.id);
     const othersKept = allResults.filter(r => r.agentId !== agent.id && (r.decision === "keep" || r.decision === "baseline"));
 
-    let prompt = `## Competition Arena — Round ${session.currentRound}\n\n`;
-    prompt += `You are ${agent.id}. Beat the current best.\n\n`;
+    let prompt = `## Arena de Competição — Rodada ${session.currentRound}\n\n`;
+    prompt += `Você é ${agent.id}. Supere o melhor atual.\n\n`;
+    prompt += `**IMPORTANTE**: Todas as suas respostas devem ser em português brasileiro.\n\n`;
     // Inject dataset context with complexity gates
     prompt += formatDatasetContextForPrompt(datasetCtx, agent.id);
     prompt += `\n`;
-    prompt += `### Current Best\n`;
-    prompt += `Metric: ${session.bestMetric ?? "N/A"} (${config.metricDirection} is better)\n`;
-    prompt += `Target: ${config.targetMetric ?? "none"}\n\n`;
-    prompt += `### Your History\n`;
-    if (myHistory.length === 0) prompt += "(none yet)\n";
+    prompt += `### Melhor Atual\n`;
+    prompt += `Métrica: ${session.bestMetric ?? "N/A"} (${config.metricDirection === "lower" ? "menor" : "maior"} é melhor)\n`;
+    prompt += `Meta: ${config.targetMetric ?? "nenhuma"}\n\n`;
+    prompt += `### Seu Histórico\n`;
+    if (myHistory.length === 0) prompt += "(nenhum ainda)\n";
     else {
       for (const h of myHistory) {
-        prompt += `  Round ${session.currentRound - 1}: ${h.hypothesis} → ${h.metric !== null ? h.metric.toFixed(6) : "crash"} (${h.decision})\n`;
+        prompt += `  Rodada ${session.currentRound - 1}: ${h.hypothesis} → ${h.metric !== null ? h.metric.toFixed(6) : "falha"} (${h.decision})\n`;
       }
     }
-    prompt += `\n### Others' Kept Results\n`;
-    if (othersKept.length === 0) prompt += "(none yet)\n";
+    prompt += `\n### Resultados Mantidos de Outros\n`;
+    if (othersKept.length === 0) prompt += "(nenhum ainda)\n";
     else {
       for (const o of othersKept) {
-        prompt += `  ${o.agentId}: "${o.hypothesis}" → ${o.metric !== null ? o.metric.toFixed(6) : "crash"}\n`;
+        prompt += `  ${o.agentId}: "${o.hypothesis}" → ${o.metric !== null ? o.metric.toFixed(6) : "falha"}\n`;
       }
     }
-    prompt += `\n### Strategy\n${agent.strategyHint}\n\n`;
+    prompt += `\n### Estratégia\n${agent.strategyHint}\n\n`;
     if (warmStartHints.length > 0 && session.currentRound === 1) {
-      prompt += `### Warm-Start: Past Best for This Dataset\n`;
+      prompt += `### Warm-Start: Melhores Anteriores para Este Dataset\n`;
       prompt += warmStartHints.join("\n") + "\n\n";
     }
     // Inject Formiga API helpers for artifact access
     const apiUrl = config.formigaApi ?? process.env.FORMIGA_DASHBOARD_URL ?? "http://localhost:3334";
-    prompt += `### Formiga API (artifact access)\n\n`;
-    prompt += `Use these bash functions to read/save artifacts and query leaderboard:\n\n`;
+    prompt += `### Formiga API (acesso a artefatos)\n\n`;
+    prompt += `Use estas funções bash para ler/salvar artefatos e consultar o leaderboard:\n\n`;
     prompt += `\`\`\`bash\n`;
     prompt += `formiga_read_artifact() {\n`;
     prompt += `  curl -s "${apiUrl}/api/runs/${config.runId}/agent-artifacts/$1" | jq -r '.content'\n`;
@@ -416,23 +417,23 @@ function buildPromptsForRound(
     prompt += `  curl -s "${apiUrl}/api/leaderboard/$1?runId=${config.runId}"\n`;
     prompt += `}\n`;
     prompt += `\`\`\`\n\n`;
-    prompt += `**Available artifacts:** eda_config, eda_report, features_metadata, baseline_submission, split_config, benchmark_config\n\n`;
+    prompt += `**Artefatos disponíveis:** eda_config, eda_report, features_metadata, baseline_submission, split_config, benchmark_config\n\n`;
 
-    prompt += `### Rules\n`;
-    prompt += `- Write a STANDALONE Python script that trains a model and evaluates it.\n`;
-    prompt += `- The script must read benchmark_config.json from the workspace root.\n`;
-    prompt += `- Use cross-validation with the same config (same splits, same metric).\n`;
-    prompt += `- At the end, print EXACTLY this line to stdout: ${config.metricName}: <numeric_value>\n`;
-    prompt += `- Example output: ${config.metricName}: 4500.1234\n`;
-    prompt += `- Also save your trained model as: artifacts/models/${agent.id}_round${session.currentRound}.pkl\n`;
-    prompt += `- Save script to: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
-    prompt += `- **RESPECT the complexity gates above.** Violating them (e.g., training FT-Transformer on a TINY dataset) will produce overfit models that get discarded.\n`;
-    prompt += `- End your response with:\n`;
+    prompt += `### Regras\n`;
+    prompt += `- Escreva um script Python AUTÔNOMO que treina um modelo e o avalia.\n`;
+    prompt += `- O script deve ler benchmark_config.json da raiz do workspace.\n`;
+    prompt += `- Use validação cruzada com a mesma configuração (mesmos splits, mesma métrica).\n`;
+    prompt += `- No final, imprima EXATAMENTE esta linha no stdout: ${config.metricName}: <valor_numerico>\n`;
+    prompt += `- Exemplo de saída: ${config.metricName}: 4500.1234\n`;
+    prompt += `- Salve também seu modelo treinado como: artifacts/models/${agent.id}_round${session.currentRound}.pkl\n`;
+    prompt += `- Salve o script em: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
+    prompt += `- **RESPEITE os limites de complexidade acima.** Violá-los (ex: treinar FT-Transformer em dataset TINY) produzirá modelos com overfitting que serão descartados.\n`;
+    prompt += `- Finalize sua resposta com:\n`;
     prompt += `\n\`\`\`\n`;
-    prompt += `HYPOTHESIS: <one-line description>\n`;
+    prompt += `HIPOTESE: <descrição de uma linha, em português>\n`;
     prompt += `SCRIPT_PATH: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
-    prompt += `LEARNED: <what you learned>\n`;
-    prompt += `NEXT_FOCUS: <next idea>\n`;
+    prompt += `APRENDIZADO: <o que você aprendeu, em português>\n`;
+    prompt += `PROXIMO_FOCO: <próxima ideia, em português>\n`;
     prompt += `STATUS: done\n`;
     prompt += `\`\`\`\n`;
 

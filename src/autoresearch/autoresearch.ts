@@ -908,11 +908,11 @@ export function parseAgentFields(text: string): { status: string; changes: strin
   const status = statusMatch[1].trim();
   const changesMatch = text.match(/^CHANGES:\s*(.+)$/m);
   const changes = changesMatch?.[1].trim() ?? "";
-  const hypothesisMatch = text.match(/^HYPOTHESIS:\s*(.+)$/m);
+  const hypothesisMatch = text.match(/^(?:HYPOTHESIS|HIPOTESE):\s*(.+)$/m);
   const hypothesis = hypothesisMatch?.[1].trim();
-  const learnedMatch = text.match(/^LEARNED:\s*(.+)$/m);
+  const learnedMatch = text.match(/^(?:LEARNED|APRENDIZADO):\s*(.+)$/m);
   const learned = learnedMatch?.[1].trim();
-  const nextFocusMatch = text.match(/^NEXT_FOCUS:\s*(.+)$/m);
+  const nextFocusMatch = text.match(/^(?:NEXT_FOCUS|PROXIMO_FOCO):\s*(.+)$/m);
   const nextFocus = nextFocusMatch?.[1].trim();
   return { status, changes, hypothesis, learned, nextFocus };
 }
@@ -1173,16 +1173,16 @@ export async function loopAutoresearch(options: LoopAutoresearchOptions = {}): P
         agentPrompt = [
           summary.nextPrompt,
           "",
-          "INSTRUCTIONS:",
-          `- This is iteration ${iterations} of an AutoResearch loop. ${targetMsg} ${failureMsg}`,
-          "- Make exactly ONE small code change to improve the metric.",
-          "- After your change, output exactly these fields on separate lines:",
-          "  STATUS: done (if you made a change) or STATUS: no_change (if you could not improve further)",
-          "  CHANGES: brief description of what you changed",
-          "  HYPOTHESIS: why you think this change will improve the metric",
-          "  LEARNED: what you learned (regardless of outcome)",
-          "  NEXT_FOCUS: what to try next",
-          "- Do not run experiments yourself — the loop will measure after you finish.",
+          "INSTRUÇÕES:",
+          `- Esta é a iteração ${iterations} de um loop AutoResearch. ${targetMsg} ${failureMsg}`,
+          "- Faça exatamente UMA pequena mudança de código para melhorar a métrica.",
+          "- Após sua mudança, escreva exatamente estes campos em linhas separadas:",
+          "  STATUS: done (se você fez uma mudança) ou STATUS: no_change (se não conseguiu melhorar mais)",
+          "  CHANGES: breve descrição do que você mudou",
+          "  HIPOTESE: por que você acha que essa mudança vai melhorar a métrica",
+          "  APRENDIZADO: o que você aprendeu (independente do resultado)",
+          "  PROXIMO_FOCO: o que tentar em seguida",
+          "- Não execute experimentos você mesmo — o loop vai medir depois que você terminar.",
         ].join("\n");
       }
 
