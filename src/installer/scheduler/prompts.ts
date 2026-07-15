@@ -199,11 +199,23 @@ CHANGES: <what you did>
 TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
     `   - Failure: node "${cli}" step fail "<stepId>" "<clear reason for failure>"`,
     ``,
+    `─── FORMIGA TOOLS (formiga-agent-tools extension) ───`,
+    `The following tools are available for persisting agent output to the Formiga dashboard:`,
+    `  - save_artifact({ key, data })    Persist structured JSON (EDA reports, features, model configs)`,
+    `  - log_decision({ decision_type, description, reasoning?, alternatives_considered? })`,
+    `                                    Record significant choices for audit/explainability`,
+    `  - report_metric({ name, value, tags? })    Emit numeric metrics (CV score, timings, counts)`,
+    `  - query_leaderboard({ limit? })   Read the current competition leaderboard`,
+    ``,
+    `USE THESE TOOLS instead of curl for any dashboard write. Read your workspace's AGENTS.md for the`,
+    `expected artifact keys and payload shapes. Reading artifacts via HTTP GET is still fine.`,
+    ``,
     `─── RULES ───`,
     `- ALWAYS report results. Never exit without calling step complete or step fail.`,
     `- If you cannot complete the work, use step fail — do not hang.`,
     `- Keep responses concise; you are a background agent.`,
     `- If something is unclear, use step fail with an explanation of what is missing.`,
+    `- NEVER use curl to WRITE artifacts. Use save_artifact / log_decision / report_metric instead.`,
   );
 
   return prompt.join("\n");

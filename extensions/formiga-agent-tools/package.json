@@ -1,0 +1,34 @@
+{
+  "name": "formiga-agent-tools",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Pi extension that exposes Formiga agent tools (save_artifact, log_decision, report_metric, query_leaderboard) via native pi tool calls.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "formiga",
+    "ml-pipeline",
+    "artifacts"
+  ],
+  "license": "MIT",
+  "author": "Formiga Team",
+  "engines": {
+    "node": ">=22"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "package.json"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  }
+}

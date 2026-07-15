@@ -294,7 +294,7 @@ export const ML_PIPELINE_AGENTS: Record<string, AgentInfo> = {
     phase: "data_analysis",
     stepId: "eda",
     harness: "pi",
-    artifactsOut: ["eda_report.json"],
+    artifactsOut: ["eda_report", "eda_config"],
     messagesCount: 0,
   },
   "feature-engineer": {
@@ -306,7 +306,7 @@ export const ML_PIPELINE_AGENTS: Record<string, AgentInfo> = {
     phase: "feature_engineering",
     stepId: "features",
     harness: "pi",
-    artifactsOut: ["features.parquet", "split.pkl", "split.checksum"],
+    artifactsOut: ["features_metadata", "split_config", "baseline_submission", "preprocessing_config"],
     messagesCount: 0,
   },
   "modeler-classic": {
@@ -318,7 +318,7 @@ export const ML_PIPELINE_AGENTS: Record<string, AgentInfo> = {
     phase: "modeling",
     stepId: "model-classic",
     harness: "pi",
-    artifactsOut: ["modeler-classic_submission.json", "classic_predictions.csv"],
+    artifactsOut: ["modeler_classic_submission", "modeler_classic_plan", "modeler_classic_report", "cross_findings"],
     messagesCount: 0,
   },
   "modeler-advanced": {
@@ -330,7 +330,7 @@ export const ML_PIPELINE_AGENTS: Record<string, AgentInfo> = {
     phase: "modeling",
     stepId: "model-advanced",
     harness: "pi",
-    artifactsOut: ["modeler-advanced_submission.json", "advanced_predictions.csv"],
+    artifactsOut: ["modeler_advanced_submission", "modeler_advanced_plan", "modeler_advanced_report", "cross_findings_advanced"],
     messagesCount: 0,
   },
   "ml-critic": {
@@ -342,7 +342,7 @@ export const ML_PIPELINE_AGENTS: Record<string, AgentInfo> = {
     phase: "audit",
     stepId: "audit",
     harness: "pi",
-    artifactsOut: ["audit_report.json"],
+    artifactsOut: ["audit_report", "agent_decisions"],
     messagesCount: 0,
   },
 };
@@ -358,7 +358,7 @@ export const ML_AUTORESEARCH_AGENTS: Record<string, AgentInfo> = {
     phase: "data_analysis",
     stepId: "eda",
     harness: "pi",
-    artifactsOut: ["eda_report.json"],
+    artifactsOut: ["eda_report", "eda_config"],
     messagesCount: 0,
   },
   "feature-engineer": {
@@ -370,7 +370,7 @@ export const ML_AUTORESEARCH_AGENTS: Record<string, AgentInfo> = {
     phase: "feature_engineering",
     stepId: "features",
     harness: "pi",
-    artifactsOut: ["features.parquet", "split.pkl", "benchmark_config.json", "benchmark_runner.py"],
+    artifactsOut: ["features_metadata", "split_config", "baseline_submission", "benchmark_config", "preprocessing_config"],
     messagesCount: 0,
   },
   "arena-modeler-classic": {
@@ -382,7 +382,7 @@ export const ML_AUTORESEARCH_AGENTS: Record<string, AgentInfo> = {
     phase: "arena",
     stepId: "arena",
     harness: "pi",
-    artifactsOut: ["modeler-classic_submission.json"],
+    artifactsOut: ["modeler_classic_submission", "cross_findings", "agent_decisions"],
     messagesCount: 0,
   },
   "arena-modeler-advanced": {
@@ -394,7 +394,7 @@ export const ML_AUTORESEARCH_AGENTS: Record<string, AgentInfo> = {
     phase: "arena",
     stepId: "arena",
     harness: "pi",
-    artifactsOut: ["modeler-advanced_submission.json"],
+    artifactsOut: ["modeler_advanced_submission", "cross_findings_advanced", "agent_decisions"],
     messagesCount: 0,
   },
   "reporter": {
@@ -406,7 +406,7 @@ export const ML_AUTORESEARCH_AGENTS: Record<string, AgentInfo> = {
     phase: "report",
     stepId: "report",
     harness: "pi",
-    artifactsOut: ["arena_report.json"],
+    artifactsOut: ["arena_report", "competition_timeline", "winner_feature_importance"],
     messagesCount: 0,
   },
 };

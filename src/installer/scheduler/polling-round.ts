@@ -25,7 +25,12 @@ import { getPrisma, incrementSystemTokenSpend } from "../../db.js";
 import { logger } from "../../lib/logger.js";
 import { emitEvent } from "../events.js";
 import { getRoleTimeoutSeconds, inferRole } from "../install.js";
-import { resolvePiOutputDir, resolveWorkflowWorkspaceDir } from "../paths.js";
+import {
+  resolveFormigaAgentToolsExtension,
+  resolvePiOutputDir,
+  resolveWorkflowWorkspaceDir,
+} from "../paths.js";
+import { readPort as readDashboardPort } from "../../server/daemonctl.js";
 import { completeStep, recoverOrphanedStepsForAgent } from "../step-ops.js";
 import type { WorkflowAgent, WorkflowSpec } from "../types.js";
 import { findHermesBinary } from "./binary-discovery.js";
@@ -56,6 +61,31 @@ import {
 function makePiOutputFilePath(jobId: string): string {
   const outputDir = resolvePiOutputDir();
   return path.join(outputDir, `pi-output-${jobId}-${Date.now()}.log`);
+}
+
+/**
+ * Resolve the URL where the dashboard is listening. Precedence:
+ *   1. FORMIGA_DASHBOARD_URL (explicit override)
+ *   2. Port persisted by daemonctl (~/.formiga/dashboard.port)
+ *   3. Default 3334 — matches CLI default
+ *
+ * Falling back to 3737 (an older experimental default) caused
+ * `fetch failed` in the extension: the agent asked for the tools to write
+ * but there was nothing listening. Reading the daemon-owned port file
+ * keeps things aligned no matter which port the operator picked.
+ */
+function resolveDashboardUrl(): string {
+  const override = process.env.FORMIGA_DASHBOARD_URL?.trim();
+  if (override) return override;
+  try {
+    const port = readDashboardPort();
+    if (typeof port === "number" && port > 0 && port < 65_536) {
+      return `http://localhost:${port}`;
+    }
+  } catch {
+    /* fall through to default */
+  }
+  return "http://localhost:3334";
 }
 
 /** Clean up the temporary PI output file unless user opted to keep it. */
@@ -671,14 +701,18 @@ export async function executePollingRound(
     }
 
     try {
-      // Common env vars for agent artifact saving via curl
+      // Common env vars for the formiga-agent-tools extension (and any
+      // agent that reads state via HTTP GET). Resolve the dashboard port
+      // dynamically so it matches wherever the daemon is actually
+      // listening — hardcoding 3737 was the source of `fetch failed`
+      // errors in early E2E tests.
       const agentContextEnv = {
         FORMIGA_WORKER_JOB_ID: job.id,
         FORMIGA_WORKER_PID: String(process.pid),
         FORMIGA_RUN_ID: job.runId,
         FORMIGA_STEP_ID: activityStepId ?? "",
         FORMIGA_AGENT_ID: job.agentId,
-        FORMIGA_API_URL: process.env.FORMIGA_DASHBOARD_URL ?? "http://localhost:3737",
+        FORMIGA_API_URL: resolveDashboardUrl(),
       };
 
       if (harnessType === "hermes") {
@@ -695,17 +729,30 @@ export async function executePollingRound(
           activityContext,
         });
       } else {
-        const piResult = await runPi(
-          ["--print", "--mode", "json", "--no-session", pollingPrompt],
-          {
-            timeout,
-            workdir: workingDirectoryForHarness,
-            env: agentContextEnv,
-            onSpawn,
-            outputFile,
-            activityContext,
-          },
-        );
+        // Load the bundled formiga-agent-tools extension so agents get the
+        // save_artifact / log_decision / report_metric / query_leaderboard
+        // tools. Missing extension is not fatal (falls back to base pi tools),
+        // but we log a warning so the operator can investigate.
+        const extensionPath = resolveFormigaAgentToolsExtension();
+        const piArgs: string[] = [];
+        if (extensionPath) {
+          piArgs.push("--extension", extensionPath);
+        } else {
+          logger.warn(
+            "formiga-agent-tools extension not found; agents will lack save_artifact tool",
+            { agentId: job.agentId },
+          );
+        }
+        piArgs.push("--print", "--mode", "json", "--no-session", pollingPrompt);
+
+        const piResult = await runPi(piArgs, {
+          timeout,
+          workdir: workingDirectoryForHarness,
+          env: agentContextEnv,
+          onSpawn,
+          outputFile,
+          activityContext,
+        });
         output = piResult.assistantText;
         extractedMetadata = piResult.metadata;
       }
