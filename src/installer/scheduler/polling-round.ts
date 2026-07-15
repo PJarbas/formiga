@@ -671,14 +671,23 @@ export async function executePollingRound(
     }
 
     try {
+      // Common env vars for agent artifact saving via curl
+      const agentContextEnv = {
+        FORMIGA_WORKER_JOB_ID: job.id,
+        FORMIGA_WORKER_PID: String(process.pid),
+        FORMIGA_RUN_ID: job.runId,
+        FORMIGA_STEP_ID: activityStepId ?? "",
+        FORMIGA_AGENT_ID: job.agentId,
+        FORMIGA_API_URL: process.env.FORMIGA_DASHBOARD_URL ?? "http://localhost:3737",
+      };
+
       if (harnessType === "hermes") {
         const hermesPath = findHermesBinary();
         output = await runHermes(pollingPrompt, {
           timeout,
           workdir: workingDirectoryForHarness,
           env: {
-            FORMIGA_WORKER_JOB_ID: job.id,
-            FORMIGA_WORKER_PID: String(process.pid),
+            ...agentContextEnv,
             FORMIGA_HERMES_BINARY: hermesPath,
           },
           onSpawn,
@@ -691,10 +700,7 @@ export async function executePollingRound(
           {
             timeout,
             workdir: workingDirectoryForHarness,
-            env: {
-              FORMIGA_WORKER_JOB_ID: job.id,
-              FORMIGA_WORKER_PID: String(process.pid),
-            },
+            env: agentContextEnv,
             onSpawn,
             outputFile,
             activityContext,

@@ -24,6 +24,26 @@ function sendError(res: ServerResponse, message: string, status = 400): void {
   res.end(JSON.stringify({ error: message }));
 }
 
+function parseBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let totalSize = 0;
+    const maxSize = 500 * 1024; // 500KB limit
+
+    req.on("data", (chunk: Buffer) => {
+      totalSize += chunk.length;
+      if (totalSize > maxSize) {
+        req.destroy();
+        reject(new Error("Request body too large (max 500KB)"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString()));
+    req.on("error", reject);
+  });
+}
+
 function parseQuery(url: string): Record<string, string> {
   const idx = url.indexOf("?");
   if (idx === -1) return {};
@@ -282,6 +302,71 @@ export async function handleGetArtifactByKey(
   } catch (err) {
     logger.error("Failed to get artifact", { runId, key, error: String(err) });
     sendError(res, "Failed to get artifact", 500);
+  }
+}
+
+/**
+ * POST /api/runs/:runId/agent-artifacts/:key
+ * Save or update an agent artifact (used by agents via curl)
+ */
+export async function handleSaveArtifact(
+  req: IncomingMessage,
+  res: ServerResponse,
+  runId: string,
+  artifactKey: string,
+): Promise<void> {
+  try {
+    // Validate artifact key format (security: prevent injection)
+    if (!/^[a-z][a-z0-9_]{1,30}$/.test(artifactKey)) {
+      sendError(res, "Invalid artifact key format. Use lowercase letters, numbers, underscores. Start with letter, 2-31 chars.", 400);
+      return;
+    }
+
+    const body = await parseBody(req);
+    if (!body) {
+      sendError(res, "Request body is required", 400);
+      return;
+    }
+
+    let parsed: { stepId?: string; agentId?: string; content?: unknown };
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      sendError(res, "Invalid JSON body", 400);
+      return;
+    }
+
+    const { stepId, agentId, content } = parsed;
+
+    // Validate content is an object
+    if (!content || typeof content !== "object" || Array.isArray(content)) {
+      sendError(res, "Content must be a JSON object", 400);
+      return;
+    }
+
+    // Size check (already handled by parseBody, but double-check stringified)
+    const contentStr = JSON.stringify(content);
+    if (contentStr.length > 500 * 1024) {
+      sendError(res, "Content too large (max 500KB)", 400);
+      return;
+    }
+
+    const id = await recordAgentArtifact({
+      runId,
+      stepId: stepId || "unknown",
+      agentId: agentId || "unknown",
+      artifactKey,
+      content: content as Record<string, unknown>,
+      contentType: "json",
+      sizeBytes: contentStr.length,
+    });
+
+    logger.info("Agent artifact saved", { runId, artifactKey, agentId, sizeBytes: contentStr.length });
+
+    sendJson(res, { id, artifactKey, created: true }, 201);
+  } catch (err) {
+    logger.error("Failed to save artifact", { runId, artifactKey, error: String(err) });
+    sendError(res, "Failed to save artifact", 500);
   }
 }
 
