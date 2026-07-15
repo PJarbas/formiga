@@ -67,6 +67,7 @@ import {
   handleGetEvents,
   handleGetArtifacts,
   handleGetArtifactByKey,
+  handleSaveArtifact,
   handleEventStream,
 } from "./routes/agent-activity.js";
 
@@ -2967,6 +2968,12 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   const agentArtifactKeyMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/agent-artifacts\/([a-zA-Z0-9_-]+)$/);
   if (method === "GET" && agentArtifactKeyMatch) {
     handleGetArtifactByKey(req, res, agentArtifactKeyMatch[1], agentArtifactKeyMatch[2]);
+    return;
+  }
+
+  // POST /api/runs/:id/agent-artifacts/:key — save artifact (used by agents via curl)
+  if (method === "POST" && agentArtifactKeyMatch) {
+    handleSaveArtifact(req, res, agentArtifactKeyMatch[1], agentArtifactKeyMatch[2]);
     return;
   }
 

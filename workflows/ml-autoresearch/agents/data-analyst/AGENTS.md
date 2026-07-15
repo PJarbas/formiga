@@ -38,11 +38,20 @@ Você tem `Read`, `Bash`, `Glob`, `Grep`. Use `Bash` para verificações com pan
 
 ### Helper da API Formiga
 
-Use estas funções bash para chamadas de API:
+Use estas funções bash para chamadas de API. As variáveis de ambiente `FORMIGA_API_URL`, `FORMIGA_RUN_ID`, `FORMIGA_STEP_ID` e `FORMIGA_AGENT_ID` são injetadas automaticamente:
 
 ```bash
-# Salvar artefato no banco
+# Salvar artefato no banco (usando env vars)
 formiga_save_artifact() {
+  local key="$1"
+  local content="$2"
+  curl -s -X POST "${FORMIGA_API_URL}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/${key}" \
+    -H "Content-Type: application/json" \
+    -d "{\"stepId\": \"${FORMIGA_STEP_ID}\", \"agentId\": \"${FORMIGA_AGENT_ID}\", \"content\": ${content}}"
+}
+
+# Alternativa com templates (se env vars não disponíveis)
+formiga_save_artifact_template() {
   local key="$1"
   local content="$2"
   curl -s -X POST "{{formiga_api}}/api/runs/{{run_id}}/agent-artifacts/${key}" \
