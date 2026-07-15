@@ -60,6 +60,7 @@ export interface IBackgroundQueue {
  */
 export interface IArtifactService {
   save(input: ArtifactInput): Promise<number>;
+  getNextCounter(input: { runId: string; agentId: string; artifactKey: string }): Promise<number>;
 }
 
 /**
