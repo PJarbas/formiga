@@ -219,7 +219,7 @@ export function AgentSidePanel({ agentId, runId, onClose }: AgentSidePanelProps)
             agentId={agentId}
             artifacts={artifacts ?? []}
             reasoning={reasoning}
-            keyDecisions={decisions ?? []}
+            keyDecisions={reasoning?.keyDecisions ?? []}
             figures={figures ?? []}
             decisions={decisions ?? []}
             isLoading={artifactsLoading || reasoningLoading}
