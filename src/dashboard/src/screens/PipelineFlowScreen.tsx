@@ -73,6 +73,35 @@ export default function PipelineFlowScreen() {
         </p>
       </div>
 
+      {/* Run status banner */}
+      {data?.runStatus && data.runStatus !== "running" && data.runStatus !== "paused" && (
+        <div
+          className="mb-4 px-3 py-2 rounded border text-xs font-medium flex items-center gap-2"
+          style={{
+            backgroundColor:
+              data.runStatus === "failed"
+                ? "var(--accent-red)"
+                : data.runStatus === "canceled"
+                ? "var(--accent-yellow)"
+                : "var(--bg-tertiary)",
+            color:
+              data.runStatus === "failed" || data.runStatus === "canceled"
+                ? "#fff"
+                : "var(--text-primary)",
+            borderColor:
+              data.runStatus === "failed"
+                ? "var(--accent-red)"
+                : data.runStatus === "canceled"
+                ? "var(--accent-yellow)"
+                : "var(--border-default)",
+          }}
+        >
+          <span>
+            Run {data.runStatus} — agents below reflect last known state.
+          </span>
+        </div>
+      )}
+
       {/* DAG grid layout - fixed positions with explicit grid areas */}
       <div
         className="relative mx-auto"
