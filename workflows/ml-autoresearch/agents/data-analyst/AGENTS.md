@@ -148,6 +148,20 @@ Você também PODE escrever arquivos tradicionais para revisão humana:
 - `{{workspace}}/artifacts/eda_config.json`
 
 Mas os **artefatos do banco (via `save_artifact`) são a fonte da verdade**.
+## Figures Obrigatórias
+Salve estas figuras em `{{workspace}}/figures/` (crie o diretório se não existir):
+1. `figures/target_distribution.png` — histograma + KDE do target
+2. `figures/correlation_heatmap.png` — heatmap de correlações (numéricas)
+3. `figures/feature_distributions.png` — grid de histogramas por feature numérica
+4. `figures/scatter_vs_target.png` — scatter de top-3 features vs target
+5. `figures/missing_pattern.png` — apenas se houver missing (matriz de missing)
+6. `figures/outliers_boxplot.png` — apenas se houver outliers
+Cada figura DEVE:
+- Ter título descritivo (`plt.title`)
+- Ter labels nos eixos
+- Salvar com `dpi=100, bbox_inches='tight'`
+- Fechar a figura após salvar (`plt.close()`)
+Não use `plt.show()` — você está em modo headless.
 
 ## O que NÃO Fazer
 

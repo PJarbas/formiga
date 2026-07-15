@@ -1312,10 +1312,20 @@ function handleAgentReasoning(
     }
 
     // Fetch experiments for this agent in current run (key decisions).
-    // agent_name in DB is scoped ("ml-pipeline_modeler-classic"), URL param is bare.
-    const scopedAgentFilter = { endsWith: `_${agentName}` };
+    // agent_name in DB may be:
+    //   - "modeler-classic" (arena writes bare ids)
+    //   - "ml-pipeline_modeler-classic" (ml-pipeline writes scoped ids)
+    // So we match both the incoming name and its arena-stripped base.
+    const baseName = agentName.replace(/^arena-/, "");
     const experiments = await prisma.experiment.findMany({
-      where: { run_id: runId, agent_name: scopedAgentFilter },
+      where: {
+        run_id: runId,
+        OR: [
+          { agent_name: agentName },
+          ...(baseName !== agentName ? [{ agent_name: baseName }] : []),
+          { agent_name: { endsWith: `_${agentName}` } },
+        ],
+      },
       orderBy: { round_number: "desc" },
       take: 20,
       select: {

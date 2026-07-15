@@ -60,17 +60,22 @@ async function getStepStatus(
     : null;
 }
 
+function bareAgentName(agentName: string): string {
+  return agentName.replace(/^arena-/, "");
+}
+
 async function getLatestExperiment(
   runId: string,
   agentName: string,
   roundNumber?: number,
 ) {
   const prisma = getPrisma();
+  const baseName = bareAgentName(agentName);
   const where: {
     run_id: string;
-    agent_name: string;
+    agent_name: { in: string[] };
     round_number?: number;
-  } = { run_id: runId, agent_name: agentName };
+  } = { run_id: runId, agent_name: { in: [agentName, baseName] } };
   if (typeof roundNumber === "number") {
     where.round_number = roundNumber;
   }
