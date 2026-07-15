@@ -31,6 +31,35 @@ export function resolveSkillPath(): string {
   }
 }
 
+/**
+ * Path to the bundled `formiga-agent-tools` pi extension directory.
+ *
+ * Returns the path to the extension package (the parent of `extensions/`),
+ * which is what `pi --extension <path>` expects.
+ * Returns `null` when the extension is missing (e.g. running from a partial
+ * checkout) — callers must treat this as best-effort.
+ */
+export function resolveFormigaAgentToolsExtension(): string | null {
+  const override = process.env.FORMIGA_AGENT_TOOLS_EXTENSION?.trim();
+  if (override) {
+    return fs.existsSync(override) ? override : null;
+  }
+  // From dist/installer/paths.js -> ../../extensions/formiga-agent-tools
+  const extPath = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "extensions",
+    "formiga-agent-tools",
+  );
+  if (!fs.existsSync(extPath)) return null;
+  try {
+    return fs.realpathSync(extPath);
+  } catch {
+    return extPath;
+  }
+}
+
 export function resolveBundledWorkflowDir(workflowId: string): string {
   return path.join(resolveBundledWorkflowsDir(), workflowId);
 }

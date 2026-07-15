@@ -115,7 +115,8 @@ steps:
       - workspace: {{workspace}}
 
       Read your AGENTS.md for database API instructions.
-      Save EDA artifacts to the database using formiga_save_artifact.
+      Save EDA artifacts to the database using the `save_artifact` tool
+      (from the formiga-agent-tools extension). NEVER use curl to save artifacts.
 
       End your output with:
         ARTIFACTS_SAVED: <comma-separated artifact keys>
@@ -139,7 +140,8 @@ steps:
       - workspace: {{workspace}}
 
       Read your AGENTS.md for database API instructions.
-      Read EDA artifacts from the database.
+      Use the `save_artifact` tool (from formiga-agent-tools extension) to persist
+      every artifact — NEVER use curl for writes. Reading EDA via HTTP GET is fine.
       Produce:
         - features.parquet, split.pkl
         - baseline.json, baseline.pkl
@@ -190,8 +192,9 @@ steps:
       - workspace: {{workspace}}
 
       Read your AGENTS.md for database API instructions.
-      Read all artifacts from the database (leaderboard, audit, modeler reports).
-      Query the arena session and leaderboard data via the API.
+      Read all artifacts from the database via HTTP GET (leaderboard, audit, modeler reports).
+      Use the `query_leaderboard` tool from the formiga-agent-tools extension.
+      Use the `save_artifact` tool to persist your report — NEVER use curl for writes.
       Produce the final competition report.
 
       End your output with:

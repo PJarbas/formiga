@@ -70,6 +70,7 @@ import {
   handleSaveArtifact,
   handleEventStream,
 } from "./routes/agent-activity.js";
+import { handleMcpRequest, handleMcpDiscovery } from "../mcp/http-handler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
@@ -2974,6 +2975,25 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // POST /api/runs/:id/agent-artifacts/:key — save artifact (used by agents via curl)
   if (method === "POST" && agentArtifactKeyMatch) {
     handleSaveArtifact(req, res, agentArtifactKeyMatch[1], agentArtifactKeyMatch[2]);
+    return;
+  }
+
+  // MCP HTTP transport (used by hermes and MCP-aware clients).
+  // Streamable HTTP transport handles both POST (JSON-RPC) and GET (SSE).
+  if (pathname === "/mcp" && (method === "POST" || method === "GET" || method === "DELETE")) {
+    handleMcpRequest(req, res).catch((err) => {
+      logger.error("MCP HTTP handler crash", { error: String(err) });
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.end();
+      }
+    });
+    return;
+  }
+
+  // GET /mcp/info — non-standard discovery endpoint for humans/tests
+  if (method === "GET" && pathname === "/mcp/info") {
+    handleMcpDiscovery(req, res);
     return;
   }
 

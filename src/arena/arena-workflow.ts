@@ -12,6 +12,7 @@ import fs from "node:fs";
 import { getPrisma } from "../database/prisma.js";
 import { logger } from "../lib/logger.js";
 import { runPi } from "../installer/scheduler/pi-runner.js";
+import { resolveFormigaAgentToolsExtension } from "../installer/paths.js";
 import { completeStep } from "../installer/steps/complete.js";
 import { emitEvent } from "../installer/events.js";
 import type {
@@ -196,17 +197,19 @@ async function piRunAgentsParallel(
   >
 > {
   const entries = Object.entries(prompts);
+  const extensionPath = resolveFormigaAgentToolsExtension();
   const pending = entries.map(([agentId, prompt]) => {
     const agentDef = ARENA_AGENTS.find((a) => a.id === agentId);
     const timeout = agentDef?.timeout ?? AGENT_TIMEOUT_SECONDS;
 
-    return runPi(
-      ["--print", "--mode", "json", "--no-session", prompt],
-      {
-        timeout,
-        workdir: config.workspacePath,
-      },
-    )
+    const piArgs: string[] = [];
+    if (extensionPath) piArgs.push("--extension", extensionPath);
+    piArgs.push("--print", "--mode", "json", "--no-session", prompt);
+
+    return runPi(piArgs, {
+      timeout,
+      workdir: config.workspacePath,
+    })
       .then((piResult) => parseArenaAgentOutput(piResult.assistantText, config.workspacePath))
       .then((parsed) => ({
         agentId,

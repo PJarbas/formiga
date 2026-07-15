@@ -115,7 +115,7 @@ steps:
       - formiga_api: {{formiga_api}}
       - workspace: {{workspace}}
 
-      Read your AGENTS.md for database API instructions and save artifacts to the database.
+      Read your AGENTS.md for tool instructions. Use `save_artifact` (from formiga-agent-tools extension) to persist artifacts — NEVER curl for writes.
 
       End your output with:
         ARTIFACTS_SAVED: <comma-separated artifact keys>
@@ -138,9 +138,9 @@ steps:
       - formiga_api: {{formiga_api}}
       - workspace: {{workspace}}
 
-      Read your AGENTS.md for database API instructions.
+      Read your AGENTS.md for tool instructions (save_artifact, log_decision, report_metric, query_leaderboard).
       Read EDA artifacts from the database using formiga_read_artifact.
-      Save your artifacts to the database using formiga_save_artifact.
+      Save artifacts using the `save_artifact` tool (formiga-agent-tools extension). NEVER use curl for writes.
 
       End your output with:
         ARTIFACTS_SAVED: <comma-separated artifact keys>
@@ -164,7 +164,7 @@ steps:
       - formiga_api: {{formiga_api}}
       - workspace: {{workspace}}
 
-      Read your AGENTS.md for database API instructions.
+      Read your AGENTS.md for tool instructions (save_artifact, log_decision, report_metric, query_leaderboard).
       Read baseline and features metadata from the database.
       Save trial results and final submission to the database.
 
@@ -194,7 +194,7 @@ steps:
       - formiga_api: {{formiga_api}}
       - workspace: {{workspace}}
 
-      Read your AGENTS.md for database API instructions.
+      Read your AGENTS.md for tool instructions (save_artifact, log_decision, report_metric, query_leaderboard).
       Read baseline and features metadata from the database.
       Save trial results and final submission to the database.
 
@@ -224,7 +224,7 @@ steps:
       - formiga_api: {{formiga_api}}
       - workspace: {{workspace}}
 
-      Read your AGENTS.md for database API instructions.
+      Read your AGENTS.md for tool instructions (save_artifact, log_decision, report_metric, query_leaderboard).
       Query the leaderboard and read all artifacts from the database.
       Run the 8 audit checks against every experiment.
       Save audit results to the database.
