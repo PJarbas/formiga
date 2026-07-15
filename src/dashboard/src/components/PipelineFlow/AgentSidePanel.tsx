@@ -52,8 +52,15 @@ export function AgentSidePanel({ agentId, runId, onClose }: AgentSidePanelProps)
           try {
             const res = await fetch(`/api/runs/${runId ?? "latest"}/agent-artifacts/${key}`);
             if (!res.ok) return null;
-            const content = await res.json();
-            return { artifactKey: key, content, contentType: "json" };
+            // Endpoint returns { id, runId, stepId, agentId, artifactKey, content, contentType, ... }.
+            // Unwrap `content` — the insight components expect the raw payload, not the envelope.
+            const envelope = await res.json();
+            const content = envelope?.content ?? envelope;
+            return {
+              artifactKey: key,
+              content,
+              contentType: envelope?.contentType ?? "json",
+            };
           } catch {
             return null;
           }
