@@ -1080,7 +1080,8 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
       }
     }
 
-    jsonResponse(res, { nodes, edges, runId: runId ?? null, workflowType });
+    const runStatus = run?.status ?? null;
+    jsonResponse(res, { nodes, edges, runId: runId ?? null, runStatus, workflowType });
   })().catch((err) => errorResponse(res, `Failed to get pipeline flow: ${(err as Error).message}`));
 }
 

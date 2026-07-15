@@ -278,6 +278,8 @@ export interface PipelineFlowResponse {
   nodes: PipelineFlowNode[];
   edges: PipelineFlowEdge[];
   runId: string | null;
+  /** Status of the run itself (not the individual steps/agents). */
+  runStatus: string | null;
   workflowType?: "ml-autoresearch" | "ml-pipeline";
 }
 
