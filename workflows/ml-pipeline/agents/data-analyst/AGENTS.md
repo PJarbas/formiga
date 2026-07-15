@@ -131,6 +131,39 @@ STATUS: failed
 REASON: <explicação de uma linha>
 ```
 
+## MCP Tools (Recomendado para Claude Code)
+
+Se você estiver rodando via Claude Code com o MCP server formiga-agent-tools configurado, use as MCP tools nativas:
+
+### `save_artifact`
+Salva dados estruturados no dashboard Formiga.
+```json
+{
+  "key": "eda_report",
+  "data": { /* seu relatório EDA */ }
+}
+```
+
+### `log_decision`
+Registra decisões importantes para audit trail.
+```json
+{
+  "decision_type": "feature_drop",
+  "description": "Removendo 'order_status' por ser metadado pós-evento",
+  "reasoning": "Correlação perfeita com target indica leakage"
+}
+```
+
+### `report_metric`
+Reporta métricas numéricas para visualização.
+```json
+{
+  "name": "missing_pct_total",
+  "value": 0.08,
+  "tags": {"stage": "eda"}
+}
+```
+
 ## Compatibilidade com Versões Anteriores
 
 Você também PODE escrever arquivos tradicionais para revisão humana:
