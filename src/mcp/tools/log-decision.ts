@@ -130,19 +130,21 @@ export class LogDecisionHandler extends BaseToolHandler {
       step_id: context.stepId,
     };
 
-    // Fire-and-forget: save decision as an artifact
+    // Fire-and-forget: save decision as an artifact (append-only with counter key)
     this.queue.enqueue(async () => {
-      // Get existing decisions or create new array
-      const artifactKey = "agent_decisions";
+      const cursor = await this.artifactService.getNextCounter({
+        runId: context.runId,
+        agentId: context.agentId,
+        artifactKey: "agent_decisions_counter",
+      });
+      const padded = String(cursor).padStart(3, "0");
+      const artifactKey = `agent_decisions_${padded}`;
       await this.artifactService.save({
         runId: context.runId,
         stepId: context.stepId,
         agentId: context.agentId,
         artifactKey,
-        content: {
-          latest_decision: decisionRecord,
-          logged_at: timestamp,
-        },
+        content: decisionRecord,
         contentType: "json",
       });
     });

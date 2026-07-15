@@ -14,7 +14,9 @@ import {
   FeatureList,
   EmptyInsight,
   LoadingInsight,
+  DecisionTimeline,
 } from "./InsightComponents";
+import { FigureGallery } from "./FigureGallery";
 
 interface EDAReport {
   dataset_overview?: {
@@ -68,6 +70,16 @@ interface DataAnalystInsightsProps {
   edaReport: EDAReport | null;
   edaConfig: EDAConfig | null;
   hypothesis: string | null;
+  figures?: Array<{ title: string; url: string; path: string; section?: string }>;
+  decisions?: Array<{
+    key: string;
+    decision_type?: string;
+    description?: string;
+    reasoning?: string;
+    alternatives_considered?: string[];
+    timestamp?: string;
+    loggedAt: string;
+  }>;
   isLoading?: boolean;
 }
 
@@ -75,6 +87,8 @@ export function DataAnalystInsights({
   edaReport,
   edaConfig,
   hypothesis,
+  figures = [],
+  decisions = [],
   isLoading,
 }: DataAnalystInsightsProps) {
   if (isLoading) {
@@ -139,7 +153,7 @@ export function DataAnalystInsights({
                   <span className="text-xs text-[var(--text-primary)]">
                     Target: <strong>{overview.target_type}</strong>
                   </span>
-                  {target?.distribution && (
+                  {target?.distribution && typeof target.distribution === "string" && (
                     <span className="text-[10px] text-[var(--text-muted)]">
                       ({target.distribution})
                     </span>
@@ -286,6 +300,28 @@ export function DataAnalystInsights({
               </div>
             )}
           </div>
+        </Section>
+      )}
+
+      {/* Figures / Visualizations */}
+      {figures.length > 0 && (
+        <Section title="Visualizations" icon="📈" badge={figures.length}>
+          <FigureGallery figures={figures} />
+        </Section>
+      )}
+
+      {/* Decisions Timeline */}
+      {decisions.length > 0 && (
+        <Section title="Decisions Timeline" icon="🧭" badge={decisions.length}>
+          <DecisionTimeline
+            items={decisions.map((d, i) => ({
+              round: i + 1,
+              label: d.description ?? d.decision_type ?? "Decision",
+              value: d.reasoning ?? "",
+              status: "success" as const,
+            }))}
+            maxItems={8}
+          />
         </Section>
       )}
 

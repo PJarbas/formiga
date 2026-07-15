@@ -8,3 +8,4 @@ export * from "./FeatureEngineerInsights";
 export * from "./ModelerInsights";
 export * from "./ReporterInsights";
 export * from "./ArtifactViewer";
+export * from "./FigureGallery";

@@ -11,7 +11,9 @@ import {
   InfoBox,
   EmptyInsight,
   LoadingInsight,
+  DecisionTimeline,
 } from "./InsightComponents";
+import { FigureGallery } from "./FigureGallery";
 
 interface FeaturesMetadata {
   shape?: [number, number];
@@ -65,6 +67,16 @@ interface FeatureEngineerInsightsProps {
   baselineSubmission: BaselineSubmission | null;
   benchmarkConfig: BenchmarkConfig | null;
   hypothesis: string | null;
+  figures?: Array<{ title: string; url: string; path: string; section?: string }>;
+  decisions?: Array<{
+    key: string;
+    decision_type?: string;
+    description?: string;
+    reasoning?: string;
+    alternatives_considered?: string[];
+    timestamp?: string;
+    loggedAt: string;
+  }>;
   isLoading?: boolean;
 }
 
@@ -74,6 +86,8 @@ export function FeatureEngineerInsights({
   baselineSubmission,
   benchmarkConfig,
   hypothesis,
+  figures = [],
+  decisions = [],
   isLoading,
 }: FeatureEngineerInsightsProps) {
   if (isLoading) {
@@ -255,6 +269,28 @@ export function FeatureEngineerInsights({
               </span>
             ))}
           </div>
+        </Section>
+      )}
+
+      {/* Figures / Visualizations */}
+      {figures.length > 0 && (
+        <Section title="Visualizations" icon="📈" badge={figures.length}>
+          <FigureGallery figures={figures} />
+        </Section>
+      )}
+
+      {/* Decisions Timeline */}
+      {decisions.length > 0 && (
+        <Section title="Decisions Timeline" icon="🧭" badge={decisions.length}>
+          <DecisionTimeline
+            items={decisions.map((d, i) => ({
+              round: i + 1,
+              label: d.description ?? d.decision_type ?? "Decision",
+              value: d.reasoning ?? "",
+              status: "success" as const,
+            }))}
+            maxItems={8}
+          />
         </Section>
       )}
 

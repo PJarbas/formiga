@@ -9,6 +9,10 @@
  *   GET /api/runs                -> list all workflow runs
  *   GET /api/runs/:id            -> detail for a specific run
  *   GET /api/runs/:id/autoresearch -> AutoResearch progress for a run's harness cwd
+ *   GET /api/runs/:id/agents/:name/figures -> list figures (png/jpg/svg/webp) for an agent
+ *   GET /api/runs/:id/agents/:name/decisions -> list all decisions for an agent
+ *   GET /api/runs/:id/agents/:name/metrics   -> list all metrics for an agent
+ *   GET /api/runs/:id/agents/:name/legacy-files -> list legacy files (.md/.json etc)
  *   GET /api/events              -> recent events (global)
  *   DELETE /api/runs/:id         -> permanently delete a run and all associated data
  *   GET /api/logs-tail           -> logs-tail formatted event lines (cursor based)
@@ -83,6 +87,14 @@ function jsonResponse(res: http.ServerResponse, data: unknown, status = 200): vo
     "Access-Control-Allow-Origin": "*",
   });
   res.end(JSON.stringify(data));
+}
+
+function binaryResponse(res: http.ServerResponse, content: Buffer, mime: string, status = 200): void {
+  res.writeHead(status, {
+    "Content-Type": mime,
+    "Access-Control-Allow-Origin": "*",
+  });
+  res.end(content);
 }
 
 function htmlResponse(res: http.ServerResponse, html: string, status = 200): void {
@@ -1300,10 +1312,20 @@ function handleAgentReasoning(
     }
 
     // Fetch experiments for this agent in current run (key decisions).
-    // agent_name in DB is scoped ("ml-pipeline_modeler-classic"), URL param is bare.
-    const scopedAgentFilter = { endsWith: `_${agentName}` };
+    // agent_name in DB may be:
+    //   - "modeler-classic" (arena writes bare ids)
+    //   - "ml-pipeline_modeler-classic" (ml-pipeline writes scoped ids)
+    // So we match both the incoming name and its arena-stripped base.
+    const baseName = agentName.replace(/^arena-/, "");
     const experiments = await prisma.experiment.findMany({
-      where: { run_id: runId, agent_name: scopedAgentFilter },
+      where: {
+        run_id: runId,
+        OR: [
+          { agent_name: agentName },
+          ...(baseName !== agentName ? [{ agent_name: baseName }] : []),
+          { agent_name: { endsWith: `_${agentName}` } },
+        ],
+      },
       orderBy: { round_number: "desc" },
       take: 20,
       select: {
@@ -1806,6 +1828,14 @@ function handleLeaderboardScript(
 
 const ARTIFACT_ALLOWED_EXTENSIONS = new Set([".md", ".json", ".py", ".txt", ".csv", ".log"]);
 
+const IMAGE_EXTENSIONS = new Map([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".svg", "image/svg+xml"],
+  [".webp", "image/webp"],
+]);
+
 function handleRunArtifact(
   _req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -1837,6 +1867,18 @@ function handleRunArtifact(
     const ext = path.extname(relativePath).toLowerCase();
     const filePath = path.resolve(workspace, relativePath);
 
+    // Inline images (no Content-Disposition for browser rendering in <img>)
+    const imageMime = IMAGE_EXTENSIONS.get(ext);
+    if (imageMime) {
+      try {
+        const content = await fs.promises.readFile(filePath);
+        binaryResponse(res, content, imageMime);
+      } catch {
+        errorResponse(res, "File not found", 404);
+      }
+      return;
+    }
+
     if (ARTIFACT_ALLOWED_EXTENSIONS.has(ext)) {
       try {
         const content = await fs.promises.readFile(filePath, "utf-8");
@@ -1864,6 +1906,196 @@ function handleRunArtifact(
         errorResponse(res, "File not found", 404);
       }
     }
+  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
+}
+
+const IMAGE_GLOB_PATTERNS = ["**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.svg", "**/*.webp"];
+
+function inferFigureMetadata(filePath: string): { title: string; section?: string } {
+  const basename = path.basename(filePath, path.extname(filePath));
+  const dir = path.dirname(filePath);
+
+  // Strip common prefixes like fig_01_, fig_02_correlation_
+  const clean = basename
+    .replace(/^fig_\d+_/, "")
+    .replace(/^figure_/, "")
+    .replace(/_/g, " ");
+
+  const title = clean.charAt(0).toUpperCase() + clean.slice(1);
+
+  // Infer section from directory path
+  const parts = dir.split(path.sep);
+  const lastDir = parts[parts.length - 1];
+  const section = lastDir && lastDir !== "."
+    ? lastDir.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+    : undefined;
+
+  return { title, section };
+}
+
+function handleRunAgentFigures(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+  agentName: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { context: true },
+    });
+    if (!run) {
+      errorResponse(res, "Run not found", 404);
+      return;
+    }
+
+    const workspace = resolveWorkspaceFromRun(run);
+    if (!workspace) {
+      errorResponse(res, "Cannot resolve workspace", 500);
+      return;
+    }
+
+    const figures: Array<{
+      title: string;
+      url: string;
+      path: string;
+      section?: string;
+    }> = [];
+
+    for await (const entry of findFilesRec(workspace, IMAGE_GLOB_PATTERNS)) {
+      if (!isPathSafe(workspace, entry)) continue;
+      const rel = path.relative(workspace, entry).replace(/\\/g, "/");
+      const meta = inferFigureMetadata(rel);
+      figures.push({
+        ...meta,
+        url: `/api/runs/${runId}/artifacts/${encodeURIComponent(rel)}`,
+        path: rel,
+      });
+    }
+
+    jsonResponse(res, { figures });
+  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
+}
+
+async function* findFilesRec(dir: string, patterns: string[]): AsyncGenerator<string> {
+  try {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        yield* findFilesRec(full, patterns);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (
+          patterns.some((p) => {
+            const pExt = path.extname(p).toLowerCase();
+            return ext === pExt;
+          })
+        ) {
+          yield full;
+        }
+      }
+    }
+  } catch {
+    // Skip unreadable directories
+  }
+}
+
+function handleRunAgentDecisions(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+  agentName: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const artifacts = await prisma.agentArtifact.findMany({
+      where: {
+        run_id: runId,
+        agent_id: agentName,
+        artifact_key: { startsWith: "agent_decisions_" },
+      },
+      orderBy: { created_at: "asc" },
+    });
+
+    const decisions = artifacts.map((a) => ({
+      key: a.artifact_key,
+      ...JSON.parse(a.content),
+      loggedAt: (a.created_at ?? new Date()).toISOString(),
+    }));
+
+    jsonResponse(res, { decisions });
+  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
+}
+
+function handleRunAgentMetrics(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+  agentName: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const artifacts = await prisma.agentArtifact.findMany({
+      where: {
+        run_id: runId,
+        agent_id: agentName,
+        artifact_key: { startsWith: "metric_" },
+      },
+      orderBy: { created_at: "asc" },
+    });
+
+    const metrics = artifacts.map((a) => ({
+      key: a.artifact_key,
+      ...JSON.parse(a.content),
+      loggedAt: (a.created_at ?? new Date()).toISOString(),
+    }));
+
+    jsonResponse(res, { metrics });
+  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
+}
+
+function handleRunAgentLegacyFiles(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  runId: string,
+  agentName: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { context: true },
+    });
+    if (!run) {
+      errorResponse(res, "Run not found", 404);
+      return;
+    }
+
+    const workspace = resolveWorkspaceFromRun(run);
+    if (!workspace) {
+      errorResponse(res, "Cannot resolve workspace", 500);
+      return;
+    }
+
+    const files: Array<{ path: string; url: string; size?: number }> = [];
+    const legacyExts = new Set([".md", ".json", ".txt", ".csv", ".log", ".py"]);
+
+    for await (const entry of findFilesRec(workspace, [])) {
+      const ext = path.extname(entry).toLowerCase();
+      if (!legacyExts.has(ext)) continue;
+      if (!isPathSafe(workspace, entry)) continue;
+      const rel = path.relative(workspace, entry).replace(/\\/g, "/");
+      const stat = await fs.promises.stat(entry).catch(() => null);
+      files.push({
+        path: rel,
+        url: `/api/runs/${runId}/artifacts/${encodeURIComponent(rel)}`,
+        size: stat?.size,
+      });
+    }
+
+    jsonResponse(res, { files });
   })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
 }
 
@@ -3088,6 +3320,34 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   const artifactMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/artifacts\/(.+)$/);
   if (method === "GET" && artifactMatch) {
     handleRunArtifact(req, res, artifactMatch[1], decodeURIComponent(artifactMatch[2]));
+    return;
+  }
+
+  // GET /api/runs/:id/agents/:name/figures (before /api/runs/:id/agents/:name/*)
+  const agentFiguresMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/agents\/([a-zA-Z0-9_-]+)\/figures$/);
+  if (method === "GET" && agentFiguresMatch) {
+    handleRunAgentFigures(req, res, agentFiguresMatch[1], agentFiguresMatch[2]);
+    return;
+  }
+
+  // GET /api/runs/:id/agents/:name/decisions
+  const agentDecisionsMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/agents\/([a-zA-Z0-9_-]+)\/decisions$/);
+  if (method === "GET" && agentDecisionsMatch) {
+    handleRunAgentDecisions(req, res, agentDecisionsMatch[1], agentDecisionsMatch[2]);
+    return;
+  }
+
+  // GET /api/runs/:id/agents/:name/metrics
+  const agentMetricsMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/agents\/([a-zA-Z0-9_-]+)\/metrics$/);
+  if (method === "GET" && agentMetricsMatch) {
+    handleRunAgentMetrics(req, res, agentMetricsMatch[1], agentMetricsMatch[2]);
+    return;
+  }
+
+  // GET /api/runs/:id/agents/:name/legacy-files
+  const agentLegacyFilesMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/agents\/([a-zA-Z0-9_-]+)\/legacy-files$/);
+  if (method === "GET" && agentLegacyFilesMatch) {
+    handleRunAgentLegacyFiles(req, res, agentLegacyFilesMatch[1], agentLegacyFilesMatch[2]);
     return;
   }
 

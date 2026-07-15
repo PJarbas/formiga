@@ -171,6 +171,14 @@ Crie um script wrapper:
 python benchmark_runner.py "$1"
 ```
 
+## Figures Obrigatórias
+
+Salve estas figuras em `{{workspace}}/figures/`:
+1. `figures/feature_importance_baseline.png` — importância das top-20 features (usando permutation importance ou coeficientes do modelo baseline)
+2. `figures/baseline_residuals.png` — residuals plot do baseline vs target (se regressão)
+3. `figures/split_distribution.png` — distribuição do target por split (train/val/test balance)
+Cada figura DEVE ter título descritivo, labels nos eixos, e salvar com `dpi=100, bbox_inches='tight'`.
+
 ## Técnicas Avançadas (consideração OBRIGATÓRIA)
 
 1. mRMR — Minimum Redundancy Maximum Relevance
