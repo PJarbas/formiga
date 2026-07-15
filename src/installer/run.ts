@@ -195,11 +195,23 @@ export async function runWorkflow(
       seededContext.workspace = workingDirectoryForHarness;
     }
 
-    // Compute dataset signature for ml-pipeline / ml-autoresearch so modelers can query
-    // cross-run transfer-learning experiments from the leaderboard.
+    // Validate and compute dataset signature for ml-pipeline / ml-autoresearch
     if ((workflowId === "ml-pipeline" || workflowId === "ml-autoresearch") && seededContext.dataset_path) {
+      const datasetFullPath = path.resolve(seededContext.dataset_path);
+
+      // Check if dataset file exists before starting the run
       try {
-        const datasetFullPath = path.resolve(seededContext.dataset_path);
+        await fs.access(datasetFullPath);
+      } catch {
+        throw new Error(
+          `Dataset file not found: ${seededContext.dataset_path}\n` +
+          `Resolved path: ${datasetFullPath}\n` +
+          `Please check that the file exists and the path is correct.`
+        );
+      }
+
+      // Compute signature for cross-run transfer-learning experiments
+      try {
         const sig = await computeDatasetSignature(datasetFullPath);
         seededContext.dataset_signature = sig.signature;
         seededContext.dataset_row_bucket = sig.rowBucket;
