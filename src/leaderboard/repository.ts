@@ -107,6 +107,7 @@ export interface ArenaExperiment {
   artifact_path: string;
   metric_bag?: MetricBag;
   problem_type?: string | null;
+  status?: string;
 }
 
 // ── Repository interfaces (ISP) ──────────────────────────────────────────────
@@ -202,6 +203,7 @@ function fromArenaExperiment(entry: ArenaExperiment) {
     r2_score: entry.metric_bag?.r2_score ?? null,
     metrics_json: JSON.stringify({}),
     problem_type: entry.problem_type ?? null,
+    status: entry.status ?? (entry.benchmark_exit_code === 0 ? "SUCCESS" : (entry.benchmark_exit_code != null ? "FAILED" : "PENDING")),
   };
 }
 

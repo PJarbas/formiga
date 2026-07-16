@@ -268,12 +268,16 @@ export async function runArena(
 
       roundResults.push(result);
 
+      const richMetrics = tryLoadRichMetrics(config.workspacePath, agent.id, round, datasetCtx.problemType);
+
       // Register experiment in leaderboard
       const experimentId = await leaderboardRepo.registerArena({
         run_id: config.runId,
         round_number: round,
         agent_name: agent.id,
         model_type: agent.modelType ?? agent.id,
+        model_algorithm: richMetrics.modelAlgorithm ?? agent.modelType ?? agent.id,
+        hyperparameters: richMetrics.hyperparameters ?? {},
         hypothesis: output.hypothesis,
         learned: output.learned,
         next_focus: output.nextFocus,
@@ -286,6 +290,8 @@ export async function runArena(
         artifact_script: result.scriptPath,
         metric_name: config.metricName,
         artifact_path: result.scriptPath,
+        metric_bag: richMetrics.metricBag,
+        problem_type: datasetCtx.problemType,
       });
       result.experimentId = experimentId;
 
@@ -427,6 +433,27 @@ function buildPromptsForRound(
     prompt += `- Exemplo de saída: ${config.metricName}: 4500.1234\n`;
     prompt += `- Salve também seu modelo treinado como: artifacts/models/${agent.id}_round${session.currentRound}.pkl\n`;
     prompt += `- Salve o script em: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
+    prompt += `- Salve também um arquivo JSON com informações detalhadas do modelo e métricas ricas de validação cruzada em: artifacts/models/${agent.id}_round${session.currentRound}_results.json\n`;
+    prompt += `  O JSON deve ter EXATAMENTE esta estrutura:\n`;
+    if (datasetCtx.problemType === "classification") {
+      prompt += `  {\n`;
+      prompt += `    "model": "<classe_do_algoritmo_ex_XGBClassifier_ou_SVC>",\n`;
+      prompt += `    "best_params": { ..._parâmetros_de_hiperparametrização_... },\n`;
+      prompt += `    "f1_score": <float_ou_null>,\n`;
+      prompt += `    "precision": <float_ou_null>,\n`;
+      prompt += `    "recall": <float_ou_null>,\n`;
+      prompt += `    "roc_auc": <float_ou_null>,\n`;
+      prompt += `    "log_loss": <float_ou_null>\n`;
+      prompt += `  }\n`;
+    } else {
+      prompt += `  {\n`;
+      prompt += `    "model": "<classe_do_algoritmo_ex_XGBRegressor_ou_Ridge>",\n`;
+      prompt += `    "best_params": { ..._parâmetros_de_hiperparametrização_... },\n`;
+      prompt += `    "mae": <float_ou_null>,\n`;
+      prompt += `    "rmse": <float_ou_null>,\n`;
+      prompt += `    "r2_score": <float_ou_null>\n`;
+      prompt += `  }\n`;
+    }
     prompt += `- **RESPEITE os limites de complexidade acima.** Violá-los (ex: treinar FT-Transformer em dataset TINY) produzirá modelos com overfitting que serão descartados.\n`;
     prompt += `- Finalize sua resposta com:\n`;
     prompt += `\n\`\`\`\n`;
@@ -482,4 +509,80 @@ function emitArenaEvent(
   }).catch(() => {
     // Graceful degradation: arena works even without event system
   });
+}
+
+interface RichMetricsResult {
+  modelAlgorithm?: string | null;
+  hyperparameters?: Record<string, unknown>;
+  metricBag?: Record<string, number>;
+}
+
+function tryLoadRichMetrics(
+  workspacePath: string,
+  agentId: string,
+  round: number,
+  problemType: string | null
+): RichMetricsResult {
+  const resultsPath = path.join(workspacePath, SCRIPT_DIR, `${agentId}_round${round}_results.json`);
+  if (!fs.existsSync(resultsPath)) {
+    return {};
+  }
+
+  try {
+    const raw = fs.readFileSync(resultsPath, "utf-8");
+    const json = JSON.parse(raw) as Record<string, unknown>;
+
+    const modelAlgorithm = typeof json.model === "string" ? json.model :
+                           typeof json.model_name === "string" ? json.model_name :
+                           typeof json.algorithm === "string" ? json.algorithm : null;
+
+    let hyperparameters: Record<string, unknown> | undefined;
+    if (json.best_params && typeof json.best_params === "object") {
+      hyperparameters = json.best_params as Record<string, unknown>;
+    } else if (json.hyperparameters && typeof json.hyperparameters === "object") {
+      hyperparameters = json.hyperparameters as Record<string, unknown>;
+    }
+
+    const metricBag: Record<string, number> = {};
+
+    // Helper safely converting value to number
+    const getNum = (val: unknown): number | undefined => {
+      if (typeof val === "number" && !Number.isNaN(val)) return val;
+      if (typeof val === "string") {
+        const parsed = parseFloat(val);
+        if (!Number.isNaN(parsed)) return parsed;
+      }
+      return undefined;
+    };
+
+    // Map metrics flexibly based on common keys
+    const f1 = getNum(json.f1_score ?? json.f1 ?? json.cv_f1 ?? json.val_f1);
+    if (f1 !== undefined) metricBag.f1_score = f1;
+
+    const precision = getNum(json.precision ?? json.cv_precision ?? json.val_precision);
+    if (precision !== undefined) metricBag.precision = precision;
+
+    const recall = getNum(json.recall ?? json.cv_recall ?? json.val_recall);
+    if (recall !== undefined) metricBag.recall = recall;
+
+    const roc_auc = getNum(json.roc_auc ?? json.auc ?? json.cv_auc ?? json.val_auc);
+    if (roc_auc !== undefined) metricBag.roc_auc = roc_auc;
+
+    const log_loss = getNum(json.log_loss ?? json.cv_log_loss ?? json.val_log_loss);
+    if (log_loss !== undefined) metricBag.log_loss = log_loss;
+
+    const mae = getNum(json.mae ?? json.mean_absolute_error ?? json.cv_mae ?? json.val_mae);
+    if (mae !== undefined) metricBag.mae = mae;
+
+    const rmse = getNum(json.rmse ?? json.root_mean_squared_error ?? json.cv_rmse ?? json.val_rmse);
+    if (rmse !== undefined) metricBag.rmse = rmse;
+
+    const r2 = getNum(json.r2 ?? json.r2_score ?? json.cv_r2 ?? json.val_r2);
+    if (r2 !== undefined) metricBag.r2_score = r2;
+
+    return { modelAlgorithm, hyperparameters, metricBag };
+  } catch (err) {
+    // Silently degrade if file is corrupt or unreadable
+    return {};
+  }
 }
