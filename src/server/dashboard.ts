@@ -57,7 +57,7 @@ import {
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
-import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse } from "../shared/dashboard-types.js";
+import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse, LeaderboardEntry } from "../shared/dashboard-types.js";
 import { generateReproductionScript } from "./script-templates.js";
 import {
   findActivePipelineRunId,
@@ -985,6 +985,7 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
 function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse): void {
   (async () => {
     const runId = await findActivePipelineRunId();
+    let run: any = null;
     const currentRound = runId
       ? (await getPrisma().experiment.aggregate({ where: { run_id: runId }, _max: { round_number: true } }))._max.round_number ?? 0
       : 0;
@@ -993,7 +994,7 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
     let workflowType: "ml-autoresearch" | "ml-pipeline" = "ml-pipeline";
     let runHarnessType: "pi" | "hermes" | "unknown" = "pi";
     if (runId) {
-      const run = await getPrisma().run.findUnique({ where: { id: runId }, select: { context: true, workflow_id: true } });
+      run = await getPrisma().run.findUnique({ where: { id: runId } });
       if (run) {
         if (run.workflow_id?.includes("autoresearch") || run.workflow_id?.includes("arena")) {
           workflowType = "ml-autoresearch";
@@ -1562,34 +1563,8 @@ function safeParseJson(raw: string): Record<string, unknown> {
  * Fields that the schema does not yet persist (feature importances, timings)
  * surface as `null` until ingestion captures them — the API contract is stable.
  */
-function mapExperimentRow(r: Record<string, unknown>): {
-  id: string;
-  runId: string;
-  roundNumber: number;
-  agentName: string;
-  modelId: string;
-  modelType: string;
-  status: string;
-  cvMean: number;
-  cvStd: number;
-  trainMean: number;
-  trainValGap: number;
-  hyperparameters: Record<string, unknown>;
-  featureImportancesTop10: Array<[string, number]> | null;
-  trainTimeSeconds: number | null;
-  inferenceTimeMsPer1k: number | null;
-  createdAt: string;
-  promotedAt: string | null;
-  rejectedAt: string | null;
-  rejectReason: string | null;
-  artifactPath: string | null;
-  /** Arena fields attached to leaderboard entries. */
-  decision?: string | null;
-  confidenceScore?: number | null;
-  confidenceBand?: string | null;
-  hypothesis?: string | null;
-  learned?: string | null;
-} {
+function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
+  const problemType = (r.problem_type as "classification" | "regression" | "multilabel" | "unknown" | null) ?? "unknown";
   return {
     id: String(r.experiment_id),
     runId: r.run_id as string,
@@ -1597,6 +1572,8 @@ function mapExperimentRow(r: Record<string, unknown>): {
     agentName: r.agent_name as string,
     modelId: `model_${r.experiment_id}`,
     modelType: r.model_type as string,
+    modelAlgorithm: (r.model_algorithm as string | null) ?? null,
+    problemType,
     status: r.status as string,
     cvMean: Number(r.val_metric),
     cvStd: 0,
@@ -1616,6 +1593,22 @@ function mapExperimentRow(r: Record<string, unknown>): {
     confidenceBand: (r.confidence_band as string | null) ?? null,
     hypothesis: (r.hypothesis as string | null) ?? null,
     learned: (r.learned as string | null) ?? null,
+    metrics: {
+      primary: { name: (r.metric_name as string) || "cv_mean", value: Number(r.val_metric) },
+      classification: problemType === "classification" ? {
+        f1: r.f1_score != null ? Number(r.f1_score) : undefined,
+        precision: r.precision != null ? Number(r.precision) : undefined,
+        recall: r.recall != null ? Number(r.recall) : undefined,
+        rocAuc: r.roc_auc != null ? Number(r.roc_auc) : undefined,
+        logLoss: r.log_loss != null ? Number(r.log_loss) : undefined,
+      } : undefined,
+      regression: problemType === "regression" ? {
+        mae: r.mae != null ? Number(r.mae) : undefined,
+        rmse: r.rmse != null ? Number(r.rmse) : undefined,
+        r2Score: r.r2_score != null ? Number(r.r2_score) : undefined,
+      } : undefined,
+      raw: r.metrics_json ? safeParseJson(r.metrics_json as string) : {},
+    },
   };
 }
 

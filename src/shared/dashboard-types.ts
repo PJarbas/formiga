@@ -59,6 +59,8 @@ export interface LeaderboardEntry {
   agentName: string;
   modelId: string;
   modelType: string;
+  modelAlgorithm: string | null;
+  problemType: "classification" | "regression" | "multilabel" | "unknown";
   status: string;
   cvMean: number;
   cvStd: number;
@@ -83,6 +85,23 @@ export interface LeaderboardEntry {
   hypothesis?: string | null;
   /** Agent's learned text for this experiment. */
   learned?: string | null;
+  /** Rich metrics by problem type */
+  metrics?: {
+    primary?: { name: string; value: number };
+    classification?: {
+      f1?: number;
+      precision?: number;
+      recall?: number;
+      rocAuc?: number;
+      logLoss?: number;
+    };
+    regression?: {
+      mae?: number;
+      rmse?: number;
+      r2Score?: number;
+    };
+    raw?: Record<string, unknown>;
+  };
 }
 
 export interface ModelReportResponse {

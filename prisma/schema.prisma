@@ -115,6 +115,22 @@ model Experiment {
   rejected_at         DateTime?
   reject_reason       String?
   created_at          DateTime  @default(now())
+
+  // ── Rich metrics (nullable = not applicable for this problem type) ──
+  f1_score            Float?
+  precision           Float?
+  recall              Float?
+  roc_auc             Float?
+  log_loss            Float?
+  mae                 Float?
+  rmse                Float?
+  r2_score            Float?
+  metrics_json        String?   @default("{}")
+
+  // ── Problem type & model algorithm ──
+  problem_type        String?
+  model_algorithm     String?
+
   run                 Run       @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
   @@index([run_id, round_number])

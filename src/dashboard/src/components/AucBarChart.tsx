@@ -71,7 +71,7 @@ function buildBars(entries: LeaderboardEntry[], maxBars: number, direction: "hig
     }
     pct = Math.max(10, Math.min(100, pct));
 
-    const isChampion = idx === 0;
+    const algo = e.modelAlgorithm ?? e.modelType;
 
     return {
       id: e.id,
@@ -81,8 +81,8 @@ function buildBars(entries: LeaderboardEntry[], maxBars: number, direction: "hig
       trainAuc: e.trainMean ?? 0,
       gap: e.trainValGap ?? 0,
       hypothesis: e.hypothesis ?? null,
-      modelType: e.modelType,
-      color: isChampion ? "#58a6ff" : "#4A5568",
+      modelType: algo,
+      color: familyColor(algo),
       pct,
     };
   });

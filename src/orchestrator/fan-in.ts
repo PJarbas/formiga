@@ -76,6 +76,7 @@ function toNewExperiment(
     round_number: roundNumber,
     agent_name: result.agentName,
     model_type: result.modelType ?? "unknown",
+    model_algorithm: null,
     hyperparameters: result.hyperparameters ?? {},
     train_metric: result.trainMean ?? 0,
     val_metric: result.cvMean ?? 0,
