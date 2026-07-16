@@ -7,112 +7,112 @@
   <img src="https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg" alt="Node.js >= 22">
 </p>
 
-**AutoResearch para Equipes de Ciência de Dados** — Um sistema multi-agente que automatiza o ciclo completo de experimentos de Machine Learning: Análise Exploratória (EDA), Engenharia de Features, Treinamento de Modelos, Tuning de Hiperparâmetros e Relatório Final.
+**AutoResearch for Data Science Teams** — A multi-agent system that automates the ML experimentation cycle: EDA, feature engineering, model training, hyperparameter tuning, and final reporting.
 
 ---
 
-## Por que Formiga?
+## Why Formiga?
 
-Cientistas de dados gastam até 80% do tempo em tarefas repetitivas: limpando dados, experimentando novas transformações de features, testando múltiplos algoritmos e ajustando hiperparâmetros.
+Data scientists spend up to 80% of their time on repetitive tasks: exploring data, engineering features, tuning hyperparameters, and comparing models.
 
-O **Formiga** automatiza todo esse fluxo de forma inteligente. Ele simula uma equipe de ciência de dados autônoma onde agentes especializados colaboram, experimentam em paralelo, competem em uma Arena estruturada e geram modelos prontos para produção.
+**Formiga** automates this end-to-end. It spawns a team of autonomous AI agents that work like a collaborative data science squad — exploring, experimenting, competing in a structured Arena, and delivering production-ready models.
 
-**O que o Formiga oferece:**
-- **Experimentação em Paralelo:** Agentes modeladores (Clássico e Avançado) competem simultaneamente para ver quem descobre o melhor modelo.
-- **Melhoria Iterativa (Arena):** O ciclo de modelagem roda por múltiplos rounds de forma adaptativa com base no feedback das rodadas anteriores.
-- **Auditabilidade Total:** Cada decisão de engenharia de features, cada arquitetura de modelo e hiperparâmetro testado é registrado de forma estruturada.
-- **Dashboard em Tempo Real:** Acompanhe visualmente a execução da DAG de agentes, as features criadas e a evolução da liderança de modelos.
+**Key Features:**
+- **Parallel Experimentation:** Classic ML and Deep Learning agents compete simultaneously.
+- **Iterative Improvement (Arena):** The modeling loop runs for multiple rounds, adapting based on prior rounds' learnings.
+- **Full Auditability:** Every feature transformation decision, model architecture, and hyperparameter set is logged.
+- **Live Dashboard:** Watch the execution DAG, engineered features, and leaderboard rankings in real-time.
 
 ---
 
-## Como Funciona o Fluxo de Execução?
+## How It Works
 
-O Formiga organiza a execução em uma DAG (Grafo Direcionado Acíclico) de agentes especializados, operando de forma sequencial e concorrente:
+Formiga structures agent execution in a Directed Acyclic Graph (DAG) of specialized roles:
 
 ```
-[ Data Analyst ] (Analisa os dados originais e propõe melhorias)
+[ Data Analyst ] (Analyzes raw data and proposes recommendations)
        │
        ▼
-[ Feature Engineer ] (Cria as features e estabelece o baseline)
+[ Feature Engineer ] (Transforms features and trains baseline model)
        │
  ┌─────┴─────────────────────┐
  ▼                           ▼
-[ Modeler Classic ]   [ Modeler Advanced ]  (Competem em múltiplos rounds na Arena)
+[ Modeler Classic ]   [ Modeler Advanced ]  (Compete in multiple rounds in the Arena)
  └─────┬─────────────────────┘
-       │ (Melhor modelo converge/atinge rounds máximos)
+       │ (Best model converges or max rounds reached)
        ▼
-[ Arena Reporter ] (Consolida a competição e escreve o relatório final)
+[ Arena Reporter ] (Consolidates the competition and writes final report)
 ```
 
-### Os Agentes e Suas Funções
+### The Agents and Their Roles
 
-1. **Data Analyst (Analista de Dados):**
-   * **O que faz:** Realiza a Análise Exploratória de Dados (EDA) de forma totalmente autônoma.
-   * **Como atua:** Lê o dataset de treino, detecta problemas de qualidade (dados ausentes, duplicados, outliers), calcula correlações, identifica o tipo de problema (classificação ou regressão) e propõe recomendações de transformações para otimizar a modelagem.
+1. **Data Analyst:**
+   * **What it does:** Performs autonomous Exploratory Data Analysis (EDA).
+   * **How it works:** Reads the training dataset, detects data quality issues (missing values, duplicates, outliers), calculates correlations, infers the problem type (classification or regression), and generates actionable feature engineering recommendations.
 
-2. **Feature Engineer (Engenheiro de Features):**
-   * **O que faz:** Transforma as recomendações de EDA em código Python executável.
-   * **Como atua:** Aplica transformações (como polinômios, divisões de features, target encoding), define a estratégia ideal de validação cruzada (ex: *Stratified K-Fold* para classificação) e treina um **modelo baseline** inicial simples (como uma Regressão Logística ou Linear) para servir como ponto de partida da competição.
+2. **Feature Engineer:**
+   * **What it does:** Implements the EDA recommendations into executable Python code.
+   * **How it works:** Applies feature transformations (polynomial features, ratio creation, target encoding), sets up the cross-validation strategy (e.g., *Stratified K-Fold* for classification), and trains a simple **baseline model** (like a Logistic or Linear Regression) to establish the benchmark score.
 
-3. **Modeler (Classic - Modelador Clássico):**
-   * **O que faz:** Explora algoritmos consolidados e eficientes de Machine Learning.
-   * **Como atua:** Testa hipóteses usando modelos clássicos como *Random Forest*, *Support Vector Machines (SVM)* ou modelos lineares simples, ajustando hiperparâmetros leves que garantam estabilidade e rapidez.
+3. **Modeler (Classic):**
+   * **What it does:** Explores established, lightweight Machine Learning algorithms.
+   * **How it works:** Tests hypotheses using classic algorithms like *Random Forest*, *Support Vector Machines (SVM)*, or simple linear models with lightweight hyperparameter tuning for speed and stability.
 
-4. **Modeler (Advanced - Modelador Avançado):**
-   * **O que faz:** Experimenta técnicas de alta performance, algoritmos robustos de boosting ou transformações não-lineares agressivas.
-   * **Como atua:** Trabalha com algoritmos de ponta, tais como *XGBoost*, *LightGBM*, ou cria pipelines complexos aplicando engenharia de features polinomial profunda e buscas rigorosas de hiperparâmetros.
+4. **Modeler (Advanced):**
+   * **What it does:** Experiments with high-performance algorithms and complex hyperparameter search spaces.
+   * **How it works:** Utilizes state-of-the-art algorithms such as *XGBoost* or *LightGBM*, applying advanced polynomial feature scaling, regularizations, and aggressive tuning to beat the baseline.
 
-5. **Arena Reporter (Relator da Arena):**
-   * **O que faz:** Consolida toda a história da competição de Machine Learning.
-   * **Como atua:** Analisa as rodadas da arena, aponta qual foi o agente e o algoritmo vencedor, detalha os ganhos de performance obtidos em relação ao baseline de partida, e escreve um sumário executivo em linguagem natural explicando o que funcionou e o que falhou durante os rounds.
-
----
-
-## Visualizando o Processo no Dashboard
-
-O dashboard interativo do Formiga permite monitorar e investigar todo o ciclo de vida dos agentes e modelos em tempo real.
-
-### 1. Fluxo da Pipeline (Pipeline Flow)
-Permite visualizar em tempo real a execução de cada agente. Ao clicar em um agente, o painel lateral exibe suas descobertas, código e estatísticas.
-
-* **Fase de Análise de Dados:**
-  <p align="center"><img src="docs/screenshots/image_5.png" alt="Fluxo da Pipeline - Data Analyst" width="820"></p>
-  *O painel lateral exibe o número de linhas, colunas, qualidade dos dados (missing/duplicados), as features mais importantes correlacionadas com o target e recomendações geradas pelo **Data Analyst**.*
-
-* **Fase de Engenharia de Features:**
-  <p align="center"><img src="docs/screenshots/image_3.png" alt="Painel do Feature Engineer" width="400"></p>
-  *O painel lateral detalha as novas features geradas (ex: interações polinomiais), a distribuição exata de divisões (Train/Val/Test), a métrica obtida pelo modelo baseline (`baseline-logistic`) e os gráficos gerados automaticamente de matriz de confusão ou mapa de calor residual.*
-
-### 2. Leaderboard de Experimentos (Leaderboard)
-Centraliza a comparação e o ranking de todos os modelos criados pelos modeladores durante os múltiplos rounds da Arena.
-
-<p align="center"><img src="docs/screenshots/image_4.png" alt="Leaderboard do Formiga" width="820"></p>
-
-* **Adaptabilidade ao Problema:** O Leaderboard adapta suas colunas e métricas automaticamente dependendo do tipo de problema.
-  * **Classificação:** Exibe acurácia média de validação cruzada (`Accuracy CV`), F1-Score, Precision, Recall e ROC-AUC.
-  * **Regressão:** Exibe erro médio de validação cruzada, RMSE, MAE e R²-Score.
-* **Algoritmos Reais:** O painel mostra o nome real do algoritmo treinado no Python (ex: `LogisticRegression (Poly)` ou `SVC (RBF)`) e o desvio padrão da validação cruzada para garantir que você escolha o modelo mais estável.
-
-### 3. Consolidação e Modelo Campeão
-Quando os modelos param de evoluir ou atingem o limite de rodadas, a arena converge e o relatório final é entregue pelo **Arena Reporter**.
-
-<p align="center"><img src="docs/screenshots/image_6.png" alt="Relatório Final da Arena" width="820"></p>
-*O Arena Reporter exibe o resumo executivo, estatísticas de evolução (melhoria percentual versus o baseline de partida) e as métricas do modelo campeão final.*
+5. **Arena Reporter:**
+   * **What it does:** Consolidates all modeling history from the competition.
+   * **How it works:** Compiles results across all rounds, identifies the winning model and algorithm, outlines the performance improvements over the baseline, and writes a comprehensive executive summary detailing what worked and what failed.
 
 ---
 
-## Quick Start (Início Rápido)
+## Dashboard Walkthrough
 
-### 1. Pré-requisitos
+Formiga's interactive dashboard allows you to monitor and audit agent activity and experimental results in real-time.
 
-* **Node.js 22+** (verifique com `node -v`)
-* **Coding-Agent Harness (Harness de Execução de Agentes):** O Formiga utiliza um harness para delegar tarefas de execução aos agentes de IA. Instale um dos suportados:
-  * **pi-coding-agent** (Altamente Recomendado) — Instale seguindo o repositório oficial: [pi](https://github.com/mariozechner/pi-coding-agent)
-  * **hermes** — Excelente alternativa para uso com computer-use: [hermes](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo)
+### 1. Pipeline Flow
+A live graphical representation of agent execution. Clicking on any agent node reveals its insights, generated code, and diagnostic logs in the side panel.
 
-### 2. Instalação do Formiga
+* **Exploratory Data Analysis (EDA) Phase:**
+  <p align="center"><img src="docs/screenshots/image_5.png" alt="Pipeline Flow - Data Analyst Panel" width="820"></p>
+  *The Data Analyst's side panel lists data dimensions, quality flags (missing/duplicate rows), feature importances against the target, and recommendations.*
 
-Clone o repositório e execute o script de compilação e instalação global:
+* **Feature Engineering Phase:**
+  <p align="center"><img src="docs/screenshots/image_3.png" alt="Feature Engineer Panel" width="400"></p>
+  *The Feature Engineer's side panel displays newly engineered features (e.g., sepal/petal cross-interactions), split sizes (Train/Val/Test), baseline metrics, and automatically plotted confusion matrices or residual heatmaps.*
+
+### 2. Leaderboard
+Centralizes and ranks every model produced during the Arena rounds.
+
+<p align="center"><img src="docs/screenshots/image_4.png" alt="Formiga Leaderboard" width="820"></p>
+
+* **Task-Adaptive Metrics:** The leaderboard table layout dynamically shifts depending on the problem type.
+  * **Classification:** Displays cross-validation accuracy (`Accuracy CV`), F1-Score, Precision, Recall, and ROC-AUC.
+  * **Regression:** Displays CV error, RMSE, MAE, and R²-Score.
+* **Actual Algorithm Classes:** The panel displays the real trained Python class names (e.g., `LogisticRegression (Poly)` or `SVC (RBF)`) along with standard deviations to help you select the most robust model.
+
+### 3. Winner Consolidation
+Once the Arena converges or reaches the round limit, the winning model is crowned and the final report is compiled.
+
+<p align="center"><img src="docs/screenshots/image_6.png" alt="Arena Reporter Consolidation" width="820"></p>
+*The Arena Reporter's side panel outlines the winner, absolute and percentage gains over the baseline, and structural insights learned during modeling.*
+
+---
+
+## Quick Start
+
+### 1. Prerequisites
+
+* **Node.js 22+** (check with `node -v`)
+* **Coding-Agent Harness:** Formiga leverages an agent harness to run code. Install one of the supported harnesses:
+  * **pi-coding-agent** (Highly Recommended) — Follow the installation steps on [pi](https://github.com/mariozechner/pi-coding-agent)
+  * **hermes** — Excellent alternative for computer-use integrations: [hermes](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo)
+
+### 2. Installation
+
+Clone the repository and run the global build and installation script:
 
 ```bash
 git clone https://github.com/PJarbas/formiga.git
@@ -120,131 +120,131 @@ cd formiga
 ./build-and-install
 ```
 
-### 3. Rodando sua primeira Auto-Pesquisa
+### 3. Running AutoResearch
 
-Inicie uma pesquisa de ML indicando seu dataset e a coluna alvo:
+Run your first automated research competition by providing a dataset and a target column:
 
 ```bash
-# Inicia a arena competitiva de ML
+# Start the competitive ML arena
 formiga autoresearch "dataset_path=data/classification.csv target_column=species"
 
-# Abra o dashboard interativo em outra janela do terminal
+# In another terminal window, launch the interactive dashboard
 formiga dashboard start
 ```
-Abra o seu navegador em [http://localhost:3334](http://localhost:3334) para acompanhar os agentes em tempo real.
+Navigate to [http://localhost:3334](http://localhost:3334) to watch the agents execute in real-time.
 
 ---
 
-## Comandos Disponíveis
+## Commands
 
 ```bash
-# Executar pesquisas e fluxos
+# Execute workflows
 formiga autoresearch "dataset_path=... target_column=..."
 formiga workflow run ml-pipeline "..."
 
-# Gerenciamento de Execuções (Runs)
-formiga workflow runs              # Lista todas as runs cadastradas
-formiga workflow status <id>       # Consulta o status atual de uma run
-formiga workflow pause <id>        # Pausa os agendamentos de uma run ativa
-formiga workflow resume <id>       # Retoma uma run pausada
-formiga workflow delete <id>       # Deleta uma run permanentemente do banco
+# Run Management
+formiga workflow runs              # List all runs and statuses
+formiga workflow status <id>       # View live status of a run
+formiga workflow pause <id>        # Pause scheduling for an active run
+formiga workflow resume <id>       # Resume a paused run
+formiga workflow delete <id>       # Permanently delete a run and its records
 
 # Dashboard
-formiga dashboard start            # Inicializa a interface web na porta 3334
-formiga dashboard stop             # Para o serviço do dashboard
+formiga dashboard start            # Start the dashboard UI on port 3334
+formiga dashboard stop             # Stop the dashboard server
 
-# Logs e Diagnósticos
-formiga logs                       # Exibe as últimas linhas de log global do daemon
-formiga logs-tail                  # Segue os logs do daemon ao vivo
-formiga status                     # Verifica a saúde do daemon do Formiga
+# Monitoring & Logs
+formiga logs                       # View recent global daemon logs
+formiga logs-tail                  # Stream live daemon logs
+formiga status                     # Perform a daemon health check
 
-# Configuração e Manutenção
-formiga get-ready                  # Prepara o ambiente instalando fluxos padrão
-formiga update                     # Atualiza o código, recompila e reinicia os serviços
+# Maintenance
+formiga get-ready                  # Install default workflows and prepare directories
+formiga update                     # Pull latest commits, rebuild, and restart services
 ```
 
 ---
 
-## Usando o Formiga a partir de Outros Agentes de IA (Skill do Claude Code)
+## Integrating with AI Agents (Claude Code Skill)
 
-O Formiga expõe uma **Skill** dedicada de Claude Code para que agentes de IA possam executar e gerenciar experimentos de Machine Learning de forma programática.
+Formiga exposes a dedicated **Claude Code Skill** allowing other AI agents to execute and manage Machine Learning experiments programmatically.
 
-### Instalação da Skill no Claude Code
+### Install the Skill
 
-Para registrar a skill dentro do seu ambiente do Claude Code local, copie a pasta da skill:
+Copy the skill directory to your local Claude Code skills path:
 
 ```bash
-cp -r /caminho/para/formiga/skills/formiga-agents ~/.claude/skills/
+cp -r /path/to/formiga/skills/formiga-agents ~/.claude/skills/
 ```
 
-### Exemplo de Uso: Prompt para Claude Code rodar experimentos
+### Example: Agent-Driven Research
 
-Você pode instruir o Claude Code (ou outro agente de IA equipado com a skill) a rodar pesquisas de machine learning fornecendo um prompt como o seguinte:
+You can prompt Claude Code (or any agent equipped with this skill) to run an ML experiment:
 
 ```text
-Você tem acesso ao Formiga, uma plataforma multi-agente de Machine Learning.
+You have access to Formiga, a multi-agent ML platform.
 
-Execute uma pesquisa AutoResearch no dataset em data/classification.csv para prever a coluna "species":
+Run AutoResearch on the dataset at data/classification.csv to predict "species":
 
 formiga autoresearch "dataset_path=data/classification.csv target_column=species max_rounds=5"
 
-Monitore o progresso do pipeline e as métricas na Arena. Quando concluído, verifique qual foi o modelo campeão no leaderboard e me diga quais transformações de features e algoritmos trouxeram o melhor resultado.
+Monitor the pipeline progress. Once done, inspect the best model on the leaderboard and summarize which features and algorithms yielded the highest validation score.
 ```
 
-### Comandos de Integração Essenciais para Agentes
+### Core Commands for Agents
 
 ```bash
-# Iniciar Arena Autônoma de Machine Learning
-formiga autoresearch "dataset_path=caminho/dados.csv target_column=alvo"
+# Start competitive ML Arena (runs ml-autoresearch workflow)
+formiga autoresearch "dataset_path=path/to/data.csv target_column=target"
 
-# Executar especificando limite de rounds, métrica base e direção de otimização
+# Start with detailed constraints
 formiga autoresearch "dataset_path=data.csv target_column=price max_rounds=8 metric=rmse direction=lower"
 
-# Monitoramento de agendamentos e filas
+# Monitor progress
 formiga workflow runs
 formiga logs-tail
 ```
 
-Para especificações profundas de contratos e parâmetros suportados da skill, veja [skills/formiga-agents/SKILL.md](skills/formiga-agents/SKILL.md).
+See [skills/formiga-agents/SKILL.md](skills/formiga-agents/SKILL.md) for the full agent API and parameters.
 
 ---
 
-## Arquitetura de Comunicação
+## Architecture
 
-O Formiga foi construído para ser incrivelmente leve, rodando de forma desacoplada e resiliente a falhas:
+Formiga is designed to be highly lightweight, asynchronous, and resilient:
 
 ```
-CLI (Comandos) ──┐
+CLI (Commands) ──┐
                  ▼
-          Banco SQLite (armazenado em ~/.formiga/formiga.db)
+          SQLite Database (stored at ~/.formiga/formiga.db)
                  ▲
-                 ├─ Daemon (Orquestra a DAG de agentes e gerencia o cron)
+                 ├─ Daemon (Orchestrates the agent DAG and handles chron schedule)
                  │     │
                  │     ▼
-                 │   Harness de Execução (pi ou hermes)
+                 │   Agent Harness (pi or hermes)
                  │     │
                  │     ▼
-                 │   Agentes de IA (Data Analyst, Feature Engineer, Modelers)
+                 │   AI Agents (Data Analyst, Feature Engineer, Modelers)
                  ▲     │
                  │     ▼
-Dashboard API (Porta :3334) ◄─ Escreve métricas e artefatos
+Dashboard API (:3334) ◄─ Publishes rich metrics and artifacts
 ```
 
-Para mais detalhes sobre as especificações do motor de orquestração, consulte [docs/WORKFLOW-ARCHITECTURE.md](docs/WORKFLOW-ARCHITECTURE.md).
+For details regarding the orchestrator and daemon schemas, refer to [docs/WORKFLOW-ARCHITECTURE.md](docs/WORKFLOW-ARCHITECTURE.md).
 
 ---
 
-## Contribuição e Desenvolvimento
+## Development
 
-Para testar ou desenvolver o Formiga localmente:
+To build and run tests locally:
 
 ```bash
-./build              # Compila e reinicia os serviços em background
-npm test             # Executa o conjunto de testes automatizados
+./build              # Compiles TypeScript and restarts background services
+npm test             # Runs test suite
 ```
 
 ---
 
-## Licença
+## License
 
-Este projeto está licenciado sob a Licença MIT - veja o arquivo [LICENSE](LICENSE) para detalhes.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
