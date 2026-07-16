@@ -65,6 +65,24 @@ const PROMOTED_INDEX_DDL = `
     WHERE promoted_at IS NOT NULL;
 `;
 
+/**
+ * Additive migration: rich metric columns and problem-type metadata.
+ * Applied idempotently by introspecting PRAGMA table_info(experiments).
+ */
+const RICH_METRICS_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: "f1_score",            ddl: "ALTER TABLE experiments ADD COLUMN f1_score REAL" },
+  { name: "precision",           ddl: "ALTER TABLE experiments ADD COLUMN precision REAL" },
+  { name: "recall",              ddl: "ALTER TABLE experiments ADD COLUMN recall REAL" },
+  { name: "roc_auc",             ddl: "ALTER TABLE experiments ADD COLUMN roc_auc REAL" },
+  { name: "log_loss",            ddl: "ALTER TABLE experiments ADD COLUMN log_loss REAL" },
+  { name: "mae",                 ddl: "ALTER TABLE experiments ADD COLUMN mae REAL" },
+  { name: "rmse",                ddl: "ALTER TABLE experiments ADD COLUMN rmse REAL" },
+  { name: "r2_score",            ddl: "ALTER TABLE experiments ADD COLUMN r2_score REAL" },
+  { name: "metrics_json",        ddl: "ALTER TABLE experiments ADD COLUMN metrics_json TEXT DEFAULT '{}'" },
+  { name: "problem_type",        ddl: "ALTER TABLE experiments ADD COLUMN problem_type TEXT" },
+  { name: "model_algorithm",     ddl: "ALTER TABLE experiments ADD COLUMN model_algorithm TEXT" },
+];
+
 export function initLeaderboardSchema(db: DatabaseSync): void {
   db.exec(DATASET_SIGNATURE_DDL);
   db.exec(EXPERIMENTS_DDL);
@@ -83,6 +101,13 @@ export function initLeaderboardSchema(db: DatabaseSync): void {
   // Nullable TEXT column added for cross-run transfer-learning.
   if (!existingNames.has("dataset_signature")) {
     db.exec("ALTER TABLE experiments ADD COLUMN dataset_signature TEXT");
+  }
+
+  // ── Rich metrics migration ──
+  for (const col of RICH_METRICS_COLUMNS) {
+    if (!existingNames.has(col.name)) {
+      db.exec(col.ddl);
+    }
   }
 
   db.exec(PROMOTED_INDEX_DDL);

@@ -77,6 +77,42 @@ export default function Leaderboard() {
     return best?.id ?? null;
   }, [sortedEntries]);
 
+  const activeProblemType = useMemo(() => {
+    const firstWithProblemType = sortedEntries.find((e) => e.problemType && e.problemType !== "unknown");
+    return firstWithProblemType?.problemType ?? "classification";
+  }, [sortedEntries]);
+
+  const columns = useMemo(() => {
+    const base = [
+      { key: "modelId", label: "Experiment", sortable: true },
+      { key: "modelAlgorithm", label: "Algorithm", sortable: false },
+      { key: "problemType", label: "Problem", sortable: false },
+      { key: "cvMean", label: `${metricName} CV`, sortable: true, align: "right" as const },
+    ];
+
+    if (activeProblemType === "regression") {
+      base.push(
+        { key: "rmse", label: "RMSE", sortable: false, align: "right" as const },
+        { key: "mae", label: "MAE", sortable: false, align: "right" as const },
+        { key: "r2Score", label: "R²-Score", sortable: false, align: "right" as const }
+      );
+    } else {
+      base.push(
+        { key: "f1_score", label: "F1-Score", sortable: false, align: "right" as const },
+        { key: "precision", label: "Precision", sortable: false, align: "right" as const },
+        { key: "recall", label: "Recall", sortable: false, align: "right" as const },
+        { key: "roc_auc", label: "ROC-AUC", sortable: false, align: "right" as const }
+      );
+    }
+
+    base.push(
+      { key: "cvStd", label: "±Std", sortable: false, align: "right" as const },
+      { key: "trainValGap", label: "GAP", sortable: true }
+    );
+
+    return base;
+  }, [activeProblemType, metricName]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64 text-[var(--text-muted)]">
@@ -120,24 +156,23 @@ export default function Leaderboard() {
             <thead>
               <tr className="border-b border-[var(--border-default)] text-left">
                 <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide">#</th>
-                {([
-                  ["modelId", "Experiment"],
-                  ["modelType", "Model"],
-                  ["roundNumber", "Category"],
-                  ["cvMean", `${metricName} CV`],
-                  ["cvStd", "±Std"],
-                  ["trainValGap", "GAP"],
-                ] as [string, string][]).map(([key, label]) => (
+                {columns.map((col) => (
                   <th
-                    key={key}
-                    className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide select-none cursor-pointer"
+                    key={col.key}
+                    className={`px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide select-none ${
+                      col.sortable ? "cursor-pointer" : ""
+                    } ${col.align === "right" ? "text-right" : ""}`}
                     onClick={() => {
+                      if (!col.sortable) return;
+                      const key = col.key as SortKey;
                       if (sortBy === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-                      else { setSortBy(key as SortKey); setSortDir("desc"); }
+                      else { setSortBy(key); setSortDir("desc"); }
                     }}
                   >
-                    {label}
-                    {sortBy === key && <span className="ml-1 text-[var(--accent-blue)]">{sortDir === "asc" ? "↑" : "↓"}</span>}
+                    {col.label}
+                    {col.sortable && sortBy === col.key && (
+                      <span className="ml-1 text-[var(--accent-blue)]">{sortDir === "asc" ? "↑" : "↓"}</span>
+                    )}
                   </th>
                 ))}
                 <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide">Folds</th>
@@ -147,7 +182,7 @@ export default function Leaderboard() {
             <tbody>
               {sortedEntries.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-[var(--text-muted)]">
+                  <td colSpan={columns.length + 3} className="px-4 py-8 text-center text-[var(--text-muted)]">
                     No leaderboard entries yet
                   </td>
                 </tr>
@@ -155,8 +190,8 @@ export default function Leaderboard() {
                 sortedEntries.map((entry, idx) => {
                   const isBest = entry.id === bestId;
                   const isDetail = entry.id === detailEntryId;
-                  const { color: dotColor } = familyDot(entry.modelType);
-                  const statusCategory = entry.status === "FAILED" || entry.status === "OVERFITTED" ? "failed" : entry.status === "AUDITED" ? "audited" : "success";
+                  const algorithm = entry.modelAlgorithm ?? entry.modelType;
+                  const { color: dotColor } = familyDot(algorithm);
 
                   return (
                     <tr
@@ -170,28 +205,107 @@ export default function Leaderboard() {
                       <td className="px-4 py-2.5 text-xs text-[var(--text-muted)]">
                         {isBest ? <span className="text-[var(--accent-orange)]">🏆</span> : idx + 1}
                       </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-[var(--text-primary)]">
-                        {entry.modelId}
-                        {isBest && <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-[var(--accent-green)]/10 text-[var(--accent-green)]">champion</span>}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs">
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: dotColor }} />
-                          {entry.modelType}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-[var(--text-muted)]">
-                        {statusCategory === "failed" ? "FAILED" : statusCategory === "audited" ? "AUDITED" : "MODEL_SEL"}
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-right tabular-nums" style={{ color: isBest ? "var(--accent-green)" : "var(--accent-blue)" }}>
-                        {entry.cvMean.toFixed(4)}
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-[var(--text-muted)] text-right tabular-nums">
-                        {entry.cvStd.toFixed(4)}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <GapPill gap={entry.trainValGap} />
-                      </td>
+                      {columns.map((col) => {
+                        if (col.key === "modelId") {
+                          return (
+                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-[var(--text-primary)]">
+                              {entry.modelId}
+                              {isBest && <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-[var(--accent-green)]/10 text-[var(--accent-green)]">champion</span>}
+                            </td>
+                          );
+                        }
+
+                        if (col.key === "modelAlgorithm") {
+                          return (
+                            <td key={col.key} className="px-4 py-2.5 text-xs">
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: dotColor }} />
+                                {algorithm}
+                              </span>
+                            </td>
+                          );
+                        }
+
+                        if (col.key === "problemType") {
+                          const type = entry.problemType ?? "unknown";
+                          const labels: Record<string, string> = {
+                            classification: "Classif.",
+                            regression: "Regress.",
+                            multilabel: "Multilabel",
+                            unknown: "Unknown",
+                          };
+                          const colors: Record<string, string> = {
+                            classification: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+                            regression: "bg-purple-500/10 text-purple-400 border-purple-500/20",
+                            multilabel: "bg-pink-500/10 text-pink-400 border-pink-500/20",
+                            unknown: "bg-gray-500/10 text-gray-400 border-gray-500/20",
+                          };
+                          return (
+                            <td key={col.key} className="px-4 py-2.5 text-xs">
+                              <span className={`px-1.5 py-0.5 text-[10px] font-semibold border rounded ${colors[type] ?? colors.unknown}`}>
+                                {labels[type] ?? "Unknown"}
+                              </span>
+                            </td>
+                          );
+                        }
+
+                        if (col.key === "cvMean") {
+                          return (
+                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-right tabular-nums" style={{ color: isBest ? "var(--accent-green)" : "var(--accent-blue)" }}>
+                              {entry.cvMean.toFixed(4)}
+                            </td>
+                          );
+                        }
+
+                        if (col.key === "cvStd") {
+                          return (
+                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-right tabular-nums text-[var(--text-muted)]">
+                              {entry.cvStd.toFixed(4)}
+                            </td>
+                          );
+                        }
+
+                        if (col.key === "trainValGap") {
+                          return (
+                            <td key={col.key} className="px-4 py-2.5">
+                              <GapPill gap={entry.trainValGap} />
+                            </td>
+                          );
+                        }
+
+                        // Rich classification metrics
+                        if (["f1_score", "precision", "recall", "roc_auc"].includes(col.key)) {
+                          const metrics = entry.metrics?.classification;
+                          let val: number | undefined;
+                          if (col.key === "f1_score") val = metrics?.f1;
+                          else if (col.key === "precision") val = metrics?.precision;
+                          else if (col.key === "recall") val = metrics?.recall;
+                          else if (col.key === "roc_auc") val = metrics?.rocAuc;
+
+                          return (
+                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-right tabular-nums text-[var(--text-secondary)]">
+                              {val != null ? val.toFixed(4) : "—"}
+                            </td>
+                          );
+                        }
+
+                        // Rich regression metrics
+                        if (["rmse", "mae", "r2Score"].includes(col.key)) {
+                          const metrics = entry.metrics?.regression;
+                          let val: number | undefined;
+                          if (col.key === "rmse") val = metrics?.rmse;
+                          else if (col.key === "mae") val = metrics?.mae;
+                          else if (col.key === "r2Score") val = metrics?.r2Score;
+
+                          return (
+                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-right tabular-nums text-[var(--text-secondary)]">
+                              {val != null ? val.toFixed(4) : "—"}
+                            </td>
+                          );
+                        }
+
+                        return <td key={col.key} className="px-4 py-2.5 text-right">—</td>;
+                      })}
                       <td className="px-4 py-2.5">
                         <FoldSparkline scores={[]} />
                       </td>

@@ -17,6 +17,7 @@ export interface ExperimentRow {
   round_number: number;
   agent_name: string;
   model_type: string;
+  model_algorithm: string | null;
   hyperparameters: Record<string, unknown>;
   train_metric: number;
   val_metric: number;
@@ -41,6 +42,30 @@ export interface ExperimentRow {
   decision: string | null;
   duration_ms: number | null;
   artifact_script: string | null;
+
+  // ── Rich metrics ──
+  f1_score: number | null;
+  precision: number | null;
+  recall: number | null;
+  roc_auc: number | null;
+  log_loss: number | null;
+  mae: number | null;
+  rmse: number | null;
+  r2_score: number | null;
+  metrics_json: Record<string, unknown>;
+  problem_type: string | null;
+}
+
+export interface MetricBag {
+  f1_score?: number;
+  precision?: number;
+  recall?: number;
+  roc_auc?: number;
+  log_loss?: number;
+  mae?: number;
+  rmse?: number;
+  r2_score?: number;
+  [key: string]: unknown;
 }
 
 export interface NewExperiment {
@@ -48,11 +73,14 @@ export interface NewExperiment {
   round_number: number;
   agent_name: string;
   model_type: string;
+  model_algorithm: string | null;
   hyperparameters: Record<string, unknown>;
   train_metric: number;
   val_metric: number;
   metric_name: string;
   artifact_path: string;
+  metric_bag?: MetricBag;
+  problem_type?: string | null;
 }
 
 export interface ArenaExperiment {
@@ -60,6 +88,7 @@ export interface ArenaExperiment {
   round_number: number;
   agent_name: string;
   model_type: string;
+  model_algorithm?: string | null;
   hyperparameters?: Record<string, unknown>;
   hypothesis?: string;
   learned?: string;
@@ -76,6 +105,8 @@ export interface ArenaExperiment {
   artifact_script?: string;
   metric_name: string;
   artifact_path: string;
+  metric_bag?: MetricBag;
+  problem_type?: string | null;
 }
 
 // ── Repository interfaces (ISP) ──────────────────────────────────────────────
@@ -111,16 +142,28 @@ function safeJsonParse(raw: string): Record<string, unknown> {
 }
 
 function fromNewExperiment(entry: NewExperiment) {
+  const bag = entry.metric_bag ?? {};
   return {
     run_id: entry.run_id,
     round_number: entry.round_number,
     agent_name: entry.agent_name,
     model_type: entry.model_type,
+    model_algorithm: entry.model_algorithm,
     hyperparameters: JSON.stringify(entry.hyperparameters),
     train_metric: entry.train_metric,
     val_metric: entry.val_metric,
     metric_name: entry.metric_name,
     artifact_path: entry.artifact_path,
+    f1_score: bag.f1_score ?? null,
+    precision: bag.precision ?? null,
+    recall: bag.recall ?? null,
+    roc_auc: bag.roc_auc ?? null,
+    log_loss: bag.log_loss ?? null,
+    mae: bag.mae ?? null,
+    rmse: bag.rmse ?? null,
+    r2_score: bag.r2_score ?? null,
+    metrics_json: JSON.stringify({}),
+    problem_type: entry.problem_type ?? null,
   };
 }
 
@@ -148,6 +191,17 @@ function fromArenaExperiment(entry: ArenaExperiment) {
     val_metric: entry.measured_metric ?? 0,
     metric_name: entry.metric_name,
     artifact_path: entry.artifact_path,
+    model_algorithm: entry.model_algorithm ?? null,
+    f1_score: entry.metric_bag?.f1_score ?? null,
+    precision: entry.metric_bag?.precision ?? null,
+    recall: entry.metric_bag?.recall ?? null,
+    roc_auc: entry.metric_bag?.roc_auc ?? null,
+    log_loss: entry.metric_bag?.log_loss ?? null,
+    mae: entry.metric_bag?.mae ?? null,
+    rmse: entry.metric_bag?.rmse ?? null,
+    r2_score: entry.metric_bag?.r2_score ?? null,
+    metrics_json: JSON.stringify({}),
+    problem_type: entry.problem_type ?? null,
   };
 }
 

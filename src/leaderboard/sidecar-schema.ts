@@ -5,23 +5,39 @@
 
 import { validateSchema, type ValidationError } from "../shared/schemas.js";
 
+// Rich metric keys (all optional)
+const RICH_METRIC_PROPERTIES: Record<string, { type: "number" }> = {
+  f1_score:     { type: "number" },
+  precision:    { type: "number" },
+  recall:       { type: "number" },
+  roc_auc:      { type: "number" },
+  log_loss:     { type: "number" },
+  mae:          { type: "number" },
+  rmse:         { type: "number" },
+  r2_score:     { type: "number" },
+};
+
 export const SUBMISSION_SIDECAR_SCHEMA = {
   type: "object",
   required: ["model_type", "cv_mean", "train_mean", "artifact_path"],
   properties: {
-    model_type: { type: "string", minLength: 1 },
-    cv_mean: { type: "number" },
-    train_mean: { type: "number" },
-    cv_std: { type: "number", minimum: 0 },
-    hyperparameters: { type: "object" },
-    artifact_path: { type: "string", minLength: 1 },
-    metric_name: { type: "string", minLength: 1 },
+    model_type:         { type: "string", minLength: 1 },
+    model_algorithm:    { type: "string", minLength: 1 },
+    cv_mean:            { type: "number" },
+    train_mean:         { type: "number" },
+    cv_std:             { type: "number", minimum: 0 },
+    hyperparameters:    { type: "object" },
+    artifact_path:      { type: "string", minLength: 1 },
+    metric_name:        { type: "string", minLength: 1 },
     train_time_seconds: { type: "number", minimum: 0 },
+    problem_type:       { type: "string", enum: ["classification", "regression", "multilabel"] },
+    ...RICH_METRIC_PROPERTIES,
   },
 } as const;
 
 export interface SubmissionSidecar {
   model_type: string;
+  model_algorithm?: string;
   cv_mean: number;
   train_mean: number;
   cv_std?: number;
@@ -29,6 +45,15 @@ export interface SubmissionSidecar {
   artifact_path: string;
   metric_name?: string;
   train_time_seconds?: number;
+  problem_type?: "classification" | "regression" | "multilabel";
+  f1_score?: number;
+  precision?: number;
+  recall?: number;
+  roc_auc?: number;
+  log_loss?: number;
+  mae?: number;
+  rmse?: number;
+  r2_score?: number;
 }
 
 export interface SidecarValidationResult {

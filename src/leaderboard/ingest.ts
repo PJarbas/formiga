@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { LeaderboardRepositoryImpl } from "./repository.js";
-import type { NewExperiment } from "./repository.js";
+import type { NewExperiment, MetricBag } from "./repository.js";
 import { logger } from "../lib/logger.js";
 import { validateSubmissionSidecar } from "./sidecar-schema.js";
 
@@ -187,16 +187,62 @@ export async function ingestStepOutput(params: {
   const hyperparameters = parseHyperparams(merged["hyperparameters"]);
   const metricName = merged["metric_name"] || "cv_mean";
 
+  // ── Rich metrics extraction ──
+  function parseRichMetric(key: string): number | undefined {
+    const n = parseNumber(merged[key]);
+    return n ?? undefined;
+  }
+
+  const metricBag: MetricBag = {
+    f1_score:     parseRichMetric("f1_score"),
+    precision:    parseRichMetric("precision"),
+    recall:       parseRichMetric("recall"),
+    roc_auc:      parseRichMetric("roc_auc"),
+    log_loss:     parseRichMetric("log_loss"),
+    mae:          parseRichMetric("mae"),
+    rmse:         parseRichMetric("rmse"),
+    r2_score:     parseRichMetric("r2_score"),
+  };
+
+  // Clean undefined values from bag
+  (Object.keys(metricBag) as Array<keyof MetricBag>).forEach((k) => {
+    if (metricBag[k] === undefined) delete metricBag[k];
+  });
+
+  const modelAlgorithm = merged["model_algorithm"] ?? modelType;
+
+  function detectProblemType(): string | null {
+    const explicit = merged["problem_type"];
+    if (explicit) return explicit;
+
+    // Infer from metric set
+    const hasClass = metricBag.f1_score != null || metricBag.precision != null ||
+                     metricBag.recall != null || metricBag.roc_auc != null ||
+                     metricBag.log_loss != null;
+    const hasRegr  = metricBag.mae != null || metricBag.rmse != null || metricBag.r2_score != null;
+
+    if (hasClass && !hasRegr) return "classification";
+    if (hasRegr && !hasClass) return "regression";
+    // Fallback: metric_name hints
+    const mn = metricName.toLowerCase();
+    if (mn.includes("accuracy") || mn.includes("f1") || mn.includes("auc") || mn.includes("logloss")) return "classification";
+    if (mn.includes("mse") || mn.includes("mae") || mn.includes("rmse") || mn.includes("r2")) return "regression";
+    return null;
+  }
+
   const entry: NewExperiment = {
     run_id: runId,
     round_number: roundNumber,
     agent_name: agentId,
     model_type: modelType,
+    model_algorithm: modelAlgorithm,
     hyperparameters,
     train_metric: trainMean,
     val_metric: cvMean,
     metric_name: metricName,
     artifact_path: artifactPath,
+    metric_bag: Object.keys(metricBag).length > 0 ? metricBag : undefined,
+    problem_type: detectProblemType(),
   };
 
   try {

@@ -102,6 +102,7 @@ function StatusBadge({ status }: { status: string }) {
 function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
   const hp = entry.hyperparameters ?? {};
   const hpEntries = Object.entries(hp);
+  const type = entry.problemType ?? "classification";
 
   return (
     <div className="space-y-5">
@@ -115,6 +116,24 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
           <MetricCard label="Desvio CV" value={entry.cvStd?.toFixed(4)} />
           <MetricCard label="Média Treino" value={entry.trainMean?.toFixed(4)} />
           <MetricCard label="Gap Treino/Val" value={entry.trainValGap?.toFixed(4)} highlight={entry.trainValGap > 0.1} />
+
+          {type === "classification" && entry.metrics?.classification && (
+            <>
+              <MetricCard label="F1-Score" value={entry.metrics.classification.f1?.toFixed(4)} />
+              <MetricCard label="Precision" value={entry.metrics.classification.precision?.toFixed(4)} />
+              <MetricCard label="Recall" value={entry.metrics.classification.recall?.toFixed(4)} />
+              <MetricCard label="ROC-AUC" value={entry.metrics.classification.rocAuc?.toFixed(4)} />
+              <MetricCard label="Log Loss" value={entry.metrics.classification.logLoss?.toFixed(4)} />
+            </>
+          )}
+
+          {type === "regression" && entry.metrics?.regression && (
+            <>
+              <MetricCard label="RMSE" value={entry.metrics.regression.rmse?.toFixed(4)} />
+              <MetricCard label="MAE" value={entry.metrics.regression.mae?.toFixed(4)} />
+              <MetricCard label="R²-Score" value={entry.metrics.regression.r2Score?.toFixed(4)} />
+            </>
+          )}
         </div>
       </div>
 
