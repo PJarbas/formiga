@@ -967,12 +967,13 @@ export function startReconciler(): { stop: () => void } {
       // ── Arena Step Stuck Detection ──────────────────────────────────
       // Arena steps don't use claim_pid (they run in-process via launchArenaFromStep).
       // If an arena step is "running" but has no claim_pid and hasn't updated in
-      // 5 minutes, it's likely stuck (buildArenaConfig returned null silently,
+      // 30 minutes, it's likely stuck (buildArenaConfig returned null silently,
       // or runArena threw without marking the step failed).
       // IMPORTANT: We must also check arena_sessions.updated_at since the arena
       // engine updates the session on every round, not the step itself.
       try {
-        const ARENA_STUCK_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+        const ARENA_STUCK_THRESHOLD_MINUTES = parseInt(process.env.FORMIGA_ARENA_STUCK_THRESHOLD_MINUTES ?? "30", 10) || 30;
+        const ARENA_STUCK_THRESHOLD_MS = ARENA_STUCK_THRESHOLD_MINUTES * 60 * 1000; // default 30 minutes
         const arenaCutoff = new Date(Date.now() - ARENA_STUCK_THRESHOLD_MS);
         const stuckArenaSteps = await prisma.step.findMany({
           where: {
