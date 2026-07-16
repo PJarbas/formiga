@@ -76,17 +76,15 @@ Formiga's interactive dashboard allows you to monitor and audit agent activity a
 A live graphical representation of agent execution. Clicking on any agent node reveals its insights, generated code, and diagnostic logs in the side panel.
 
 * **Exploratory Data Analysis (EDA) Phase:**
-  <p align="center"><img src="docs/screenshots/image_5.png" alt="Pipeline Flow - Data Analyst Panel" width="820"></p>
-  *The Data Analyst's side panel lists data dimensions, quality flags (missing/duplicate rows), feature importances against the target, and recommendations.*
+  <p align="center"><img src="docs/screenshots/image_3.png" alt="Pipeline Flow - Data Analyst Panel" width="820"></p>
+  - The Data Analyst's side panel lists data dimensions, quality flags (missing/duplicate rows), feature importances against the target, and recommendations.
 
-* **Feature Engineering Phase:**
-  <p align="center"><img src="docs/screenshots/image_3.png" alt="Feature Engineer Panel" width="400"></p>
-  *The Feature Engineer's side panel displays newly engineered features (e.g., sepal/petal cross-interactions), split sizes (Train/Val/Test), baseline metrics, and automatically plotted confusion matrices or residual heatmaps.*
+* **Arena Reporter:**
+  <p align="center"><img src="docs/screenshots/image_5.png" alt="Feature Engineer Panel" width="400"></p>
+  - The Arena Reporter's side panel outlines the winner, absolute and percentage gains over the baseline, and structural insights learned during modeling.
 
 ### 2. Leaderboard
 Centralizes and ranks every model produced during the Arena rounds.
-
-<p align="center"><img src="docs/screenshots/image_4.png" alt="Formiga Leaderboard" width="820"></p>
 
 * **Task-Adaptive Metrics:** The leaderboard table layout dynamically shifts depending on the problem type.
   * **Classification:** Displays cross-validation accuracy (`Accuracy CV`), F1-Score, Precision, Recall, and ROC-AUC.
@@ -97,7 +95,6 @@ Centralizes and ranks every model produced during the Arena rounds.
 Once the Arena converges or reaches the round limit, the winning model is crowned and the final report is compiled.
 
 <p align="center"><img src="docs/screenshots/image_6.png" alt="Arena Reporter Consolidation" width="820"></p>
-*The Arena Reporter's side panel outlines the winner, absolute and percentage gains over the baseline, and structural insights learned during modeling.*
 
 ---
 
