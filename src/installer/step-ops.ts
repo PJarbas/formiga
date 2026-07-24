@@ -52,6 +52,13 @@ export {
   recoverOrphanedStepsForAgent,
 } from "./steps/recovery.js";
 
+export {
+  findOrphanedRunningSteps,
+  remediateOrphanedStep,
+  reclaimOrphanedRunningSteps,
+  type OrphanedRunningStep,
+} from "../medic/orphan-running.js";
+
 export { resolveStepContext } from "./steps/context.js";
 
 export {
