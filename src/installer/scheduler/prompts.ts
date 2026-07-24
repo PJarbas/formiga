@@ -132,30 +132,30 @@ TESTS: <tests you ran>' | "${cli}" step complete "<stepId>"`,
 /**
  * Build the polling prompt executed by `pi --print`.
  *
- * Work discovery is NOT done by the agent: the scheduler's pre-check
- * (polling-round.ts) only spawns the harness when pending/waiting work
- * exists for this agent. So this prompt assumes work is available and
- * goes straight to claim + execute. The agent never runs `step peek`
- * (which previously instructed `node bin/formiga` — a shell script —
- * causing a SyntaxError loop; see run 367d0f4e).
+ * Work discovery + claim are NOT done by the agent (RF-2, complete level).
+ * The scheduler's pre-check confirms work exists, then `claimStep` claims
+ * it atomically and passes `{stepId, input}` here. So when `work` is
+ * provided, the agent only executes the work and reports — it never runs
+ * `step peek` or `step claim` via the CLI. This removes the class of bugs
+ * where a model mistypes the discovery/claim command (run 367d0f4e).
  *
- * Claim is scoped to a specific runId so concurrent runs of the same
- * workflow can't cross-claim each other's steps. If claim returns
- * NO_WORK (race: work vanished between pre-check and claim), the agent
- * replies HEARTBEAT_OK and the scheduler backs off.
+ * When `work` is omitted (legacy/fallback path, or a claim race where the
+ * scheduler could not pre-claim), the prompt falls back to instructing the
+ * agent to claim via CLI, with a HEARTBEAT_OK escape on NO_WORK.
  */
 export async function buildPollingPrompt(
   workflowId: string,
   agentId: string,
   runId: string,
   agentPersonaInstructions = "",
+  work?: { stepId: string; input: string },
 ): Promise<string> {
   const cli = resolveFormigaCli();
 
   const persona = agentPersonaInstructions.trim();
   const prompt = [
     `You are a polling agent for workflow "${workflowId}", agent "${agentId}", run "${runId}".`,
-    `You run in --print mode. Pending work has been pre-confirmed for you: claim and execute it.`,
+    `You run in --print mode.`,
   ];
 
   if (persona.length > 0) {
@@ -177,27 +177,56 @@ export async function buildPollingPrompt(
     // Message injection is best-effort — never block polling
   }
 
-  prompt.push(
-    ``,
-    `─── CLAIM AND EXECUTE ───`,
-    `1. Claim the step and capture the JSON response:`,
-    `   "${cli}" step claim "${agentId}" --run-id "${runId}"`,
-    `   The output is JSON: {"stepId":"<UUID>", "runId":"<UUID>", "input":"<task description>"}`,
-    `   SAVE the stepId — you MUST use it when reporting results.`,
-    ``,
-    `   If the output is NO_WORK (work was already claimed by another worker):`,
-    `     Reply exactly: HEARTBEAT_OK`,
-    `     Then STOP. Do not attempt anything else.`,
-    ``,
-    `2. Read the "input" field carefully. It describes the actual work you must do.`,
-    ``,
-    `3. Execute the work using all available tools and capabilities.`,
-    ``,
-    `4. When finished, report using the SAVED stepId (NOT the agent ID):`,
-    `   - Success: echo 'STATUS: done
+  if (work) {
+    // RF-2 complete: the scheduler already claimed the step. Inject the
+    // stepId + resolved input directly; the agent only executes + reports.
+    prompt.push(
+      ``,
+      `─── EXECUTE ASSIGNED WORK ───`,
+      `Your step has already been claimed for you. Do NOT run step claim.`,
+      ``,
+      `STEP ID (save this — you MUST use it to report results):`,
+      work.stepId,
+      ``,
+      `WORK INPUT (the task to execute):`,
+      work.input,
+      ``,
+      `Execute the work above using all available tools and capabilities.`,
+      ``,
+      `When finished, report using the SAVED STEP ID (NOT the agent ID):`,
+      `   - Success: echo 'STATUS: done
+CHANGES: <what you did>
+TESTS: <tests you ran>' | "${cli}" step complete "${work.stepId}"`,
+      `   - Failure: "${cli}" step fail "${work.stepId}" "<clear reason for failure>"`,
+    );
+  } else {
+    // Fallback: scheduler could not pre-claim (race / legacy). Agent
+    // claims via CLI, with HEARTBEAT_OK on NO_WORK.
+    prompt.push(
+      ``,
+      `─── CLAIM AND EXECUTE ───`,
+      `1. Claim the step and capture the JSON response:`,
+      `   "${cli}" step claim "${agentId}" --run-id "${runId}"`,
+      `   The output is JSON: {"stepId":"<UUID>", "runId":"<UUID>", "input":"<task description>"}`,
+      `   SAVE the stepId — you MUST use it when reporting results.`,
+      ``,
+      `   If the output is NO_WORK (work was already claimed by another worker):`,
+      `     Reply exactly: HEARTBEAT_OK`,
+      `     Then STOP. Do not attempt anything else.`,
+      ``,
+      `2. Read the "input" field carefully. It describes the actual work you must do.`,
+      ``,
+      `3. Execute the work using all available tools and capabilities.`,
+      ``,
+      `4. When finished, report using the SAVED stepId (NOT the agent ID):`,
+      `   - Success: echo 'STATUS: done
 CHANGES: <what you did>
 TESTS: <tests you ran>' | "${cli}" step complete "<stepId>"`,
-    `   - Failure: "${cli}" step fail "<stepId>" "<clear reason for failure>"`,
+      `   - Failure: "${cli}" step fail "<stepId>" "<clear reason for failure>"`,
+    );
+  }
+
+  prompt.push(
     ``,
     `─── FORMIGA TOOLS (formiga-agent-tools extension) ───`,
     `The following tools are available for persisting agent output to the Formiga dashboard:`,

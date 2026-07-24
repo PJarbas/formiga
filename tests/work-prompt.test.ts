@@ -127,3 +127,36 @@ describe("buildPollingPrompt", () => {
     assert.ok(prompt.includes("SAVE"), "should instruct to save stepId");
   });
 });
+
+describe("buildPollingPrompt with pre-claimed work (RF-2 complete)", () => {
+  const WORK = {
+    stepId: "step-uuid-1234",
+    input: "Build features.parquet and split.pkl from data/train.csv",
+  };
+
+  it("injects the stepId and input directly", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "developer", RUN_ID, "", WORK);
+    assert.ok(prompt.includes(WORK.stepId), "should inject the stepId");
+    assert.ok(prompt.includes(WORK.input), "should inject the resolved input");
+  });
+
+  it("does NOT instruct step claim (scheduler already claimed)", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "developer", RUN_ID, "", WORK);
+    // The work prompt may mention "Do NOT run step claim" (negative), but
+    // must not contain the executable claim command (which has the agent id quoted).
+    assert.ok(!prompt.includes('step claim "'), "should not contain the claim command when work is pre-claimed");
+  });
+
+  it("still instructs step complete and step fail with the stepId", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "developer", RUN_ID, "", WORK);
+    assert.ok(prompt.includes("step complete"));
+    assert.ok(prompt.includes("step fail"));
+    assert.ok(prompt.includes(WORK.stepId), "complete/fail should reference the injected stepId");
+  });
+
+  it("does not include HEARTBEAT_OK/NO_WORK (work is confirmed)", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "developer", RUN_ID, "", WORK);
+    assert.ok(!prompt.includes("HEARTBEAT_OK"), "should not mention HEARTBEAT_OK when work is assigned");
+    assert.ok(!prompt.includes("NO_WORK"), "should not mention NO_WORK when work is assigned");
+  });
+});
