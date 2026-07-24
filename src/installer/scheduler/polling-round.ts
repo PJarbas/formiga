@@ -505,13 +505,28 @@ export async function executePollingRound(
       select: { id: true },
     });
     if (!hasWork) {
-      // Record this as a heartbeat so backoff kicks in faster
+      // No work: count this as a heartbeat round and apply backoff BEFORE
+      // returning. Previously the backoff block below was unreachable on
+      // this path (we returned at :513 before reaching it), so the
+      // exponential skip (1→2→4→8) was never applied to the common
+      // "agent idle" case — rounds fired every cron interval regardless.
+      // (RF-5 / issue #77)
       recordHeartbeat(job.id);
+      const backoffSkip = getHeartbeatBackoff(job.id);
       inFlightJobs.delete(job.id);
-      logger.debug("Polling round skipped — no pending steps for agent", {
-        ...context,
-        reason: "no_pending_work",
-      });
+      if (backoffSkip > 0) {
+        logger.info("Polling round skipped — heartbeat backoff (no pending work)", {
+          ...context,
+          reason: "heartbeat_backoff",
+          consecutiveHeartbeats: consecutiveHeartbeats.get(job.id) ?? 0,
+          skipCount: backoffSkip,
+        });
+      } else {
+        logger.debug("Polling round skipped — no pending steps for agent", {
+          ...context,
+          reason: "no_pending_work",
+        });
+      }
       return;
     } else {
       // There is work — reset heartbeat counter
@@ -525,16 +540,15 @@ export async function executePollingRound(
     });
   }
 
-  // ── Heartbeat backoff ────────────────────────────────────────────
-  // If this agent has had consecutive heartbeat rounds AND no work is
-  // pending, skip some rounds to avoid wasting tokens.
-  // This runs AFTER the pending-work check above, so it only applies
-  // when the DB query failed (hasPendingWork=false from catch block).
+  // ── Heartbeat backoff (DB-error fallback) ─────────────────────────
+  // Reached only when the pending-work query threw (hasPendingWork=false
+  // from the catch block above). Apply the exponential skip here too so a
+  // flapping DB doesn't cause a tight retry loop.
   if (!hasPendingWork) {
     const backoffSkip = getHeartbeatBackoff(job.id);
     if (backoffSkip > 0) {
       inFlightJobs.delete(job.id);
-      logger.info("Polling round skipped — heartbeat backoff", {
+      logger.info("Polling round skipped — heartbeat backoff (db-error path)", {
         ...context,
         reason: "heartbeat_backoff",
         consecutiveHeartbeats: consecutiveHeartbeats.get(job.id) ?? 0,
