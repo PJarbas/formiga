@@ -59,7 +59,7 @@ export interface RecordEventInput {
   runId: string;
   stepId: string;
   agentId: string;
-  eventType: "tool_call" | "thinking" | "step_event" | "artifact" | "error";
+  eventType: "tool_call" | "thinking" | "step_event" | "artifact" | "error" | "round_summary";
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: string;

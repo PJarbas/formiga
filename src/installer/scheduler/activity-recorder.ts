@@ -243,6 +243,55 @@ export async function recordStepEvent(
   }
 }
 
+export interface RoundSummary {
+  outcome: string;
+  /** Final assistant text (already truncated by the streaming extractor). */
+  assistantTextTail: string;
+  assistantTextTruncated: boolean;
+  tokenUsage?: number | null;
+  /** Output preview/lines for at-a-glance context. */
+  outputPreview?: string;
+}
+
+/**
+ * Persist a polling-round summary as an agent_event (RF-6).
+ *
+ * The pi-output file is ephemeral (deleted after the agent finishes), so
+ * without this summary a DS cannot review what an agent reasoned/did after
+ * the run. The final assistant text (truncated) goes in `thinking`; the
+ * outcome + preview goes in `tool_result`. Honors `suppressRecording`
+ * (heartbeat backoff) so a loop doesn't flood the table.
+ *
+ * NOTE (privacy, Q3): pi-outputs can contain dataset values. This summary
+ * is NOT redacted — it assumes a controlled environment. Retention
+ * (FORMIGA_AGENT_LOG_RETENTION_DAYS, default 7) bounds exposure; redaction
+ * is a follow-up if sensitive datasets are used.
+ */
+export async function recordRoundSummary(
+  context: ActivityContext,
+  summary: RoundSummary,
+): Promise<void> {
+  if (context.suppressRecording) return;
+  try {
+    const { recordAgentEvent } = await import("../../server/routes/agent-activity.js");
+    const toolResultParts = [`outcome=${summary.outcome}`];
+    if (summary.outputPreview) toolResultParts.push(`preview=${summary.outputPreview}`);
+    if (summary.assistantTextTruncated) toolResultParts.push("text_truncated=true");
+    if (summary.tokenUsage != null) toolResultParts.push(`tokens=${summary.tokenUsage}`);
+    await recordAgentEvent({
+      runId: context.runId,
+      stepId: context.stepId,
+      agentId: context.agentId,
+      eventType: "round_summary",
+      thinking: summary.assistantTextTail || undefined,
+      toolResult: toolResultParts.join(" | "),
+    });
+  } catch (err) {
+    // Observability is best-effort — never block a polling round on it.
+    logger.debug("Failed to record round summary", { error: String(err), outcome: summary.outcome });
+  }
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────
 
 interface ToolCallInfo {

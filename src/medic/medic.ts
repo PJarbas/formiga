@@ -5,6 +5,7 @@
  * and takes corrective action where safe. Logs all findings to the medic_checks table.
  */
 import { getPrisma } from "../db.js";
+import { logger } from "../lib/logger.js";
 import { emitEvent } from "../installer/events.js";
 import { teardownWorkflowCronsIfIdle } from "../installer/agent-scheduler.js";
 import crypto from "node:crypto";
@@ -33,6 +34,31 @@ const ZOMBIE_THRESHOLD_MINUTES = 60;
 
 function minutesSince(date: Date): number {
   return Math.floor((Date.now() - date.getTime()) / 60000);
+}
+
+/**
+ * Retention for agent log events (RF-6). The round-summary events are
+ * unredacted and can echo dataset values (privacy, Q3), so bound their
+ * lifetime. Default 7 days; FORMIGA_AGENT_LOG_RETENTION_DAYS overrides.
+ * Returns the number of rows deleted. Safe for active runs — their events
+ * are recent and never match the cutoff.
+ */
+export async function pruneAgentEvents(): Promise<number> {
+  const raw = process.env.FORMIGA_AGENT_LOG_RETENTION_DAYS;
+  const days = raw && Number.isFinite(parseInt(raw, 10)) && parseInt(raw, 10) > 0
+    ? parseInt(raw, 10)
+    : 7;
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  try {
+    const result = await getPrisma().agentEvent.deleteMany({
+      where: { created_at: { lt: cutoff } },
+    });
+    return result.count;
+  } catch (err) {
+    // Retention is best-effort — never fail a medic tick on it.
+    logger.warn("pruneAgentEvents failed", { error: String(err) });
+    return 0;
+  }
 }
 
 async function runSyncChecks(): Promise<MedicFinding[]> {
@@ -287,6 +313,15 @@ export async function runMedicCheck(): Promise<MedicCheckResult> {
     await prisma.medicCheck.deleteMany({
       where: { id: { in: toDelete.map((d) => d.id) } },
     });
+  }
+
+  // Prune old agent log events (RF-6). pi-outputs can contain dataset
+  // values (privacy, Q3); this summary is unredacted, so retention bounds
+  // exposure. Default 7 days; FORMIGA_AGENT_LOG_RETENTION_DAYS overrides.
+  const prunedAgentEvents = await pruneAgentEvents();
+  if (prunedAgentEvents > 0) {
+    actionsTaken += 1;
+    logger.info("medic: pruned agent log events past retention", { count: prunedAgentEvents });
   }
 
   return {

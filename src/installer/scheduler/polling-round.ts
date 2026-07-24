@@ -32,6 +32,7 @@ import {
 } from "../paths.js";
 import { readPort as readDashboardPort } from "../../server/daemonctl.js";
 import { completeStep, recoverOrphanedStepsForAgent } from "../step-ops.js";
+import { recordRoundSummary } from "./activity-recorder.js";
 import type { WorkflowAgent, WorkflowSpec } from "../types.js";
 import { findHermesBinary } from "./binary-discovery.js";
 import { runHermes } from "./hermes-runner.js";
@@ -847,6 +848,19 @@ export async function executePollingRound(
       agentId: job.agentId,
       detail: `outcome=${outputSummary.outcome}`,
     });
+
+    // RF-6: persist a round summary so the agent's reasoning/outcome is
+    // reviewable after the ephemeral pi-output file is deleted. Honors
+    // suppressRecording (heartbeat backoff) to avoid flooding the table.
+    if (activityContext) {
+      void recordRoundSummary(activityContext, {
+        outcome: outputSummary.outcome,
+        assistantTextTail: metadata.assistantOutput ?? "",
+        assistantTextTruncated: extractedMetadata?.assistantTextTruncated ?? outputSummary.truncated,
+        tokenUsage: metadata.tokenUsage,
+        outputPreview: outputSummary.preview,
+      });
+    }
 
     logger.info("Polling round complete", {
       ...context,
