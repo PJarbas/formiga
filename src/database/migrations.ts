@@ -283,4 +283,28 @@ export function migrate(db: DatabaseSync): void {
 
   // ── Dashboard-owned UX state (approvals, checklists) ──
   initDashboardStoreSchema(db);
+
+  // ── Agent activity log (RF-6) ──
+  // Tool calls, thinking, and round summaries recorded during polling
+  // rounds. Created here (DDL, idempotent) so isolated/test DBs have the
+  // table; in production it's also created by Prisma migrations.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      step_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      tool_name TEXT,
+      tool_args TEXT,
+      tool_result TEXT,
+      tool_status TEXT,
+      duration_ms INTEGER,
+      thinking TEXT,
+      step_event TEXT,
+      created_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_events_agent_run ON agent_events(agent_id, run_id);
+    CREATE INDEX IF NOT EXISTS idx_agent_events_step_created ON agent_events(step_id, created_at);
+  `);
 }
