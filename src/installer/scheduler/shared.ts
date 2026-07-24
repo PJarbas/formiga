@@ -111,6 +111,26 @@ export function resetHeartbeatBackoff(jobId: string): void {
   consecutiveHeartbeats.delete(jobId);
 }
 
+// ── Heartbeat failure circuit ──────────────────────────────────────────
+// Distinct from backoff: backoff (MAX_CONSECUTIVE_HEARTBEATS=3) skips
+// rounds to save tokens; the failure circuit (default 5) treats a
+// persistent heartbeat loop as a structural error and fails the step so
+// `on_fail`/`escalate_to` can fire. Backoff kicks in first (3 < 5); if
+// the agent still hasn't produced work by the failure threshold, the
+// step is failed terminally. See spec RF-4 / issue #76.
+
+/** Consecutive heartbeats after which a step is failed for loop exhaustion. */
+export function getHeartbeatFailureThreshold(): number {
+  const raw = process.env.FORMIGA_HEARTBEAT_FAILURE_THRESHOLD;
+  const n = raw ? parseInt(raw, 10) : 5;
+  return Number.isFinite(n) && n > 0 ? n : 5;
+}
+
+/** True when a job's consecutive heartbeat count reaches the failure threshold. */
+export function shouldFailForHeartbeatLoop(jobId: string): boolean {
+  return (consecutiveHeartbeats.get(jobId) ?? 0) >= getHeartbeatFailureThreshold();
+}
+
 /**
  * Bounded insert for jobMetadata. Evicts the oldest entry when at capacity.
  * Fire-and-forget write-through to job_registry for crash recovery.

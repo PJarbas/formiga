@@ -61,8 +61,18 @@ async function getOnFailPolicy(runId: string, stepId: string): Promise<WorkflowS
 /**
  * Fail a step, with retry logic. For loop steps, applies per-story retry.
  * Handles escalate_on_failure by logging the escalation target.
+ *
+ * `opts.terminal: true` skips the retry path and fails the step+run
+ * immediately. Used by the heartbeat-failure circuit (RF-4): a persistent
+ * heartbeat loop is a structural error, not a transient one, so retrying
+ * would just prolong the loop. Terminal failure fires `on_fail`/escalation
+ * the same way retries-exhausted does.
  */
-export async function failStep(stepId: string, error: string): Promise<{ status: string }> {
+export async function failStep(
+  stepId: string,
+  error: string,
+  opts?: { terminal?: boolean },
+): Promise<{ status: string }> {
   const prisma = getPrisma();
 
   const step = await prisma.step.findUnique({
@@ -72,6 +82,11 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
   if (!step) throw new Error(`Step not found: ${stepId}`);
 
   const now = new Date();
+
+  // Terminal failure: skip retry, go straight to the fail-and-escalate path.
+  if (opts?.terminal) {
+    return failStepTerminal(step, error, now, step.retry_count + 1);
+  }
 
   // Loop step failure — per-story retry
   if (step.type === "loop" && step.current_story_id) {
@@ -138,69 +153,7 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
   const newRetryCount = step.retry_count + 1;
 
   if (newRetryCount > step.max_retries) {
-    await prisma.$transaction([
-      prisma.step.update({
-        where: { id: stepId },
-        data: { status: "failed", output: error, retry_count: newRetryCount, updated_at: now },
-      }),
-      prisma.run.update({
-        where: { id: step.run_id },
-        data: { status: "failed", updated_at: now },
-      }),
-    ]);
-    const wfId2 = await getWorkflowId(step.run_id);
-    emitEvent({ ts: now.toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId2, stepId, detail: error });
-    emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId2, detail: "Step retries exhausted" });
-    scheduleRunCronTeardown(step.run_id);
-    finalizeDrainingPause(step.run_id);
-
-    // Escalation: log the target if configured
-    try {
-      const policy = await getOnFailPolicy(step.run_id, step.step_id);
-      const target = resolveEscalationTarget(policy);
-      if (target) {
-        logger.warn(`Step failure exhausted — escalation target: ${target}`, { runId: step.run_id, stepId: step.step_id, error });
-      }
-    } catch {
-      // escalation logging is best-effort
-    }
-
-    // Rugpull detection: for single step failures, check if the base branch
-    // moved under the run and launch a replacement. Fire-and-forget via
-    // setImmediate so errors never block step failure completion.
-    if (step.type !== "loop") {
-      setImmediate(async () => {
-        try {
-          const rugResult = detectRugpull(step.run_id);
-          if (rugResult.isRugpull) {
-            emitEvent({
-              ts: new Date().toISOString(),
-              event: "run.rugpull_detected",
-              runId: step.run_id,
-              workflowId: wfId2,
-              detail: rugResult.reason,
-            });
-            const relaunchResult = await relaunchRunAfterRugpull(step.run_id);
-            if (!relaunchResult.relaunched) {
-              // The function itself emits events for all failure/suppression paths,
-              // but log a warning so the failure is visible in system logs as well.
-              logger.warn("Rugpull relaunch did not launch a replacement run", {
-                runId: step.run_id,
-                result: relaunchResult,
-              });
-            }
-          }
-        } catch (err) {
-          // fire-and-forget — errors must not prevent step failure from completing
-          logger.error("Rugpull detection/relaunch threw unexpectedly", {
-            runId: step.run_id,
-            error: String(err),
-          });
-        }
-      });
-    }
-
-    return { status: "failed" };
+    return failStepTerminal(step, error, now, newRetryCount);
   } else {
     await prisma.step.update({
       where: { id: stepId },
@@ -209,4 +162,84 @@ export async function failStep(stepId: string, error: string): Promise<{ status:
     finalizeDrainingPause(step.run_id);
     return { status: "retrying" };
   }
+}
+
+/**
+ * Terminally fail a single step and its run: set both to "failed", emit
+ * step.failed/run.failed, tear down crons, resolve escalation, and run
+ * rugpull detection. Shared by the retries-exhausted path and the
+ * terminal (heartbeat-loop) path.
+ */
+async function failStepTerminal(
+  step: { id: string; run_id: string; step_id: string; type: string; retry_count: number },
+  error: string,
+  now: Date,
+  newRetryCount: number,
+): Promise<{ status: string }> {
+  const prisma = getPrisma();
+  const stepId = step.id;
+
+  await prisma.$transaction([
+    prisma.step.update({
+      where: { id: stepId },
+      data: { status: "failed", output: error, retry_count: newRetryCount, updated_at: now },
+    }),
+    prisma.run.update({
+      where: { id: step.run_id },
+      data: { status: "failed", updated_at: now },
+    }),
+  ]);
+  const wfId2 = await getWorkflowId(step.run_id);
+  emitEvent({ ts: now.toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId2, stepId, detail: error });
+  emitRunTerminalEvent({ event: "run.failed", runId: step.run_id, workflowId: wfId2, detail: "Step retries exhausted" });
+  scheduleRunCronTeardown(step.run_id);
+  finalizeDrainingPause(step.run_id);
+
+  // Escalation: log the target if configured
+  try {
+    const policy = await getOnFailPolicy(step.run_id, step.step_id);
+    const target = resolveEscalationTarget(policy);
+    if (target) {
+      logger.warn(`Step failure exhausted — escalation target: ${target}`, { runId: step.run_id, stepId: step.step_id, error });
+    }
+  } catch {
+    // escalation logging is best-effort
+  }
+
+  // Rugpull detection: for single step failures, check if the base branch
+  // moved under the run and launch a replacement. Fire-and-forget via
+  // setImmediate so errors never block step failure completion.
+  if (step.type !== "loop") {
+    setImmediate(async () => {
+      try {
+        const rugResult = detectRugpull(step.run_id);
+        if (rugResult.isRugpull) {
+          emitEvent({
+            ts: new Date().toISOString(),
+            event: "run.rugpull_detected",
+            runId: step.run_id,
+            workflowId: wfId2,
+            detail: rugResult.reason,
+          });
+          const relaunchResult = await relaunchRunAfterRugpull(step.run_id);
+          if (!relaunchResult.relaunched) {
+            // The function itself emits events for all failure/suppression paths,
+            // but log a warning so the failure is visible in system logs as well.
+            logger.warn("Rugpull relaunch did not launch a replacement run", {
+              runId: step.run_id,
+              result: relaunchResult,
+            });
+          }
+        }
+      } catch (err) {
+        // fire-and-forget — errors must not prevent step failure from completing
+        logger.error("Rugpull detection/relaunch threw unexpectedly", {
+          runId: step.run_id,
+          error: String(err),
+        });
+      }
+    });
+  }
+
+  return { status: "failed" };
 }
