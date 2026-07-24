@@ -146,6 +146,8 @@ export interface PipelineStatus {
   updatedAt: string | null;
   /** Dynamic agent statuses keyed by agent ID */
   agentStats: Record<string, AgentStatus>;
+  /** Per-agent observability health (RF-7): heartbeat loop / spawn tally. */
+  agentHealth?: Record<string, AgentHealth>;
   /** @deprecated Use agentStats instead - kept for backwards compatibility */
   phaseStats: {
     dataAnalyst: AgentStatus;
@@ -159,8 +161,21 @@ export interface PipelineStatus {
     bestCvMean: number | null;
     roundsCompleted: number;
     tokensSpent: number;
+    /** True when token attribution is suppressed during heartbeat backoff. */
+    tokensSuppressed?: boolean;
   };
   workflowType?: WorkflowType;
+}
+
+export interface AgentHealth {
+  /** Consecutive heartbeat rounds with no work_done (0 = healthy/progressing). */
+  consecutiveHeartbeats: number;
+  /** Total times the agent harness was spawned for this step. */
+  spawnCount: number;
+  /** Last polling-round outcome (heartbeat | work_done | work_failed | empty_output | other_output). */
+  lastOutcome: string | null;
+  /** ISO timestamp of the last polling-round outcome. */
+  lastOutcomeAt: string | null;
 }
 
 // ── Agent detail (Tela 4) ────────────────────────────────────────────

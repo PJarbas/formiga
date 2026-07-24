@@ -118,4 +118,39 @@ describe("getHumanStatus", () => {
     }));
     expect(result.colorVar).toBe("--status-pending");
   });
+
+  it("flags heartbeat loop as urgent when maxConsecutiveHeartbeats >= 2", () => {
+    const result = getHumanStatus(input({
+      status: "running",
+      currentPhase: "feature_engineering",
+      currentRound: 0,
+      maxConsecutiveHeartbeats: 3,
+    }));
+    expect(result.label).toBe("running");
+    expect(result.isUrgent).toBe(true);
+    expect(result.description).toContain("heartbeat loop");
+    expect(result.description).toContain("3");
+  });
+
+  it("does not flag a loop below threshold (maxConsecutiveHeartbeats < 2)", () => {
+    const result = getHumanStatus(input({
+      status: "running",
+      currentPhase: "feature_engineering",
+      currentRound: 1,
+      maxConsecutiveHeartbeats: 1,
+    }));
+    expect(result.isUrgent).toBe(false);
+    expect(result.description).toBe("Round 1/5");
+  });
+
+  it("does not flag a loop when not running", () => {
+    const result = getHumanStatus(input({
+      status: "paused",
+      currentPhase: "feature_engineering",
+      currentRound: 2,
+      maxConsecutiveHeartbeats: 5,
+    }));
+    expect(result.label).toBe("paused");
+    expect(result.isUrgent).toBe(false);
+  });
 });

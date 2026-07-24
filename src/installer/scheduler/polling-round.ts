@@ -166,6 +166,41 @@ async function incrementRunTokenSpend(runId: string, tokenUsage: number): Promis
   }
 }
 
+// ── Step observability (RF-7) ─────────────────────────────────────────
+// Persisted mirror of the in-memory heartbeat counter + spawn tally +
+// last polling-round outcome, so the dashboard can show an honest
+// "running in loop" signal. Observability-only: does NOT feed run-timeout
+// (which uses last_progress_at, intentionally not renewed on heartbeat).
+
+interface StepObservabilityUpdate {
+  /** Increment spawn_count by 1 (best-effort, fire-and-forget). */
+  incrementSpawn?: boolean;
+  /** Set last_outcome + last_outcome_at = now. */
+  outcome?: string;
+  /** Set consecutive_heartbeats to this value (mirror of in-memory counter). */
+  consecutiveHeartbeats?: number;
+}
+
+async function updateStepObservability(stepId: string, update: StepObservabilityUpdate): Promise<void> {
+  const prisma = getPrisma();
+  try {
+    const data: Record<string, unknown> = { last_outcome_at: new Date() };
+    if (update.outcome !== undefined) data.last_outcome = update.outcome;
+    if (update.consecutiveHeartbeats !== undefined) data.consecutive_heartbeats = update.consecutiveHeartbeats;
+    if (update.incrementSpawn) {
+      await prisma.step.update({
+        where: { id: stepId },
+        data: { ...data, spawn_count: { increment: 1 } },
+      });
+    } else {
+      await prisma.step.update({ where: { id: stepId }, data });
+    }
+  } catch (err) {
+    // Observability is best-effort — never block a polling round on it.
+    logger.debug("updateStepObservability failed", { stepId, error: String(err) });
+  }
+}
+
 // ── Auto-complete + orphan recovery ───────────────────────────────────
 
 /**
@@ -706,6 +741,13 @@ export async function executePollingRound(
       logger.warn("Activity context resolution failed", { error: String(err) });
     }
 
+    // RF-7: tally this spawn on the active step for observability. Fire-and-
+    // forget; best-effort. Done here (after activityStepId resolves) so we
+    // only count spawns against a real active step.
+    if (activityStepId) {
+      void updateStepObservability(activityStepId, { incrementSpawn: true });
+    }
+
     const activityContext = activityStepId
       ? {
           runId: job.runId,
@@ -871,6 +913,16 @@ export async function executePollingRound(
       }
     } else {
       resetHeartbeatBackoff(job.id);
+    }
+
+    // RF-7: persist outcome + consecutive_heartbeats mirror on the active
+    // step for dashboard observability. After the record/reset above, the
+    // in-memory counter reflects the post-outcome state.
+    if (activityStepId) {
+      void updateStepObservability(activityStepId, {
+        outcome: outputSummary.outcome,
+        consecutiveHeartbeats: consecutiveHeartbeats.get(job.id) ?? 0,
+      });
     }
 
     await attributePollingRoundTokenUsage(context, outputSummary, metadata);
