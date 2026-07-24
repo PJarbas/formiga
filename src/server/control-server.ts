@@ -1032,6 +1032,24 @@ export function startReconciler(): { stop: () => void } {
         logger.warn("control-server: stale pending check failed", { error: String(err) });
       }
 
+      // ── Orphaned Running Step Recovery ───────────────────────────────
+      // Reclaim steps stuck in "running" whose owning process (claim_pid)
+      // is dead. Unlike stale-pending, this actively remediates (reset to
+      // pending / fail) and runs every tick (30s) — not just the 5-min
+      // medic. Closes the 367d0f4e gap where a heartbeat-loop orphan was
+      // masked because runs.updated_at kept renewing. (RF-3)
+      try {
+        const { reclaimOrphanedRunningSteps } = await import("../medic/orphan-running.js");
+        const reNudgeRunIds = await reclaimOrphanedRunningSteps();
+        for (const runId of reNudgeRunIds) {
+          await handleRegisterRun(runId).catch((err) => {
+            logger.warn("orphan-running recovery: re-register failed", { runId, error: (err as Error).message });
+          });
+        }
+      } catch (err) {
+        logger.warn("control-server: orphan running check failed", { error: String(err) });
+      }
+
       // ── Medic Health Check (throttled to every N minutes) ───────────
       try {
         if (!medicTicker) {

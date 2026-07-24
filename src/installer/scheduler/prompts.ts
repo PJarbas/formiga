@@ -5,8 +5,9 @@
 // Two prompt styles:
 //   - `buildAgentPrompt` / `buildWorkPrompt` — single-shot (already
 //     claimed or about to claim a known step). Used by agent-cron.
-//   - `buildPollingPrompt` — the two-phase script the scheduler hands to
-//     `pi --print` every interval: phase 1 peeks, phase 2 claims+executes.
+//   - `buildPollingPrompt` — the script the scheduler hands to `pi --print`
+//     every interval. Work discovery is done by the scheduler's pre-check,
+//     NOT by the agent, so this prompt goes straight to claim + execute.
 //
 // `buildAgentPersonaInstructions` lifts AGENTS.md / IDENTITY.md / SOUL.md
 // out of the agent's workspace and embeds them as persona context.
@@ -76,14 +77,14 @@ export function buildAgentPrompt(workflowId: string, agentId: string, runId: str
     `Your job is to poll for work and execute it.`,
     ``,
     `STEP 1 — Check for pending work:`,
-    `Run: node "${cli}" step peek "${agentId}" --run-id "${runId}"`,
+    `Run: "${cli}" step peek "${agentId}" --run-id "${runId}"`,
     ``,
     `STEP 2 — If NO_WORK:`,
     `Reply HEARTBEAT_OK and stop. Do NOT do anything else.`,
     ``,
     `STEP 3 — If HAS_WORK:`,
     `Claim the step and capture the JSON response:`,
-    `Run: node "${cli}" step claim "${agentId}" --run-id "${runId}"`,
+    `Run: "${cli}" step claim "${agentId}" --run-id "${runId}"`,
     `The output will be JSON: {"stepId":"<UUID>", "runId":"<UUID>", "input":"<task description>"}`,
     `SAVE the stepId — you MUST use it in step 4.`,
     ``,
@@ -93,8 +94,8 @@ export function buildAgentPrompt(workflowId: string, agentId: string, runId: str
     `STEP 4 — Report results using the SAVED stepId (NOT the agent ID):`,
     `On success: echo 'STATUS: done
 CHANGES: <what you changed>
-TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
-    `On failure: node "${cli}" step fail "<stepId>" "<clear reason>"`,
+TESTS: <tests you ran>' | "${cli}" step complete "<stepId>"`,
+    `On failure: "${cli}" step fail "<stepId>" "<clear reason>"`,
     ``,
     `CRITICAL: You MUST report results using the step complete or step fail commands.`,
     `Failing to report will leave the workflow stuck forever. Always report, even if you`,
@@ -121,21 +122,27 @@ export function buildWorkPrompt(workflowId: string, agentId: string, runId: stri
     `When done, report your results using the SAVED stepId (NOT the agent ID):`,
     `On success: echo 'STATUS: done
 CHANGES: <what you changed>
-TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
-    `On failure: node "${cli}" step fail "<stepId>" "<reason>"`,
+TESTS: <tests you ran>' | "${cli}" step complete "<stepId>"`,
+    `On failure: "${cli}" step fail "<stepId>" "<reason>"`,
     ``,
     `CRITICAL: You MUST report results. Do not exit without calling step complete or step fail.`,
   ].join("\n");
 }
 
 /**
- * Build the polling prompt — a two-phase script executed by `pi --print`.
+ * Build the polling prompt executed by `pi --print`.
  *
- * Phase 1 (cheap): peek for work. If none → HEARTBEAT_OK.
- * Phase 2 (work):   if work exists, claim it and execute.
+ * Work discovery is NOT done by the agent: the scheduler's pre-check
+ * (polling-round.ts) only spawns the harness when pending/waiting work
+ * exists for this agent. So this prompt assumes work is available and
+ * goes straight to claim + execute. The agent never runs `step peek`
+ * (which previously instructed `node bin/formiga` — a shell script —
+ * causing a SyntaxError loop; see run 367d0f4e).
  *
- * Both peek + claim are scoped to a specific runId so concurrent runs of
- * the same workflow can't cross-claim each other's steps.
+ * Claim is scoped to a specific runId so concurrent runs of the same
+ * workflow can't cross-claim each other's steps. If claim returns
+ * NO_WORK (race: work vanished between pre-check and claim), the agent
+ * replies HEARTBEAT_OK and the scheduler backs off.
  */
 export async function buildPollingPrompt(
   workflowId: string,
@@ -148,7 +155,7 @@ export async function buildPollingPrompt(
   const persona = agentPersonaInstructions.trim();
   const prompt = [
     `You are a polling agent for workflow "${workflowId}", agent "${agentId}", run "${runId}".`,
-    `You run in --print mode. Your goal: check for work and execute it if present.`,
+    `You run in --print mode. Pending work has been pre-confirmed for you: claim and execute it.`,
   ];
 
   if (persona.length > 0) {
@@ -172,22 +179,15 @@ export async function buildPollingPrompt(
 
   prompt.push(
     ``,
-    `─── PHASE 1: PEEK ───`,
-    `Run this exact command and capture its output:`,
-    `node "${cli}" step peek "${agentId}" --run-id "${runId}"`,
-    ``,
-    `If the output contains NO_WORK:`,
-    `  Reply exactly: HEARTBEAT_OK`,
-    `  Then STOP. Do not proceed to PHASE 2.`,
-    ``,
-    `If the output contains HAS_WORK:`,
-    `  Proceed to PHASE 2.`,
-    ``,
-    `─── PHASE 2: CLAIM AND EXECUTE ───`,
+    `─── CLAIM AND EXECUTE ───`,
     `1. Claim the step and capture the JSON response:`,
-    `   node "${cli}" step claim "${agentId}" --run-id "${runId}"`,
+    `   "${cli}" step claim "${agentId}" --run-id "${runId}"`,
     `   The output is JSON: {"stepId":"<UUID>", "runId":"<UUID>", "input":"<task description>"}`,
     `   SAVE the stepId — you MUST use it when reporting results.`,
+    ``,
+    `   If the output is NO_WORK (work was already claimed by another worker):`,
+    `     Reply exactly: HEARTBEAT_OK`,
+    `     Then STOP. Do not attempt anything else.`,
     ``,
     `2. Read the "input" field carefully. It describes the actual work you must do.`,
     ``,
@@ -196,8 +196,8 @@ export async function buildPollingPrompt(
     `4. When finished, report using the SAVED stepId (NOT the agent ID):`,
     `   - Success: echo 'STATUS: done
 CHANGES: <what you did>
-TESTS: <tests you ran>' | node "${cli}" step complete "<stepId>"`,
-    `   - Failure: node "${cli}" step fail "<stepId>" "<clear reason for failure>"`,
+TESTS: <tests you ran>' | "${cli}" step complete "<stepId>"`,
+    `   - Failure: "${cli}" step fail "<stepId>" "<clear reason for failure>"`,
     ``,
     `─── FORMIGA TOOLS (formiga-agent-tools extension) ───`,
     `The following tools are available for persisting agent output to the Formiga dashboard:`,

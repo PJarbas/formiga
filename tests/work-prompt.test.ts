@@ -83,53 +83,46 @@ describe("buildAgentPrompt", () => {
 });
 
 describe("buildPollingPrompt", () => {
-  it("contains the step peek and step claim commands with correct agent id", () => {
-    const prompt = buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
-    assert.ok(prompt.includes(`step peek "feature-dev_developer" --run-id "${RUN_ID}"`));
+  it("contains the step claim command with correct agent id (no peek)", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
     assert.ok(prompt.includes(`step claim "feature-dev_developer" --run-id "${RUN_ID}"`));
   });
 
-  it("instructs to reply HEARTBEAT_OK on NO_WORK", () => {
-    const prompt = buildPollingPrompt("feature-dev", "developer", RUN_ID);
+  it("does NOT instruct the agent to run step peek (work discovery is scheduler-side)", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
+    assert.ok(!prompt.includes("step peek"));
+    assert.ok(!prompt.includes("HAS_WORK"));
+  });
+
+  it("instructs to reply HEARTBEAT_OK if claim returns NO_WORK (race fallback)", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "developer", RUN_ID);
     assert.ok(prompt.includes("HEARTBEAT_OK"));
     assert.ok(prompt.includes("NO_WORK"));
   });
 
-  it("instructs to proceed on HAS_WORK", () => {
-    const prompt = buildPollingPrompt("feature-dev", "developer", RUN_ID);
-    assert.ok(prompt.includes("HAS_WORK"));
-  });
-
-  it("works with different workflow/agent ids", () => {
-    const prompt = buildPollingPrompt("bug-fix-github-pr", "bug-fix-github-pr_fixer", RUN_ID);
-    assert.ok(prompt.includes(`step peek "bug-fix-github-pr_fixer" --run-id "${RUN_ID}"`));
+  it("works with different workflow/agent ids", async () => {
+    const prompt = await buildPollingPrompt("bug-fix-github-pr", "bug-fix-github-pr_fixer", RUN_ID);
     assert.ok(prompt.includes(`step claim "bug-fix-github-pr_fixer" --run-id "${RUN_ID}"`));
   });
 
-  it("includes step complete and step fail instructions", () => {
-    const prompt = buildPollingPrompt("feature-dev", "developer", RUN_ID);
+  it("includes step complete and step fail instructions", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "developer", RUN_ID);
     assert.ok(prompt.includes("step complete"));
     assert.ok(prompt.includes("step fail"));
   });
 
-  it("includes the agent id in poll commands", () => {
-    const prompt = buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
+  it("includes the agent id in claim command", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
     assert.ok(prompt.includes('feature-dev_developer"'));
   });
 
-  it("includes PHASE 1 and PHASE 2 sections", () => {
-    const prompt = buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
-    assert.ok(prompt.includes("PHASE 1"));
-    assert.ok(prompt.includes("PHASE 2"));
-  });
-
-  it("does not instruct polling agents to pass --model", () => {
-    const prompt = buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
+  it("does not instruct polling agents to pass --model", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
     assert.ok(!prompt.includes("--model"));
   });
 
-  it("instructs to save stepId from claim JSON for step complete", () => {
-    const prompt = buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
+  it("instructs to save stepId from claim JSON for step complete", async () => {
+    const prompt = await buildPollingPrompt("feature-dev", "feature-dev_developer", RUN_ID);
     assert.ok(prompt.includes("stepId"), "should mention stepId in claim description");
     assert.ok(prompt.includes("SAVE"), "should instruct to save stepId");
   });

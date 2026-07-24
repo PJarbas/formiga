@@ -794,7 +794,13 @@ export async function executePollingRound(
       metadataFormat: metadata.jsonMetadataDetected ? "json" : "text",
     });
 
-    // Track heartbeat backoff: record or reset based on outcome
+    // Track heartbeat backoff: record or reset based on outcome.
+    // NOTE: we deliberately do NOT call recordProgress() here on heartbeat.
+    // run-timeout.ts relies on last_progress_at staying stale during a loop
+    // (renewing it would mask the stall — see run 367d0f4e). Heartbeats are
+    // observable via the agent.completed event above; orphaned steps whose
+    // owning process died are reclaimed by medic/orphan-running.ts (PID
+    // liveness, using claim_updated_at which heartbeats do not renew).
     if (outputSummary.outcome === "heartbeat") {
       recordHeartbeat(job.id);
     } else {
