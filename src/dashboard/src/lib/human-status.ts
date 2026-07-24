@@ -34,6 +34,8 @@ export interface HumanStatusInput {
   currentRound: number;
   maxRounds: number;
   pendingDecisions: number;
+  /** Highest consecutive-heartbeat count across agents (0 = healthy). RF-7. */
+  maxConsecutiveHeartbeats?: number;
 }
 
 // ── Rules evaluated in priority order — first match wins ───────────
@@ -73,6 +75,18 @@ const RULES: Array<{
     resolve: (i) => ({
       label: "action_required",
       description: `${i.pendingDecisions} decision${i.pendingDecisions > 1 ? "s" : ""} pending`,
+      isUrgent: true,
+      activePhase: i.currentPhase,
+    }),
+  },
+  {
+    // RF-7: an agent is stuck in a heartbeat loop (alive but producing no
+    // work). Surface this as urgent so the operator sees the stall instead
+    // of a frozen "running" status (run 367d0f4e hid this for >1h40m).
+    match: (i) => i.status === "running" && (i.maxConsecutiveHeartbeats ?? 0) >= 2,
+    resolve: (i) => ({
+      label: "running",
+      description: `Stuck in heartbeat loop (${i.maxConsecutiveHeartbeats} rounds, no progress)`,
       isUrgent: true,
       activePhase: i.currentPhase,
     }),

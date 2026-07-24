@@ -106,6 +106,25 @@ export function migrate(db: DatabaseSync): void {
   if (!stepColNames.has("claim_updated_at")) {
     db.exec("ALTER TABLE steps ADD COLUMN claim_updated_at TEXT");
   }
+  // ── Step observability (RF-7) ──
+  // Mirror of the in-memory consecutiveHeartbeats counter + spawn tally +
+  // last polling-round outcome, persisted so the dashboard can show an
+  // honest "running in loop" signal (run 367d0f4e masked the loop because
+  // only runs.updated_at was renewed). These are observability-only — they
+  // do NOT feed run-timeout (which uses last_progress_at, intentionally
+  // not renewed on heartbeat).
+  if (!stepColNames.has("consecutive_heartbeats")) {
+    db.exec("ALTER TABLE steps ADD COLUMN consecutive_heartbeats INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!stepColNames.has("spawn_count")) {
+    db.exec("ALTER TABLE steps ADD COLUMN spawn_count INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!stepColNames.has("last_outcome")) {
+    db.exec("ALTER TABLE steps ADD COLUMN last_outcome TEXT");
+  }
+  if (!stepColNames.has("last_outcome_at")) {
+    db.exec("ALTER TABLE steps ADD COLUMN last_outcome_at TEXT");
+  }
   // ── Parallel step grouping ──
   // Steps sharing the same parallel_group are eligible for claim concurrently;
   // the prev-step filter in claim.ts skips siblings inside the same group.

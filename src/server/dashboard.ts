@@ -62,6 +62,7 @@ import { generateReproductionScript } from "./script-templates.js";
 import {
   findActivePipelineRunId,
   getAgentUnifiedStatus,
+  getAgentHealth,
   getCurrentPhase,
   getAgentRoundSummaries,
 } from "./pipeline-status.js";
@@ -947,8 +948,15 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
       : ["data-analyst", "feature-engineer", "modeler-classic", "modeler-advanced", "ml-critic"];
 
     const agentStats: Record<string, string> = {};
+    const agentHealth: Record<string, { consecutiveHeartbeats: number; spawnCount: number; lastOutcome: string | null; lastOutcomeAt: string | null }> = {};
+    let maxConsecutiveHeartbeats = 0;
     for (const agentId of agentIds) {
       agentStats[agentId] = (await getAgentUnifiedStatus(runId, agentId, currentRound)).status;
+      const health = await getAgentHealth(runId, agentId);
+      agentHealth[agentId] = health;
+      if (health.consecutiveHeartbeats > maxConsecutiveHeartbeats) {
+        maxConsecutiveHeartbeats = health.consecutiveHeartbeats;
+      }
     }
 
     // Legacy phaseStats for backwards compatibility
@@ -969,12 +977,18 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
       startedAt: run?.created_at ?? null,
       updatedAt: run?.updated_at ?? null,
       agentStats,
+      agentHealth,
       phaseStats,
       quickStats: {
         totalExperiments: stats.total,
         bestCvMean: bestRow?.val_metric ?? null,
         roundsCompleted: currentRound,
         tokensSpent: run?.tokens_spent ?? 0,
+        // RF-7: signal when token attribution is being suppressed during
+        // heartbeat backoff (polling-round.ts suppresses recording at 2+
+        // consecutive heartbeats), so tokensSpent=0 reads as "omitted"
+        // rather than "nothing spent".
+        tokensSuppressed: maxConsecutiveHeartbeats >= 2,
       },
       workflowType,
     });

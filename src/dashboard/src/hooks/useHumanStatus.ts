@@ -11,11 +11,18 @@ export function useHumanStatus(): HumanStatus | null {
 
   if (!pipeline) return null;
 
+  // RF-7: surface the worst heartbeat-loop across agents so the human
+  // status flags a stall instead of a frozen "running".
+  const maxConsecutiveHeartbeats = pipeline.agentHealth
+    ? Math.max(0, ...Object.values(pipeline.agentHealth).map((h) => h?.consecutiveHeartbeats ?? 0))
+    : 0;
+
   return getHumanStatus({
     status: pipeline.status,
     currentPhase: pipeline.currentPhase,
     currentRound: pipeline.currentRound,
     maxRounds: pipeline.maxRounds,
     pendingDecisions: 0,
+    maxConsecutiveHeartbeats,
   });
 }

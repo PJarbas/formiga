@@ -57,6 +57,10 @@ model Step {
   claim_pid        Int?
   claim_pgid       Int?
   claim_updated_at DateTime?
+  consecutive_heartbeats Int @default(0)
+  spawn_count      Int       @default(0)
+  last_outcome     String?
+  last_outcome_at  DateTime?
   created_at       DateTime
   updated_at       DateTime
   run              Run       @relation(fields: [run_id], references: [id], onDelete: Cascade)

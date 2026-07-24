@@ -60,6 +60,45 @@ async function getStepStatus(
     : null;
 }
 
+export interface AgentHealth {
+  consecutiveHeartbeats: number;
+  spawnCount: number;
+  lastOutcome: string | null;
+  lastOutcomeAt: string | null;
+}
+
+/**
+ * Observability health for an agent's current step (RF-7): how many
+ * consecutive heartbeats, total spawns, and the last polling-round
+ * outcome. Used by the dashboard to show an honest "running in loop"
+ * signal instead of a frozen "running" status.
+ */
+export async function getAgentHealth(
+  runId: string,
+  agentName: string,
+): Promise<AgentHealth> {
+  const stepId = getStepIdForAgent(agentName);
+  if (!stepId) {
+    return { consecutiveHeartbeats: 0, spawnCount: 0, lastOutcome: null, lastOutcomeAt: null };
+  }
+  const prisma = getPrisma();
+  const row = await prisma.step.findFirst({
+    where: { run_id: runId, step_id: stepId },
+    select: {
+      consecutive_heartbeats: true,
+      spawn_count: true,
+      last_outcome: true,
+      last_outcome_at: true,
+    },
+  });
+  return {
+    consecutiveHeartbeats: row?.consecutive_heartbeats ?? 0,
+    spawnCount: row?.spawn_count ?? 0,
+    lastOutcome: row?.last_outcome ?? null,
+    lastOutcomeAt: row?.last_outcome_at?.toISOString() ?? null,
+  };
+}
+
 function bareAgentName(agentName: string): string {
   return agentName.replace(/^arena-/, "");
 }
