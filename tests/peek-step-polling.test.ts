@@ -6,7 +6,9 @@
  * 2. peekStep() returns HAS_WORK when agent has pending work
  * 3. peekStep() returns NO_WORK when agent's step is waiting (run active but step not yet reachable)
  * 4. peekStep() returns HAS_WORK only for running runs (not failed/completed)
- * 5. Polling prompt includes step peek before step claim
+ * 5. peekStep() is used by the scheduler pre-check (the polling prompt no
+ *    longer instructs the agent to run step peek — work discovery is
+ *    scheduler-side; see buildPollingPrompt)
  * 6. claimStep() still works correctly (throttled cleanup doesn't break it)
  */
 
