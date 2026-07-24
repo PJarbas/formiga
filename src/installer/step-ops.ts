@@ -72,3 +72,8 @@ export {
 export { validateExpects, completeStep } from "./steps/complete.js";
 
 export { failStep } from "./steps/fail.js";
+
+export {
+  getHeartbeatFailureThreshold,
+  shouldFailForHeartbeatLoop,
+} from "./scheduler/shared.js";

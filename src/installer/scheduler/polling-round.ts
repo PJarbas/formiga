@@ -55,7 +55,9 @@ import {
   getHeartbeatBackoff,
   recordHeartbeat,
   resetHeartbeatBackoff,
+  shouldFailForHeartbeatLoop,
 } from "./shared.js";
+import { failStep } from "../steps/fail.js";
 
 /** Generate a temporary file path for PI/hermes stdout streaming. */
 function makePiOutputFilePath(jobId: string): string {
@@ -660,8 +662,13 @@ export async function executePollingRound(
       let extractedMetadata: import("./streaming-metadata-extractor.js").ExtractedMetadata | undefined;
     let cleanupFile: string | undefined;
 
-    // Resolve current step for activity recording (best-effort)
+    // Resolve current step for activity recording (best-effort).
+    // Also capture step_id/type so the heartbeat-failure circuit (RF-4) can
+    // exclude arena steps, which are owned by the arena engine rather than
+    // the normal polling prompt.
     let activityStepId: string | undefined;
+    let activityStepLogicalId: string | undefined;
+    let activityStepType: string | undefined;
     try {
       const db = getPrisma();
       const activeStep = await db.step.findFirst({
@@ -670,10 +677,12 @@ export async function executePollingRound(
           agent_id: job.agentId,
           status: { in: ["running", "pending"] },
         },
-        select: { id: true },
+        select: { id: true, step_id: true, type: true },
         orderBy: { step_index: "asc" },
       });
       activityStepId = activeStep?.id;
+      activityStepLogicalId = activeStep?.step_id;
+      activityStepType = activeStep?.type;
       logger.debug("Activity context resolution", {
         runId: job.runId,
         jobAgentId: job.agentId,
@@ -803,6 +812,49 @@ export async function executePollingRound(
     // liveness, using claim_updated_at which heartbeats do not renew).
     if (outputSummary.outcome === "heartbeat") {
       recordHeartbeat(job.id);
+
+      // Heartbeat-failure circuit (RF-4): a persistent heartbeat loop with no
+      // work_done is a structural error, not transient. After N consecutive
+      // heartbeats, fail the active step terminally so on_fail/escalate_to
+      // can fire (otherwise the loop is infinite and human escalation is
+      // unreachable). Arena steps are excluded — they're driven by the arena
+      // engine, not this polling prompt.
+      if (shouldFailForHeartbeatLoop(job.id)) {
+        const isArenaStep = activityStepLogicalId === "arena" || activityStepType === "arena";
+        const count = consecutiveHeartbeats.get(job.id) ?? 0;
+        if (activityStepId && !isArenaStep) {
+          try {
+            await failStep(
+              activityStepId,
+              `heartbeat_loop_exhausted (${count} consecutive heartbeats, no progress)`,
+              { terminal: true },
+            );
+            logger.warn("heartbeat-failure circuit: step failed terminally", {
+              ...context,
+              stepId: activityStepLogicalId,
+              heartbeatCount: count,
+            });
+          } catch (err) {
+            logger.warn("heartbeat-failure circuit: failStep threw", {
+              ...context,
+              stepId: activityStepLogicalId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          resetHeartbeatBackoff(job.id);
+          inFlightJobs.delete(job.id);
+          return;
+        }
+        // No claimable single step (or arena step) — can't fail terminally.
+        // Reset so backoff restarts; RF-3 still handles a dead-PID orphan.
+        logger.warn("heartbeat-failure circuit exhausted but no failable step", {
+          ...context,
+          heartbeatCount: count,
+          stepId: activityStepLogicalId,
+          isArenaStep,
+        });
+        resetHeartbeatBackoff(job.id);
+      }
     } else {
       resetHeartbeatBackoff(job.id);
     }
