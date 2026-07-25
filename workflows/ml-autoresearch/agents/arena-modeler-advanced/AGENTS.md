@@ -19,11 +19,12 @@ Em cada rodada, você recebe:
 ## Ferramentas Formiga (via extensão `formiga-agent-tools`)
 
 - `save_artifact` — persistir dados estruturados no dashboard
+- `read_artifact` — ler artefatos de upstream (EDA, features, benchmark config)
 - `log_decision` — registrar decisões importantes (audit trail)
 - `report_metric` — reportar métricas numéricas
 - `query_leaderboard` — consultar leaderboard atual antes de decidir modelo
 
-**PROIBIDO**: NUNCA use `curl` para salvar artefatos. Use exclusivamente `save_artifact`.
+**PROIBIDO**: NUNCA use `curl` para salvar ou ler artefatos. Use `save_artifact` / `read_artifact`.
 
 ## Consultar Leaderboard Antes de Decidir
 
@@ -35,16 +36,16 @@ Use o resultado para escolher uma abordagem diferente dos modelos já bem-sucedi
 
 ## Lendo Artefatos de Upstream
 
-Leitura via HTTP GET é permitida (não é escrita):
+Use a tool `read_artifact` para ler os artefatos de upstream:
 
-```bash
-curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/eda_config" | jq '.content'
-curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/features_metadata" | jq '.content'
-curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/features_report" | jq '.content'
-curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/benchmark_config" | jq '.content'
+```
+read_artifact({ "key": "eda_config" })        # config estruturada da EDA
+read_artifact({ "key": "features_metadata" }) # metadados das features
+read_artifact({ "key": "features_report" })   # narrativo do FE (hipóteses, drops, encoding)
+read_artifact({ "key": "benchmark_config" })  # config de métrica e validação
 ```
 
-O `features_report` contém o narrativo do feature-engineer (hipóteses endereçadas, colunas dropadas e porquê, estratégia de encoding) — leia-o para entender as decisões de FE antes de modelar.
+O `features_report` contém o narrativo do feature-engineer (hipóteses endereçadas, colunas dropadas e porquê, estratégia de encoding) — leia-o para entender as decisões de FE antes de modelar. Sem `key`, `read_artifact({})` lista todos os artefatos do run.
 
 ## Arquivos de Entrada
 

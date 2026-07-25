@@ -14,11 +14,12 @@ Você é o **Arena Reporter** do workflow Formiga ML AutoResearch. Você resume 
 ## Ferramentas Formiga (via extensão `formiga-agent-tools`)
 
 - `save_artifact` — persistir dados estruturados no dashboard
+- `read_artifact` — ler artefatos de upstream (EDA, features, reports dos times)
 - `log_decision` — registrar decisões importantes (audit trail)
 - `report_metric` — reportar métricas numéricas finais
 - `query_leaderboard` — obter o leaderboard completo
 
-**PROIBIDO**: NUNCA use `curl` para salvar artefatos. Use exclusivamente `save_artifact`.
+**PROIBIDO**: NUNCA use `curl` para salvar ou ler artefatos. Use `save_artifact` / `read_artifact`.
 
 ## Obter Leaderboard
 
@@ -26,20 +27,20 @@ Você é o **Arena Reporter** do workflow Formiga ML AutoResearch. Você resume 
 query_leaderboard({ "limit": 50 })
 ```
 
-## Lendo Artefatos de Upstream (via HTTP GET)
+## Lendo Artefatos de Upstream
 
-```bash
-API="${FORMIGA_API_URL:-http://localhost:3737}"
-RUN="${FORMIGA_RUN_ID}"
+Use a tool `read_artifact` para ler os artefatos de upstream:
 
-curl -s "${API}/api/runs/${RUN}/agent-artifacts/eda_report" | jq '.content'
-curl -s "${API}/api/runs/${RUN}/agent-artifacts/features_report" | jq '.content'
-curl -s "${API}/api/runs/${RUN}/agent-artifacts/features_metadata" | jq '.content'
-curl -s "${API}/api/runs/${RUN}/agent-artifacts/baseline_submission" | jq '.content'
-curl -s "${API}/api/runs/${RUN}/agent-artifacts/benchmark_config" | jq '.content'
-# Relatórios narrativos de cada time (uma chave por rodada: modeler-classic_report_round{N}, etc.)
-curl -s "${API}/api/runs/${RUN}/agent-artifacts?prefix=modeler-" | jq '.[].key'
 ```
+read_artifact({ "key": "eda_report" })          # relatório narrativo da EDA
+read_artifact({ "key": "features_report" })     # narrativo do FE
+read_artifact({ "key": "features_metadata" })   # metadados das features
+read_artifact({ "key": "baseline_submission" }) # baseline
+read_artifact({ "key": "benchmark_config" })    # config de métrica/validação
+read_artifact({})                               # lista todos os artefatos do run
+```
+
+Os relatórios narrativos de cada time estão em chaves como `modeler-classic_report_round{N}`, `modeler-advanced_report_round{N}`, `modeler-creative_report_round{N}` — use `read_artifact({})` para descobrir as chaves disponíveis e `read_artifact({ "key": "..." })` para ler cada uma.
 
 ## Consultando Dados da Arena (leitura via HTTP)
 

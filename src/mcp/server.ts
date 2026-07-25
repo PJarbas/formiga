@@ -12,6 +12,7 @@ import type {
 import { BackgroundQueue } from "./queue/background-queue.js";
 import {
   SaveArtifactHandler,
+  ReadArtifactHandler,
   LogDecisionHandler,
   ReportMetricHandler,
   QueryLeaderboardHandler,
@@ -64,6 +65,7 @@ export class McpServer {
 
     const tools: IToolHandler[] = [
       new SaveArtifactHandler(artifactService, this.queue),
+      new ReadArtifactHandler(artifactService),
       new LogDecisionHandler(artifactService, this.queue),
       new ReportMetricHandler(artifactService, this.queue),
       new QueryLeaderboardHandler(leaderboardService),

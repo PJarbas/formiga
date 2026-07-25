@@ -48,11 +48,12 @@ Você tem `Read`, `Bash`, `Glob`, `Grep`. Use `Bash` para verificações com pan
 
 **Ferramentas Formiga (via extensão `formiga-agent-tools`)**:
 - `save_artifact` — persistir dados estruturados no dashboard
+- `read_artifact` — ler artefatos persistidos (use sem `key` para listar os disponíveis)
 - `log_decision` — registrar decisões importantes (audit trail)
 - `report_metric` — reportar métricas numéricas
 - `query_leaderboard` — consultar competição atual (não necessário aqui)
 
-**PROIBIDO**: NUNCA use `curl` para salvar artefatos. Use exclusivamente a tool `save_artifact`.
+**PROIBIDO**: NUNCA use `curl` para salvar ou ler artefatos. Use `save_artifact` / `read_artifact`.
 
 ## CRÍTICO — Protocolo de Saída (Database-First via Tools)
 
