@@ -54,6 +54,20 @@ export interface ExperimentRow {
   r2_score: number | null;
   metrics_json: Record<string, unknown>;
   problem_type: string | null;
+
+  // ── Journal/ledger fields (agentic-ml expertise port) ──
+  fold_scores: number[] | null;
+  train_score: number | null;
+  content_hash: string | null;
+  oof_artifact_key: string | null;
+  prod_artifact_key: string | null;
+  brier_raw: number | null;
+  brier_calibrated: number | null;
+  ece_calibrated: number | null;
+  notes: string | null;
+  verdict_locked_at: string | null;
+  iteration_team: number | null;
+  category: string | null;
 }
 
 export interface MetricBag {
@@ -108,6 +122,19 @@ export interface ArenaExperiment {
   metric_bag?: MetricBag;
   problem_type?: string | null;
   status?: string;
+  // ── Journal/ledger fields (agentic-ml expertise port) ──
+  fold_scores?: number[];
+  train_score?: number | null;
+  content_hash?: string | null;
+  oof_artifact_key?: string | null;
+  prod_artifact_key?: string | null;
+  brier_raw?: number | null;
+  brier_calibrated?: number | null;
+  ece_calibrated?: number | null;
+  notes?: string | null;
+  category?: string | null;
+  /** Team-scoped iteration counter (1-based). Set by the auditor after budget check. */
+  iteration_team?: number | null;
 }
 
 // ── Repository interfaces (ISP) ──────────────────────────────────────────────
@@ -204,6 +231,19 @@ function fromArenaExperiment(entry: ArenaExperiment) {
     metrics_json: JSON.stringify({}),
     problem_type: entry.problem_type ?? null,
     status: entry.status ?? (entry.benchmark_exit_code === 0 ? "SUCCESS" : (entry.benchmark_exit_code != null ? "FAILED" : "PENDING")),
+    // ── Journal/ledger fields ──
+    fold_scores: entry.fold_scores ? JSON.stringify(entry.fold_scores) : null,
+    train_score: entry.train_score ?? null,
+    content_hash: entry.content_hash ?? null,
+    oof_artifact_key: entry.oof_artifact_key ?? null,
+    prod_artifact_key: entry.prod_artifact_key ?? null,
+    brier_raw: entry.brier_raw ?? null,
+    brier_calibrated: entry.brier_calibrated ?? null,
+    ece_calibrated: entry.ece_calibrated ?? null,
+    notes: entry.notes ?? null,
+    // verdict_locked_at is set by the repo when the verdict is committed.
+    iteration_team: entry.iteration_team ?? null,
+    category: entry.category ?? null,
   };
 }
 
@@ -223,7 +263,9 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
 
   async registerArena(entry: ArenaExperiment): Promise<number> {
     const created = await this.prisma.experiment.create({
-      data: fromArenaExperiment(entry),
+      // The arena auditor commits the verdict pre-write; lock it immediately so
+      // the ledger is append-only (agentic-ml journal semantics).
+      data: { ...fromArenaExperiment(entry), verdict_locked_at: new Date() },
     });
     return created.experiment_id;
   }
@@ -320,6 +362,7 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
     testMetric: number,
     status: "AUDITED" | "OVERFITTED",
   ): Promise<void> {
+    await this.assertNotVerdictLocked(experimentId, "updateTestMetric");
     await this.prisma.experiment.update({
       where: { experiment_id: experimentId },
       data: { test_metric: testMetric, status },
@@ -327,6 +370,7 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
   }
 
   async reject(experimentId: number, reason: string): Promise<void> {
+    await this.assertNotVerdictLocked(experimentId, "reject");
     await this.prisma.experiment.update({
       where: { experiment_id: experimentId },
       data: { status: "FAILED", error_message: reason },
@@ -334,6 +378,7 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
   }
 
   async autoAudit(experimentId: number): Promise<void> {
+    await this.assertNotVerdictLocked(experimentId, "autoAudit");
     await this.prisma.experiment.updateMany({
       where: { experiment_id: experimentId, status: "SUCCESS" },
       data: { status: "AUDITED" },
@@ -344,9 +389,32 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
     experimentId: number,
     signature: string,
   ): Promise<void> {
+    // dataset_signature is pre-verdict metadata (cross-run warm-start), not
+    // part of the locked verdict — allowed even after lock.
     await this.prisma.experiment.update({
       where: { experiment_id: experimentId },
       data: { dataset_signature: signature },
     });
+  }
+
+  /**
+   * Enforce ledger immutability: once `verdict_locked_at` is set, the verdict
+   * columns (status, decision, reject_reason, error_message) cannot change.
+   * This mirrors the agentic-ml journal's append-only contract. Throws if a
+   * mutation is attempted on a locked row.
+   */
+  private async assertNotVerdictLocked(
+    experimentId: number,
+    operation: string,
+  ): Promise<void> {
+    const row = await this.prisma.experiment.findUnique({
+      where: { experiment_id: experimentId },
+      select: { verdict_locked_at: true },
+    });
+    if (row?.verdict_locked_at) {
+      throw new Error(
+        `Ledger immutability violation: experiment ${experimentId} verdict is locked (cannot ${operation})`,
+      );
+    }
   }
 }

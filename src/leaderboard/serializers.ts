@@ -54,5 +54,34 @@ export function toExperimentRow(model: Experiment): ExperimentRow {
     r2_score:          model.r2_score ?? null,
     metrics_json:      safeJsonParse(model.metrics_json ?? "{}"),
     problem_type:      model.problem_type ?? null,
+    // ── Journal/ledger fields ──
+    fold_scores:       parseFoldScores(model.fold_scores),
+    train_score:       model.train_score ?? null,
+    content_hash:      model.content_hash ?? null,
+    oof_artifact_key:  model.oof_artifact_key ?? null,
+    prod_artifact_key: model.prod_artifact_key ?? null,
+    brier_raw:         model.brier_raw ?? null,
+    brier_calibrated:  model.brier_calibrated ?? null,
+    ece_calibrated:    model.ece_calibrated ?? null,
+    notes:             model.notes ?? null,
+    verdict_locked_at: model.verdict_locked_at instanceof Date
+      ? model.verdict_locked_at.toISOString()
+      : (model.verdict_locked_at ?? null),
+    iteration_team:    model.iteration_team ?? null,
+    category:          model.category ?? null,
   };
+}
+
+/** Parse the JSON-encoded fold_scores column back into a number array. */
+function parseFoldScores(raw: string | null | undefined): number[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed
+      .map((v) => (typeof v === "number" && Number.isFinite(v) ? v : Number(v)))
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  } catch {
+    return null;
+  }
 }

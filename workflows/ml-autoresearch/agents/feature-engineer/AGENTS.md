@@ -111,10 +111,33 @@ save_artifact({
       "split": "artifacts/split.pkl"
     },
     "target_column": "{{target_column}}",
-    "baseline": { "cv_rmse_mean": 0.7234, "model_type": "ridge" }
+    "baseline": { "cv_rmse_mean": 0.7234, "model_type": "ridge" },
+    "content_hash": "<MD5>"
   }
 })
 ```
+
+## CRÍTICO — content_hash (Integridade do Dataset)
+
+Compute e salve `content_hash` no `benchmark_config.json` (e no artefato de banco `benchmark_config`). Ele é a âncora de integridade intra-run do auditor da arena (gate G2):
+
+```python
+import hashlib, pickle, json
+
+def compute_content_hash(features_path, split_path, config_path):
+    h = hashlib.md5()
+    with open(features_path, "rb") as f:
+        h.update(f.read())
+    with open(split_path, "rb") as f:
+        h.update(f.read())
+    with open(config_path, "rb") as f:
+        h.update(f.read())
+    return h.hexdigest()
+
+content_hash = compute_content_hash("artifacts/features.parquet", "artifacts/split.pkl", "artifacts/benchmark_config.json")
+```
+
+Salve `content_hash` em `benchmark_config.json`. A arena rejeita (`[stale]`) qualquer experimento cujo hash não bate com o da sessão — isso captura submissions com dataset stale após features serem regeradas. **Distinto do `dataset_signature`** (que é para warm-start cross-run); o `content_hash` é para integridade intra-run.
 
 ### 5. Config de Preprocessing
 
