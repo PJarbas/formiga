@@ -55,7 +55,7 @@ export interface ExperimentRow {
   metrics_json: Record<string, unknown>;
   problem_type: string | null;
 
-  // ── Journal/ledger fields (agentic-ml expertise port) ──
+  // ── Journal/ledger fields ──
   fold_scores: number[] | null;
   train_score: number | null;
   content_hash: string | null;
@@ -122,7 +122,7 @@ export interface ArenaExperiment {
   metric_bag?: MetricBag;
   problem_type?: string | null;
   status?: string;
-  // ── Journal/ledger fields (agentic-ml expertise port) ──
+  // ── Journal/ledger fields ──
   fold_scores?: number[];
   train_score?: number | null;
   content_hash?: string | null;
@@ -264,7 +264,7 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
   async registerArena(entry: ArenaExperiment): Promise<number> {
     const created = await this.prisma.experiment.create({
       // The arena auditor commits the verdict pre-write; lock it immediately so
-      // the ledger is append-only (agentic-ml journal semantics).
+      // the ledger is append-only (arena journal semantics).
       data: { ...fromArenaExperiment(entry), verdict_locked_at: new Date() },
     });
     return created.experiment_id;
@@ -400,7 +400,7 @@ export class LeaderboardRepositoryImpl implements LeaderboardRepository {
   /**
    * Enforce ledger immutability: once `verdict_locked_at` is set, the verdict
    * columns (status, decision, reject_reason, error_message) cannot change.
-   * This mirrors the agentic-ml journal's append-only contract. Throws if a
+   * This mirrors the arena journal's append-only contract. Throws if a
    * mutation is attempted on a locked row.
    */
   private async assertNotVerdictLocked(

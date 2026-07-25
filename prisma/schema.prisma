@@ -135,8 +135,8 @@ model Experiment {
   problem_type        String?
   model_algorithm     String?
 
-  // ── Journal/ledger fields (agentic-ml expertise port) ──
-  // `experiments` absorbs the role of the agentic-ml journal.jsonl.
+  // ── Journal/ledger fields ──
+  // `experiments` doubles as the arena journal (one row per experiment).
   fold_scores         String?   // JSON array of per-fold scores (Nadeau-Bengio)
   train_score         Float?    // explicit train score (overfitting gate)
   content_hash        String?   // MD5(features ‖ split ‖ config) — intra-run integrity

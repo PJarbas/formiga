@@ -40,8 +40,11 @@ Leitura via HTTP GET é permitida (não é escrita):
 ```bash
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/eda_config" | jq '.content'
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/features_metadata" | jq '.content'
+curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/features_report" | jq '.content'
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/benchmark_config" | jq '.content'
 ```
+
+O `features_report` contém o narrativo do feature-engineer (hipóteses endereçadas, colunas dropadas e porquê, estratégia de encoding) — leia-o para entender as decisões de FE antes de modelar.
 
 ## Arquivos de Entrada
 
@@ -114,6 +117,37 @@ report_metric({
   "name": "cv_mean",
   "value": 4123.45,
   "tags": {"model": "ft-transformer", "round": "3", "agent": "modeler-advanced"}
+})
+```
+
+## CRÍTICO — Relatório de Modelagem via `save_artifact` (fonte da verdade)
+
+Salve um relatório narrativo de cada rodada no banco via `save_artifact`. Este relatório é a fonte da verdade (não o `.md` legado) — o reporter e os outros times o consomem via API. **NÃO basta gerar arquivo `.md` legado; o banco é a fonte da verdade.**
+
+```
+save_artifact({
+  "key": "modeler-advanced_report_round{N}",
+  "data": {
+    "round": 3,
+    "agent": "modeler-advanced",
+    "hypothesis": "FT-Transformer com entity embeddings deve capturar interações não-lineares que o LGBM do classic perdeu",
+    "approach": "FT-Transformer (d_token=64, n_heads=8, n_layers=3), reinstanciado por fold, BN+Dropout(0.3), isotonic calibration",
+    "model_type": "ft-transformer",
+    "cv_mean": 0.6901,
+    "train_score": 0.7250,
+    "fold_scores": [0.6880, 0.6920, 0.6855, 0.6910, 0.6940],
+    "overfit_gap": 0.0349,
+    "oof_path": "artifacts/models/modeler-advanced_round3_oof.npy",
+    "prod_path": "artifacts/models/modeler-advanced_round3_prod.pkl",
+    "brier_calibrated": 0.139,
+    "ece_calibrated": 0.028,
+    "n_unique_probs": 73211,
+    "category": "model_selection",
+    "decision": "keep",
+    "learned": "Reinstanciar por fold foi crítico; dropout 0.3 > 0.2 para este tamanho",
+    "notes": "Sugestão para o creative: DAE sobre as categóricas pode gerar embedding decorrelacionado do meu",
+    "feature_insights": {"entity_embedding_norm": {"category_id": 12.4, "region": 3.1}}
+  }
 })
 ```
 

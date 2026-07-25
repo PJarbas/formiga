@@ -40,8 +40,11 @@ Leitura via HTTP GET é permitida (não é escrita):
 ```bash
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/eda_config" | jq '.content'
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/features_metadata" | jq '.content'
+curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/features_report" | jq '.content'
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/benchmark_config" | jq '.content'
 ```
+
+O `features_report` contém o narrativo do feature-engineer (hipóteses endereçadas, colunas dropadas e porquê, estratégia de encoding) — leia-o para entender as decisões de FE antes de modelar.
 
 ## Arquivos de Entrada
 
@@ -113,6 +116,38 @@ report_metric({
   "name": "cv_mean",
   "value": 0.805,
   "tags": {"model": "dae+lgbm", "round": "3", "agent": "modeler-creative"}
+})
+```
+
+## CRÍTICO — Relatório de Modelagem via `save_artifact` (fonte da verdade)
+
+Salve um relatório narrativo de cada rodada no banco via `save_artifact`. Este relatório é a fonte da verdade (não o `.md` legado) — o reporter e os outros times o consomem via API. **NÃO basta gerar arquivo `.md` legado; o banco é a fonte da verdade.** Inclua sempre a métrica de **decorrelação** (Spearman vs top-1) — é sua contribuição principal para o ensemble.
+
+```
+save_artifact({
+  "key": "modeler-creative_report_round{N}",
+  "data": {
+    "round": 3,
+    "agent": "modeler-creative",
+    "hypothesis": "DAE (swap noise 20%) + LGBM deve produzir modelo decorrelacionado do FT-Transformer do advanced",
+    "approach": "Denoising autoencoder fit-per-fold (128→64→32), embedding alimenta LGBM head, isotonic calibration",
+    "model_type": "dae+lgbm",
+    "cv_mean": 0.7920,
+    "train_score": 0.8110,
+    "fold_scores": [0.7890, 0.7940, 0.7860, 0.7930, 0.7980],
+    "overfit_gap": 0.019,
+    "oof_path": "artifacts/models/modeler-creative_round3_oof.npy",
+    "prod_path": null,
+    "brier_calibrated": 0.151,
+    "ece_calibrated": 0.034,
+    "n_unique_probs": 73211,
+    "category": "ensemble",
+    "decision": "warn",
+    "decorrelation": {"spearman_vs_top1": 0.78, "target_was": "<0.85"},
+    "learned": "Swap noise 20% > 15% para categóricas; embedding 32-dim suficiente",
+    "notes": "Sugestão para o classic: meu OOF corr 0.78 com seu LGBM — blending pode render +0.5pp",
+    "feature_insights": {"dae_embedding_top_dims": [0, 7, 12]}
+  }
 })
 ```
 

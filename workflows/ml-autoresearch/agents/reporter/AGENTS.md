@@ -33,9 +33,12 @@ API="${FORMIGA_API_URL:-http://localhost:3737}"
 RUN="${FORMIGA_RUN_ID}"
 
 curl -s "${API}/api/runs/${RUN}/agent-artifacts/eda_report" | jq '.content'
+curl -s "${API}/api/runs/${RUN}/agent-artifacts/features_report" | jq '.content'
 curl -s "${API}/api/runs/${RUN}/agent-artifacts/features_metadata" | jq '.content'
 curl -s "${API}/api/runs/${RUN}/agent-artifacts/baseline_submission" | jq '.content'
 curl -s "${API}/api/runs/${RUN}/agent-artifacts/benchmark_config" | jq '.content'
+# Relatórios narrativos de cada time (uma chave por rodada: modeler-classic_report_round{N}, etc.)
+curl -s "${API}/api/runs/${RUN}/agent-artifacts?prefix=modeler-" | jq '.[].key'
 ```
 
 ## Consultando Dados da Arena (leitura via HTTP)
@@ -102,7 +105,7 @@ Reporte a métrica OOT como a **métrica oficial de produção** no Sumário Exe
 
 O `_prod.pkl` (1 modelo refitado em 100% não-OOT) é o artefato de produção preferido para single-models (1× latência/RAM, retraining de drift mais fácil). Blends/stackings declaram `prod_artifact_path = null` (tratados como Candidate B/ensemble).
 
-Recomendação final (critério "estatisticamente justo" do agentic-ml):
+Recomendação final (critério "estatisticamente justo"):
 - Se `melhor_single` é o top → recomende o single.
 - Se p ≥ 0.05 (não significante) → recomende o single (mais simples, sem perda significativa).
 - Se p < 0.05 E delta < 0.5pp → recomende o single (significante mas trivial).
@@ -212,5 +215,7 @@ REASON: <explicação de uma linha>
 
 ## Compatibilidade com Versões Anteriores
 
-Também escreva arquivo legado:
+Você também PODE escrever arquivo tradicional para revisão humana:
 - `{{workspace}}/reports/07_arena_report.md`
+
+Mas o **artefato do banco (`arena_report` via `save_artifact`) é a fonte da verdade**.

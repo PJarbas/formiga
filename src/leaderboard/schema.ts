@@ -110,10 +110,10 @@ const ARENA_COLUMNS: Array<{ name: string; ddl: string }> = [
 ];
 
 /**
- * Additive migration: agentic-ml expertise port — journal/ledger fields.
+ * Additive migration: journal/ledger fields.
  *
- * The `experiments` table absorbs the role of the agentic-ml `journal.jsonl`
- * (one row per experiment, append-only verdict). These columns add:
+ * The `experiments` table doubles as the arena journal (one row per
+ * experiment, append-only verdict). These columns add:
  *  - `fold_scores`:       JSON array of per-fold scores (Nadeau-Bengio input).
  *  - `train_score`:       explicit train score for overfitting gate (distinct
  *                          from `train_metric`, which may be reused as val).
@@ -182,7 +182,7 @@ export function initLeaderboardSchema(db: DatabaseSync): void {
     }
   }
 
-  // ── Journal/ledger migration (agentic-ml expertise port) ──
+  // ── Journal/ledger migration ──
   for (const col of JOURNAL_LEDGER_COLUMNS) {
     if (!existingNames.has(col.name)) {
       db.exec(col.ddl);

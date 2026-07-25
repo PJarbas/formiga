@@ -341,8 +341,8 @@ export async function runArena(
   // ── Per-team experiment ledger (budget + dedup) ──
   const teamExperimentCount = new Map<string, number>();
   const existingDedupSignatures = new Set<string>();
-  // Max iterations per team: default 5 (agentic-ml budget). Configurable per
-  // agent via ArenaAgentConfig in a future iteration; today uniform.
+  // Max iterations per team: default 5. Configurable per agent via
+  // ArenaAgentConfig in a future iteration; today uniform.
   const maxIterationsPerTeam = 5;
 
   // 3. Round loop
@@ -404,7 +404,7 @@ export async function runArena(
       // next round's prompt can inject it for the other team(s).
       result.notes = richMetrics.notes ?? undefined;
 
-      // ── Pre-write audit (agentic-ml auto_critic) ────────────────────────
+      // ── Pre-write audit ───────────────────────────────────────────────
       // Run the blocking quality gates BEFORE persisting. The audit may
       // override the raw `makeDecision` verdict: a metric that "improves" on
       // the scalar comparison can still be REJECTED (overfit, stale dataset,
@@ -634,7 +634,7 @@ function buildPromptsForRound(
     // ── Cross-pollination: notes the other team(s) directed at you ──
     // Distinct from their `learned` (own reflection) — these are explicit
     // suggestions for you. Incentivizes teams to build on each other's
-    // findings (agentic-ml journal `notes` channel).
+    // findings.
     const othersNotes = othersKept
       .filter((o) => o.notes && o.notes.trim().length > 0)
       .map((o) => `  ${o.agentId}: ${o.notes!.trim()}`);
@@ -825,7 +825,7 @@ interface RichMetricsResult {
   modelAlgorithm?: string | null;
   hyperparameters?: Record<string, unknown>;
   metricBag?: Record<string, number>;
-  // ── Journal/ledger fields (agentic-ml expertise port) ──
+  // ── Journal/ledger fields ──
   foldScores?: number[];
   trainScore?: number | null;
   oofArtifactKey?: string | null;

@@ -1,9 +1,8 @@
 // ══════════════════════════════════════════════════════════════════════
 // audit.ts — Pre-write synchronous auditor for arena experiments.
 //
-// The agentic-ml `auto_critic` audits every experiment BEFORE it is written
-// to the journal. This module is formiga's equivalent: it runs a series of
-// blocking quality gates over a candidate experiment and returns a verdict
+// Audits every experiment BEFORE it is written to the ledger: runs a series
+// of blocking quality gates over a candidate experiment and returns a verdict
 // (keep | warn | rejected) plus a structured rejection reason.
 //
 // Pure functions — zero side effects, fully unit-testable. The arena engine
@@ -121,7 +120,7 @@ export type AdversarialVerdict = "iid" | "drift" | "warn" | "fail";
  * train vs holdout). Used by the feature-engineer's quality gate to decide
  * whether the train/holdout split is defensible or leaking temporal/ID signal.
  *
- * Thresholds mirror the agentic-ml feature-engineer persona:
+ * Thresholds:
  *   ≤ 0.55      iid   — train and holdout are indistinguishable (good)
  *   0.55–0.70   drift — mild covariate drift (record, proceed)
  *   0.70–0.80   warn  — drop leaked columns and re-run
@@ -190,7 +189,7 @@ export function nadeauBengio(
   const bestMean = bestFolds.reduce((a, b) => a + b, 0) / bestFolds.length;
   const deltaPp = Math.abs(candidateMean - bestMean) * 100;
 
-  // "Statistically just" criterion (agentic-ml ml-critic):
+  // "Statistically just" criterion:
   //   p < 0.05  AND  delta >= 0.5pp  → significant
   const significant = pValue < 0.05 && deltaPp >= 0.5;
 
@@ -209,7 +208,7 @@ export function nadeauBengio(
  * leaderboard entry, just not a "win").
  *
  * Budget-exceeded experiments are REJECTED with `[budget]` for transparency
- * (they still consume a slot), matching the agentic-ml behavior.
+ * (they still consume a slot), matching the arena's budget contract.
  */
 export function auditExperiment(input: AuditInput): AuditResult {
   const warnings: AuditWarning[] = [];
@@ -243,8 +242,8 @@ export function auditExperiment(input: AuditInput): AuditResult {
   }
 
   // G3 — folds present (Nadeau-Bengio input). Without folds we cannot judge
-  // significance; the agentic-ml rule is to reject rather than fall back to a
-  // raw comparison (which would let CV noise through).
+  // significance; the rule is to reject rather than fall back to a raw
+  // comparison (which would let CV noise through).
   if (!input.foldScores || input.foldScores.length < 2) {
     return reject(
       "no_folds",
@@ -348,7 +347,7 @@ function reject(
 /**
  * Build a deterministic dedup signature for an experiment.
  * Two experiments with the same team, model type, hyperparameters, and
- * primary metric are considered duplicates (the agentic-ml `_find_duplicate`).
+ * primary metric are considered duplicates.
  */
 export function dedupSignature(
   agentName: string,
@@ -375,7 +374,7 @@ function canonicalJson(value: unknown): string {
  * Optimize ensemble weights over the probability simplex Δⁿ (weights ≥ 0,
  * sum to 1) via Nelder-Mead. The caller supplies a `score` callback that
  * evaluates a weight vector — typically "blend the OOF arrays with these
- * weights and return the primary metric" (agentic-ml ml-critic pattern).
+ * weights and return the primary metric".
  *
  * The simplex is initialized as the barycenter plus one vertex per model
  * nudged toward that model. After each step, vertices are projected back to
