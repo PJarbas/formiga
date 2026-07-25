@@ -105,7 +105,7 @@ Reporte a métrica OOT como a **métrica oficial de produção** no Sumário Exe
 
 O `_prod.pkl` (1 modelo refitado em 100% não-OOT) é o artefato de produção preferido para single-models (1× latência/RAM, retraining de drift mais fácil). Blends/stackings declaram `prod_artifact_path = null` (tratados como Candidate B/ensemble).
 
-Recomendação final (critério "estatisticamente justo" do agentic-ml):
+Recomendação final (critério "estatisticamente justo"):
 - Se `melhor_single` é o top → recomende o single.
 - Se p ≥ 0.05 (não significante) → recomende o single (mais simples, sem perda significativa).
 - Se p < 0.05 E delta < 0.5pp → recomende o single (significante mas trivial).

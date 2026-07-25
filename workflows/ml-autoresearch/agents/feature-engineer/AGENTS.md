@@ -175,7 +175,7 @@ save_artifact({
 
 ### 6. Relatório de Features (fonte da verdade para downstream)
 
-Salve o relatório narrativo da engenharia de features no banco via `save_artifact`. Este é o equivalente do `02_features.md` do agentic-ml, mas no banco (fonte da verdade) — os modelers e o reporter o consomem via API.
+Salve o relatório narrativo da engenharia de features no banco via `save_artifact`. Este relatório é a fonte da verdade (não o `.md` legado) — os modelers e o reporter o consomem via API.
 
 ```
 save_artifact({

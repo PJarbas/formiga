@@ -122,7 +122,7 @@ report_metric({
 
 ## CRÍTICO — Relatório de Modelagem via `save_artifact` (fonte da verdade)
 
-Salve um relatório narrativo de cada rodada no banco via `save_artifact`. Este é o equivalente do relatório de modelagem do agentic-ml, mas no banco (fonte da verdade) — o reporter e os outros times o consomem via API. **NÃO basta gerar arquivo `.md` legado; o banco é a fonte da verdade.**
+Salve um relatório narrativo de cada rodada no banco via `save_artifact`. Este relatório é a fonte da verdade (não o `.md` legado) — o reporter e os outros times o consomem via API. **NÃO basta gerar arquivo `.md` legado; o banco é a fonte da verdade.**
 
 ```
 save_artifact({
