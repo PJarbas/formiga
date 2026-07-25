@@ -86,6 +86,25 @@ log_decision({
 })
 ```
 
+## CRÍTICO — Calibração Leakage-Proof (NNs são notoriamente mal-calibradas)
+
+Após treinar, **calibre as probabilidades**. Redes neurais tabulares produzem probabilidades mal-calibradas por padrão. Métodos: `IsotonicRegression` (default, N≥1k/classe), `Platt` (folds pequenos), `Beta calibration` (Kull, Nelder-Mead).
+
+**REGRA DE OURO — NUNCA fitar e prever no mesmo array OOF:**
+`iso.fit(oof, y).predict(oof)` é **data leakage** — produz ECE ≈ 0 por saturação, não por calibração real. Sempre `fit` em `train_probs`/`y_train`, `predict` em `oof`.
+
+Regra de gatilho: se `brier_oof > baseline_brier * 1.05`, calibre. Salve `_raw.pkl`, `_calibrated.pkl`, `_oof.npy`. O auditor rejeita (`[cal_leak]`) OOFs saturados (<50 probs únicas) ou ECE < 1e-6.
+
+**Reinstanciar o modelo do zero a cada fold:** É OBRIGATÓRIO reinstanciar o modelo, redefinir o otimizador e resetar as sementes (`set_seed(42 + fold)`) no início de cada fold. NUNCA continue o treinamento do mesmo modelo ou compartilhe pesos entre folds — causa vazamento catastrófico. Auto-rejeição interna se `train_val_gap > 0.08`.
+
+## CRÍTICO — Sem scale_pos_weight / class_weight para AUC
+
+**NÃO use `scale_pos_weight` nem `class_weight` para melhorar AUC.** AUC é métrica de ranking; reponderar não a melhora, só distorce a calibração. Probabilidades honestas vêm de calibração pós-hoc.
+
+## CRÍTICO — _results.json Obrigatório (fold_scores + train_score)
+
+O auditor rejeita (`[no_folds]`) sem `fold_scores` e `[overfit]` sem `train_score`. Seu `_results.json` DEVE conter `fold_scores` (score de **cada fold**, não a média), `train_score`, `oof_path`, `prod_path`, `brier_*`, `ece_calibrated`, `category`. Um experimento só é `keep` se a melhoria for estatisticamente significativa (Nadeau-Bengio p<0.05) E não-trivial (delta ≥ 0.5pp).
+
 ## Reportar Métrica Após Treino
 
 Depois de treinar e avaliar, reporte a métrica:

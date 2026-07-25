@@ -87,6 +87,39 @@ log_decision({
 })
 ```
 
+## CRÍTICO — Calibração Leakage-Proof
+
+Após treinar, **calibre as probabilidades** (classificação). Métodos:
+- `IsotonicRegression` (default, N≥1k/classe)
+- `Platt` (sigmoid, folds pequenos)
+- `Beta calibration` (Kull, Nelder-Mead)
+
+**REGRA DE OURO — NUNCA fitar e prever no mesmo array OOF:**
+`iso.fit(oof, y).predict(oof)` é **data leakage** — o calibrador memoriza os rótulos via as próprias probabilidades out-of-fold, produzindo ECE ≈ 0 por saturação, não por calibração real.
+
+Sempre `fit` em `train_probs`/`y_train` e `predict` em `oof`:
+```python
+from sklearn.isotonic import IsotonicRegression
+iso = IsotonicRegression(out_of_bounds="clip")
+iso.fit(train_probs, y_train)          # fit no TREINO
+oof_calibrated = iso.predict(oof_probs)  # predict no OOF
+```
+
+Salve: `_raw.pkl` (modelo cru), `_calibrated.pkl` (modelo + calibrador), `_oof.npy` (probabilidades OOF calibradas). O auditor rejeita (`[cal_leak]`) OOFs com <50 probabilidades únicas (saturação) ou ECE < 1e-6 (suspeitosamente perfeito).
+
+## CRÍTICO — Sem scale_pos_weight / class_weight para AUC
+
+**NÃO use `scale_pos_weight` nem `class_weight` para melhorar AUC.** AUC é métrica de ranking; reponderar não a melhora, só distorce a calibração. Probabilidades honestas vêm de calibração pós-hoc. (Para métricas threshold-dependent como F1, ajuste o threshold via OOF, não o reponderamento.)
+
+## CRÍTICO — _results.json Obrigatório (fold_scores + train_score)
+
+O auditor da arena rejeita (`[no_folds]`) experimentos sem `fold_scores` e `[overfit]` sem `train_score`. Seu `_results.json` DEVE conter:
+- `fold_scores`: lista com o score de **cada fold** da CV (não a média!) — input do teste de significância Nadeau-Bengio.
+- `train_score`: métrica no treino (para gate de overfitting: `gap = |train - val| > threshold` → rejeitado).
+- `oof_path`, `prod_path`, `brier_*`, `ece_calibrated`, `category`.
+
+Um experimento só é `keep` (promovido) se a melhoria for **estatisticamente significativa** (Nadeau-Bengio p<0.05) E **não-trivial** (delta ≥ 0.5pp). Caso contrário vira `warn` (fica no ledger mas não é promovido).
+
 ## Reportar Métrica Após Treino
 
 Depois de treinar e avaliar, reporte a métrica:
