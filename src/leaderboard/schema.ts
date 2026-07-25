@@ -83,6 +83,45 @@ const RICH_METRICS_COLUMNS: Array<{ name: string; ddl: string }> = [
   { name: "model_algorithm",     ddl: "ALTER TABLE experiments ADD COLUMN model_algorithm TEXT" },
 ];
 
+/**
+ * Additive migration: agentic-ml expertise port — journal/ledger fields.
+ *
+ * The `experiments` table absorbs the role of the agentic-ml `journal.jsonl`
+ * (one row per experiment, append-only verdict). These columns add:
+ *  - `fold_scores`:       JSON array of per-fold scores (Nadeau-Bengio input).
+ *  - `train_score`:       explicit train score for overfitting gate (distinct
+ *                          from `train_metric`, which may be reused as val).
+ *  - `content_hash`:      MD5(features ‖ split ‖ config) — intra-run dataset
+ *                          integrity (distinct from `dataset_signature`, which
+ *                          is for cross-run warm-start).
+ *  - `oof_artifact_key`:  reference to the OOF probabilities artifact (for
+ *                          ensemble composition + calibration-leak detection).
+ *  - `prod_artifact_key`: reference to the production-refit model artifact.
+ *  - `brier_raw`/`brier_calibrated`/`ece_calibrated`: calibration diagnostics.
+ *  - `notes`:             cross-pollination channel (suggestion to the other
+ *                          team), distinct from `learned` (own reflection).
+ *  - `verdict_locked_at`: once set, the verdict columns (decision/status/
+ *                          reject_reason/rejected_at/promoted_at) are immutable.
+ *  - `iteration_team`:    team-scoped iteration counter (budget enforcement).
+ *  - `category`:          experiment category (hyperparameter|ensemble|...).
+ *
+ * Applied idempotently by introspecting PRAGMA table_info(experiments).
+ */
+const JOURNAL_LEDGER_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: "fold_scores",         ddl: "ALTER TABLE experiments ADD COLUMN fold_scores TEXT" },
+  { name: "train_score",         ddl: "ALTER TABLE experiments ADD COLUMN train_score REAL" },
+  { name: "content_hash",        ddl: "ALTER TABLE experiments ADD COLUMN content_hash TEXT" },
+  { name: "oof_artifact_key",    ddl: "ALTER TABLE experiments ADD COLUMN oof_artifact_key TEXT" },
+  { name: "prod_artifact_key",   ddl: "ALTER TABLE experiments ADD COLUMN prod_artifact_key TEXT" },
+  { name: "brier_raw",           ddl: "ALTER TABLE experiments ADD COLUMN brier_raw REAL" },
+  { name: "brier_calibrated",    ddl: "ALTER TABLE experiments ADD COLUMN brier_calibrated REAL" },
+  { name: "ece_calibrated",      ddl: "ALTER TABLE experiments ADD COLUMN ece_calibrated REAL" },
+  { name: "notes",               ddl: "ALTER TABLE experiments ADD COLUMN notes TEXT" },
+  { name: "verdict_locked_at",   ddl: "ALTER TABLE experiments ADD COLUMN verdict_locked_at TEXT" },
+  { name: "iteration_team",      ddl: "ALTER TABLE experiments ADD COLUMN iteration_team INTEGER" },
+  { name: "category",            ddl: "ALTER TABLE experiments ADD COLUMN category TEXT" },
+];
+
 export function initLeaderboardSchema(db: DatabaseSync): void {
   db.exec(DATASET_SIGNATURE_DDL);
   db.exec(EXPERIMENTS_DDL);
@@ -105,6 +144,13 @@ export function initLeaderboardSchema(db: DatabaseSync): void {
 
   // ── Rich metrics migration ──
   for (const col of RICH_METRICS_COLUMNS) {
+    if (!existingNames.has(col.name)) {
+      db.exec(col.ddl);
+    }
+  }
+
+  // ── Journal/ledger migration (agentic-ml expertise port) ──
+  for (const col of JOURNAL_LEDGER_COLUMNS) {
     if (!existingNames.has(col.name)) {
       db.exec(col.ddl);
     }

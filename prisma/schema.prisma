@@ -135,6 +135,21 @@ model Experiment {
   problem_type        String?
   model_algorithm     String?
 
+  // ── Journal/ledger fields (agentic-ml expertise port) ──
+  // `experiments` absorbs the role of the agentic-ml journal.jsonl.
+  fold_scores         String?   // JSON array of per-fold scores (Nadeau-Bengio)
+  train_score         Float?    // explicit train score (overfitting gate)
+  content_hash        String?   // MD5(features ‖ split ‖ config) — intra-run integrity
+  oof_artifact_key    String?   // OOF probabilities artifact (ensemble + cal-leak)
+  prod_artifact_key   String?   // production-refit model artifact
+  brier_raw           Float?
+  brier_calibrated    Float?
+  ece_calibrated      Float?
+  notes               String?   // cross-pollination channel (vs learned = own reflection)
+  verdict_locked_at   DateTime? // once set, verdict columns are immutable
+  iteration_team      Int?      // team-scoped iteration counter (budget enforcement)
+  category            String?   // hyperparameter|ensemble|model_selection|...
+
   run                 Run       @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
   @@index([run_id, round_number])
