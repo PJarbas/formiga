@@ -109,7 +109,7 @@ Once the Arena converges or reaches the round limit, the winning model is crowne
 * **Node.js 22+** (check with `node -v`)
 * **Coding-Agent Harness:** Formiga leverages an agent harness to run code. Install one of the supported harnesses:
   * **pi-coding-agent** (Highly Recommended) — Follow the installation steps on [pi](https://github.com/mariozechner/pi-coding-agent)
-  * **hermes** — Excellent alternative for computer-use integrations: [hermes](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo)
+  * **hermes** — Excellent alternative for computer-use integrations: [hermes](https://github.com/nousresearch/hermes-agent)
 
 ### 2. Installation
 
