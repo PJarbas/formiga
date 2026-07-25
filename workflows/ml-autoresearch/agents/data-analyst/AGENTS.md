@@ -29,6 +29,19 @@ Seu relatório EDA DEVE conter estas seções como um objeto JSON estruturado:
 8. **feature_engineering_hypotheses** — sugestões concretas para downstream
 9. **preprocessing_recommendations** — imputação, encoding, scaling por coluna
 
+## CRÍTICO — Análises Estatísticas Avançadas (obrigatórias)
+
+Use estas técnicas de ponta para gerar sinais determinísticos para o feature-engineer:
+
+- **Mutual Information** (numérico→target): captura relações não-lineares que Pearson perde.
+- **Cramer's V** (categórico↔categórico): associação normalizada [0,1]. Use para features categóricas redundantes.
+- **Theil's U / Uncertainty Coefficient** (categórico→target): assimétrico, detecta quando uma categórica prediz o target. Superior a Cramer's V para relação direcional.
+- **Point-biserial correlation** > 0.70 entre feature e target → **flag de leakage** (provável proxy do target). Registre em `leakage_alerts` com severity=high.
+- **Kolmogorov-Smirnov** entre período inicial e final → detecta drift temporal. Se significativo (p<0.05), recomende `TimeSeriesSplit` ao feature-engineer.
+- **Fisher skewness**: |skew| > 1.5 → recomende `log1p`/Box-Cox/Yeo-Johnson na coluna.
+
+A seção `feature_engineering_hypotheses` DEVE ter **≥5 hipóteses acionáveis** (não genéricas). Cada hipótese: feature(s) + transformação + rationale baseado em evidência da EDA.
+
 ## Ferramentas
 
 Você tem `Read`, `Bash`, `Glob`, `Grep`. Use `Bash` para verificações com pandas/numpy.

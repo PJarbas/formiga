@@ -216,6 +216,68 @@ Cada figura DEVE ter título descritivo, labels nos eixos, e salvar com `dpi=100
 10. Dependent Feature Deduplication
 11. Feature Stability Validation
 
+## CRÍTICO — Feature Quality Gate (10 gates BLOQUEANTES)
+
+Crie e execute `{{workspace}}/artifacts/feature_quality_gate.py` ANTES de `STATUS: done`. **Se qualquer gate bloqueante falhar, a step `features` FALHA** (não produza features inválidas). Salve o relatório em `{{workspace}}/artifacts/feature_quality_report.json`.
+
+```
+G1  colinearidade        max |Spearman| entre features ≤ 0.95
+G2  VIF                  ≤ 10 (multicolinearidade)
+G3  adversarial AUC      train-vs-holdout ≤ 0.75   (vide seção abaixo)
+G4  univariate too-good  nenhuma feature com AUC ≥ 0.99 vs target
+G5  estabilidade Nogueira φ ≥ 0.75 (top-K features estável entre folds)
+G6  missing ratio        ≤ 0.70 por coluna
+G7  dimensionalidade     N/p ≥ 10 (amostras por feature)
+G8  leakage CV-interno   todos os transformers fit-per-fold
+G9  near-zero variance   nenhuma coluna >95% dominante
+G10 re-execução bit-idêntica  MD5(features.parquet) reproduzível com SEED=42
+```
+
+O `benchmark_runner.py` que você gera DEVE chamar `feature_quality_gate.py` antes de aceitar features. Gates G1, G2, G3, G6, G7, G9, G10 são **bloqueantes** (fail a step). G4, G5, G8 são **warnings** (registre, não bloqueie).
+
+## CRÍTICO — Adversarial Validation (G3, gate bloqueante)
+
+Treine um LightGBM para distinguir **train vs holdout** (target binário: 0=train, 1=holdout). Meça o AUC:
+- AUC ≤ 0.55 → IID ✅
+- 0.55–0.70 → drift leve (registre)
+- 0.70–0.80 → WARNING: liste e drop colunas que vazam (ex: timestamps, IDs pós-evento)
+- **> 0.80 → FAIL severo: aborte a step `features`** com a lista de colunas suspeitas
+
+Isso captura leakage pós-evento (ex: `order_status`, timestamps futuros, IDs codificados). É a defesa de maior ROI contra o erro #1 de ML tabular (Kapoor & Narayanan 2023).
+
+```python
+from lightgbm import LGBMClassifier
+from sklearn.metrics import roc_auc_score
+import numpy as np
+
+def adversarial_validation(X_train, X_holdout):
+    X = np.vstack([X_train, X_holdout])
+    y = np.concatenate([np.zeros(len(X_train)), np.ones(len(X_holdout))])
+    # split interno para AUC honesto
+    from sklearn.model_selection import train_test_split
+    Xt, Xv, yt, yv = train_test_split(X, y, test_size=0.3, random_state=42)
+    clf = LGBMClassifier(n_estimators=100, random_state=42, n_jobs=1, verbose=-1)
+    clf.fit(Xt, yt)
+    auc = roc_auc_score(yv, clf.predict_proba(Xv)[:, 1])
+    return auc  # >0.80 = FAIL
+```
+
+## CRÍTICO — Determinismo (G10)
+
+Uma re-execução deve produzir MD5 bit-idêntico de `features.parquet`:
+- `PYTHONHASHSEED=42`, `random_state=42` em tudo.
+- LightGBM/XGB: `deterministic=True, num_threads=1, force_col_wise=True` (XGB: `nthread=1`; CatBoost: `thread_count=1`). Multithreading quebra bit-identity via somas float não-associativas.
+- Sempre `sorted(glob(...))` — ordem de filesystem é não-determinística.
+- Valide no fim: rode a pipeline 2× e compare `hashlib.md5(open(features_parquet,'rb').read()).hexdigest()`.
+
+## CRÍTICO — Target Encoding Leakage-Proof
+
+Target encoding é a fonte #1 de leakage. **NUNCA fitar encoder no dataset completo antes do split.**
+- Use `TargetEncoder(cv=5, smooth="auto")` (sklearn≥1.3) ou `CatBoostEncoder` — sempre fit-per-fold dentro do CV.
+- Para cardinalidade extrema + modelo linear: `GLMMEncoder` (Pargent 2022, benchmark winner).
+- Para >1M cardinalidade: `HashingEncoder`.
+- Referência: Kapoor & Narayanan 2023 — pré-split encoding é o erro #1 de leakage.
+
 ## Regras CRÍTICAS
 
 - **ZERO DATA LEAKAGE.** Fit apenas no train.
