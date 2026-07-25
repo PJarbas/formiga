@@ -57,6 +57,20 @@ const ARENA_AGENTS: ArenaAgentConfig[] = [
       "Read the EDA and Feature Engineering summaries to understand feature types and data quality. " +
       "Never ignore the MANDATORY Complexity Gates — they exist because the benchmark penalizes overfit.",
   },
+  {
+    id: "modeler-creative",
+    agentPersona: "arena-modeler-creative",
+    timeout: AGENT_TIMEOUT_SECONDS,
+    strategyHint:
+      "You are the creative team. Your explicit goal is DIVERSITY: produce decorrelated models " +
+      "that the other two teams would not, so the final ensemble dominates. Target Spearman OOF " +
+      "correlation < 0.85 vs the current top-1. Explore: Denoising Autoencoders (swap noise 15-30%), " +
+      "standalone entity embeddings, aggressive mRMR (~20 features forcing decorrelation), " +
+      "target permutation (null importance), LightGBM monotonic constraints from the EDA, " +
+      "Bayesian/Dirichlet blending, SHAP-interaction materialization. DO NOT repeat standard " +
+      "approaches the other teams already cover. If an iteration does not produce a decorrelated " +
+      "model, stop early. Only runs on MEDIUM/LARGE datasets.",
+  },
 ];
 
 // ── Benchmark config reader ─────────────────────────────────────────────
