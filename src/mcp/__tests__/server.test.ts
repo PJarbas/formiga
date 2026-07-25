@@ -12,6 +12,11 @@ vi.mock("../services/index.js", () => ({
   LeaderboardService: vi.fn().mockImplementation(() => ({
     getTop: vi.fn().mockResolvedValue([]),
   })),
+  ArenaService: vi.fn().mockImplementation(() => ({
+    getSession: vi.fn().mockResolvedValue(null),
+    getRounds: vi.fn().mockResolvedValue([]),
+    getConvergence: vi.fn().mockResolvedValue([]),
+  })),
 }));
 
 describe("McpServer", () => {
@@ -75,7 +80,7 @@ describe("McpServer", () => {
       expect(response.result).toHaveProperty("tools");
 
       const tools = (response.result as { tools: unknown[] }).tools;
-      expect(tools.length).toBe(4);
+      expect(tools.length).toBe(6);
     });
 
     it("handles tools/call request", async () => {
