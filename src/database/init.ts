@@ -4,13 +4,22 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { getPrisma } from "./prisma.js";
+import { getDb } from "./connection.js";
+import { migrate } from "./migrations.js";
 
 /** Run once before the dashboard or CLI main path starts.
  *  Ensures WAL mode, foreign keys, and the singleton stats row exist.
- *  Prisma migrations already created the schema, but SQLite PRAGMAs
- *  and seed rows (formiga_stats) need a raw-query pass.
+ *  Also runs the DDL migrate() — this is the ONLY place new columns/tables
+ *  (e.g. RF-7 observability columns) get applied to an existing physical DB,
+ *  since there is no prisma/migrations folder (prisma migrate deploy is a
+ *  no-op). Without this, prisma.step.createMany fails on missing columns
+ *  after a schema change (see run 367d0f4e follow-up).
  */
 export async function initDatabase(): Promise<void> {
+  // Apply DDL migrations (idempotent) before any Prisma write so the
+  // physical schema matches the generated Prisma client.
+  migrate(getDb());
+
   const prisma = getPrisma();
 
   // SQLite-specific pragmas (not available via Prisma DSL for SQLite)
