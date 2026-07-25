@@ -16,8 +16,11 @@ import {
   LogDecisionHandler,
   ReportMetricHandler,
   QueryLeaderboardHandler,
+  QueryArenaHandler,
 } from "./tools/index.js";
-import { ArtifactService, LeaderboardService } from "./services/index.js";
+import { ArtifactService, LeaderboardService, ArenaService } from "./services/index.js";
+import { ArenaRepositoryImpl } from "../arena/arena-repository.js";
+import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { logger } from "../lib/logger.js";
 
 interface McpServerConfig {
@@ -62,6 +65,7 @@ export class McpServer {
   private registerDefaultTools(): void {
     const artifactService = new ArtifactService();
     const leaderboardService = new LeaderboardService();
+    const arenaService = new ArenaService(new ArenaRepositoryImpl(), new LeaderboardRepositoryImpl());
 
     const tools: IToolHandler[] = [
       new SaveArtifactHandler(artifactService, this.queue),
@@ -69,6 +73,7 @@ export class McpServer {
       new LogDecisionHandler(artifactService, this.queue),
       new ReportMetricHandler(artifactService, this.queue),
       new QueryLeaderboardHandler(leaderboardService),
+      new QueryArenaHandler(arenaService),
     ];
 
     for (const handler of tools) {

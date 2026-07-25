@@ -161,6 +161,67 @@ export interface LeaderboardEntry {
 }
 
 /**
+ * Arena service interface — read-only access to the competition state
+ * (session, per-round experiments, convergence series). Distinct from
+ * ILeaderboardService (ranking) by ISP: arena is its own domain.
+ */
+export interface IArenaService {
+  /** The arena session for a run (best metric, rounds, convergence counters). */
+  getSession(runId: string): Promise<ArenaSessionView | null>;
+  /** All experiments grouped by round, oldest round first. */
+  getRounds(runId: string): Promise<ArenaRoundView[]>;
+  /** Convergence series: every measured metric point, ordered by time. */
+  getConvergence(runId: string): Promise<ConvergencePoint[]>;
+}
+
+/** Read model: the competition-level state of an arena run. */
+export interface ArenaSessionView {
+  metricName: string;
+  metricDirection: string;
+  targetMetric: number | null;
+  currentRound: number;
+  maxRounds: number;
+  bestMetric: number | null;
+  bestAgent: string | null;
+  baselineMetric: number | null;
+  status: string;
+  totalKeep: number;
+  totalDiscard: number;
+  totalCrash: number;
+  consecutiveNoImprove: number;
+}
+
+/** Read model: one round's experiments. */
+export interface ArenaRoundView {
+  round: number;
+  experiments: ArenaExperimentView[];
+}
+
+/** Read model: one experiment within a round. */
+export interface ArenaExperimentView {
+  experimentId: number;
+  agentName: string;
+  modelType: string;
+  metric: number | null;
+  decision: string | null;
+  confidenceScore: number | null;
+  confidenceBand: string | null;
+  hypothesis: string | null;
+  learned: string | null;
+  durationMs: number | null;
+  status: string;
+}
+
+/** Read model: one point in the convergence series. */
+export interface ConvergencePoint {
+  round: number;
+  agent: string;
+  metric: number;
+  decision: string | null;
+  timestamp: string;
+}
+
+/**
  * MCP Server configuration
  */
 export interface McpServerConfig {

@@ -8,3 +8,4 @@ export { ReadArtifactHandler } from "./read-artifact.js";
 export { LogDecisionHandler } from "./log-decision.js";
 export { ReportMetricHandler } from "./report-metric.js";
 export { QueryLeaderboardHandler } from "./query-leaderboard.js";
+export { QueryArenaHandler } from "./query-arena.js";
