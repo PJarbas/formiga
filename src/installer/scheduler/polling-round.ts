@@ -31,7 +31,7 @@ import {
   resolveWorkflowWorkspaceDir,
 } from "../paths.js";
 import { readPort as readDashboardPort } from "../../server/daemonctl.js";
-import { completeStep, recoverOrphanedStepsForAgent } from "../step-ops.js";
+import { completeStep, claimStep, recoverOrphanedStepsForAgent } from "../step-ops.js";
 import { recordRoundSummary } from "./activity-recorder.js";
 import type { WorkflowAgent, WorkflowSpec } from "../types.js";
 import { findHermesBinary } from "./binary-discovery.js";
@@ -203,6 +203,39 @@ async function updateStepObservability(stepId: string, update: StepObservability
 }
 
 // ── Auto-complete + orphan recovery ───────────────────────────────────
+
+/**
+ * Stamp the harness pid/pgid on a pre-claimed step (RF-2). claimStep ran
+ * without a pid (the harness pid is unknown until spawn); this closes the
+ * gap so RF-3 orphan-reclaim can probe claim_pid liveness. Best-effort.
+ */
+async function stampClaimPid(stepId: string, pid: number, pgid: number): Promise<void> {
+  const prisma = getPrisma();
+  try {
+    await prisma.step.update({
+      where: { id: stepId },
+      data: { claim_pid: pid, claim_pgid: pgid, claim_updated_at: new Date() },
+    });
+  } catch (err) {
+    logger.debug("stampClaimPid failed", { stepId, pid, error: String(err) });
+  }
+}
+
+/**
+ * Release a pre-claimed step back to pending when the scheduler claimed it
+ * but will not spawn the harness (e.g. empty prompt guard). Best-effort.
+ */
+async function releaseClaim(stepId: string): Promise<void> {
+  const prisma = getPrisma();
+  try {
+    await prisma.step.updateMany({
+      where: { id: stepId, status: "running", claim_pid: null },
+      data: { status: "pending", updated_at: new Date() },
+    });
+  } catch (err) {
+    logger.debug("releaseClaim failed", { stepId, error: String(err) });
+  }
+}
 
 /**
  * Auto-complete fallback (safety net). Invoked when output classifies as
@@ -673,11 +706,43 @@ export async function executePollingRound(
       });
     }
 
+    // RF-2 (complete): the scheduler claims the step BEFORE spawning the
+    // harness, so the agent never runs `step claim` via the CLI (removes
+    // the class of bugs where a model mistypes the command). claimStep is
+    // atomic (updateMany WHERE status=pending), so concurrent jobs of the
+    // same agent can't double-claim. Claim without the harness pid here
+    // (the harness pid is unknown until onSpawn); set it on the step in
+    // onSpawn so RF-3 (orphan reclaim by dead claim_pid) works.
+    let claimedStepId: string | undefined;
+    let work: { stepId: string; input: string } | undefined;
+    if (hasPendingWork) {
+      try {
+        const claim = await claimStep(job.agentId, job.runId);
+        if (claim.found && claim.stepId && claim.resolvedInput != null) {
+          claimedStepId = claim.stepId;
+          work = { stepId: claim.stepId, input: claim.resolvedInput };
+        } else {
+          // Race: work vanished between pre-check and claim. Let the agent
+          // emit HEARTBEAT_OK via the fallback prompt (no `work`).
+          logger.debug("Polling round — claim race (no work at claim time)", {
+            ...context,
+            reason: "claim_race",
+          });
+        }
+      } catch (err) {
+        logger.warn("Polling round — claimStep threw; falling back to CLI claim", {
+          ...context,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     const pollingPrompt = await buildPollingPrompt(
       job.workflowId,
       job.agentId,
       job.runId,
       agentPersonaInstructions,
+      work,
     );
 
     // Guard against empty prompts which cause pi to hang waiting for stdin
@@ -686,6 +751,10 @@ export async function executePollingRound(
         ...context,
         reason: "empty_prompt",
       });
+      // Release the claim if we took one but won't spawn (empty prompt).
+      if (claimedStepId) {
+        void releaseClaim(claimedStepId).catch(() => {});
+      }
       inFlightJobs.delete(job.id);
       return;
     }
@@ -696,6 +765,12 @@ export async function executePollingRound(
 
     const onSpawn = ({ pid, pgid }: { pid: number; pgid: number }) => {
       setInFlightChild(job.id, { pid, pgid, killed: false });
+      // RF-2: we claimed without a pid; now that the harness pid is known,
+      // stamp it on the step so RF-3 (orphan reclaim by dead claim_pid)
+      // can detect a dead owner. Best-effort; never block spawn on it.
+      if (claimedStepId) {
+        void stampClaimPid(claimedStepId, pid, pgid).catch(() => {});
+      }
       emitEvent({
         ts: new Date().toISOString(),
         event: "agent.spawned",
