@@ -1,44 +1,44 @@
-# Formiga — Arquitetura e Visão Geral
+# Formiga — Architecture & Overview
 
-> **Formiga** é uma plataforma multi-agente que automatiza o ciclo completo de experimentação de Machine Learning — EDA, engenharia de features, treinamento, tuning e relatório final — através de agentes de IA que competem numa "Arena" estruturada.
+> **Formiga** is a multi-agent platform that automates the full Machine Learning experimentation cycle — EDA, feature engineering, training, tuning, and final reporting — through AI agents that compete in a structured "Arena".
 
-Este é o único documento de referência do projeto. Ele descreve o problema que o Formiga resolve, sua arquitetura, o servidor MCP, a comunicação entre agentes, a corrida da Arena e como os resultados são produzidos.
-
----
-
-## Sumário
-
-1. [O problema que resolve](#1-o-problema-que-resolve)
-2. [Arquitetura em camadas](#2-arquitetura-em-camadas)
-3. [Workflows e o step "arena"](#3-workflows-e-o-step-arena)
-4. [Scheduler e orquestração (claim-based)](#4-scheduler-e-orquestração-claim-based)
-5. [Banco de dados](#5-banco-de-dados)
-6. [Servidor MCP (formiga-agent-tools)](#6-servidor-mcp-formiga-agent-tools)
-7. [Comunicação entre agentes](#7-comunicação-entre-agentes)
-8. [A corrida da Arena](#8-a-corrida-da-arena)
-9. [Auditor pré-escrita (gates de qualidade)](#9-auditor-pré-escrita-gates-de-qualidade)
-10. [Agentes e seus papéis](#10-agentes-e-seus-papéis)
-11. [Dashboard e APIs](#11-dashboard-e-apis)
-12. [Padrões arquiteturais](#12-padrões-arquiteturais)
+This is the project's single reference document. It describes the problem Formiga solves, its architecture, the MCP server, agent communication, the Arena race, and how results are produced.
 
 ---
 
-## 1. O problema que resolve
+## Table of contents
 
-Cientistas de dados gastam até 80% do tempo em tarefas repetitivas: explorar dados, engenharia de features, ajustar hiperparâmetros, comparar modelos. O Formiga automatiza esse ciclo ponta a ponta spawnando um time de agentes de IA autônomos que trabalham como um esquadrão colaborativo de ciência de dados — explorando, experimentando, competindo numa Arena estruturada, e entregando modelos prontos para produção.
-
-**Principais características:**
-- **Experimentação paralela:** agentes de ML clássico, de ponta e criativo competem simultaneamente.
-- **Melhoria iterativa (Arena):** o loop de modelagem roda múltiplas rodadas, adaptando-se aos aprendizados das rodadas anteriores.
-- **Rigor estatístico:** todo experimento é auditado antes de entrar no ledger — significância (Nadeau-Bengio), overfitting, leakage de calibração, integridade do dataset.
-- **Auditabilidade total:** cada decisão de feature, arquitetura de modelo e hiperparâmetro é registrada num ledger append-only.
-- **Dashboard ao vivo:** acompanhe o DAG de execução, features engenheiradas e o ranking do leaderboard em tempo real.
-
-**Stack:** Node.js 22+ (ESM, TypeScript), SQLite (via Prisma + `node:sqlite` nativo), React 19 (dashboard). O Formiga **não** chama LLMs diretamente — ele spawnia harnesses de agente externos (`pi-coding-agent` ou `hermes`) como processos filhos.
+1. [The problem it solves](#1-the-problem-it-solves)
+2. [Layered architecture](#2-layered-architecture)
+3. [Workflows and the "arena" step](#3-workflows-and-the-arena-step)
+4. [Scheduler and orchestration (claim-based)](#4-scheduler-and-orchestration-claim-based)
+5. [Database](#5-database)
+6. [MCP server (formiga-agent-tools)](#6-mcp-server-formiga-agent-tools)
+7. [Agent communication](#7-agent-communication)
+8. [The Arena race](#8-the-arena-race)
+9. [Pre-write auditor (quality gates)](#9-pre-write-auditor-quality-gates)
+10. [Agents and their roles](#10-agents-and-their-roles)
+11. [Dashboard and APIs](#11-dashboard-and-apis)
+12. [Architectural patterns](#12-architectural-patterns)
 
 ---
 
-## 2. Arquitetura em camadas
+## 1. The problem it solves
+
+Data scientists spend up to 80% of their time on repetitive tasks: exploring data, engineering features, tuning hyperparameters, comparing models. Formiga automates this cycle end to end by spawning a team of autonomous AI agents that work like a collaborative data science squad — exploring, experimenting, competing in a structured Arena, and delivering production-ready models.
+
+**Key features:**
+- **Parallel experimentation:** classic, advanced, and creative ML agents compete simultaneously.
+- **Iterative improvement (Arena):** the modeling loop runs multiple rounds, adapting based on prior rounds' learnings.
+- **Statistical rigor:** every experiment is audited before entering the ledger — significance (Nadeau-Bengio), overfitting, calibration leakage, dataset integrity.
+- **Full auditability:** every feature decision, model architecture, and hyperparameter is recorded in an append-only ledger.
+- **Live dashboard:** watch the execution DAG, engineered features, and leaderboard rankings in real time.
+
+**Stack:** Node.js 22+ (ESM, TypeScript), SQLite (via Prisma + native `node:sqlite`), React 19 (dashboard). Formiga does **not** call LLMs directly — it spawns external agent harnesses (`pi-coding-agent` or `hermes`) as child processes.
+
+---
+
+## 2. Layered architecture
 
 ```
 CLI (bin/formiga) ─────────────────────┐
@@ -48,150 +48,150 @@ CLI (bin/formiga) ────────────────────�
             ┌──────────────────────────┼──────────────────────────┐
             │                          │                          │
    Daemon / Scheduler          Agent Harness (pi/hermes)    Dashboard API (:3334)
-   (orchestra o DAG,           (spawna os agentes de IA)     (React SPA + REST + MCP)
+   (orchestrates the DAG,      (spawns the AI agents)       (React SPA + REST + MCP)
     cron + event-driven)            │                          │
             │                        ▼                          │
-            │              Agentes de IA (data-analyst,         │
+            │              AI Agents (data-analyst,             │
             │              feature-engineer, modelers,          │
-            │              reporter) ──gravam/leem──► SQLite ◄──┘
+            │              reporter) ──write/read──► SQLite ◄───┘
             ▼
-   Arena Engine (competição multi-round)
+   Arena Engine (multi-round competition)
 ```
 
-O Formiga é leve, assíncrono e resiliente. Não há mensageria direta entre agentes (sem Redis/RabbitMQ/SSE entre eles) — **todo handoff é pelo SQLite compartilhado**. Os agentes são processos isolados que gravam e leem do banco; o scheduler coordena quem executa o quê.
+Formiga is lightweight, asynchronous, and resilient. There is no direct messaging between agents (no Redis/RabbitMQ/SSE between them) — **every handoff goes through the shared SQLite**. Agents are isolated processes that write to and read from the database; the scheduler coordinates who executes what.
 
-**Portas padrão:**
-- **Dashboard + MCP:** `3334` (o MCP roda embutido no dashboard na rota `/mcp`, não tem porta própria).
-- **Control plane:** `3339` (scheduling run-scoped, separado).
+**Default ports:**
+- **Dashboard + MCP:** `3334` (MCP runs embedded in the dashboard at the `/mcp` route; it has no port of its own).
+- **Control plane:** `3339` (run-scoped scheduling, separate).
 
 ---
 
-## 3. Workflows e o step "arena"
+## 3. Workflows and the "arena" step
 
-Um workflow é declarado em YAML (`workflows/<id>/workflow.yml`) definindo `agents` (com workspace, skills e persona files `AGENTS.md`/`IDENTITY.md`/`SOUL.md`) e `steps` (um DAG linear, com `parallel_group` para paralelismo). Os inputs dos steps usam template substitution (`{{dataset_path}}`, `{{run_id}}`, etc.).
+A workflow is declared in YAML (`workflows/<id>/workflow.yml`) defining `agents` (with workspace, skills, and persona files `AGENTS.md`/`IDENTITY.md`/`SOUL.md`) and `steps` (a linear DAG, with `parallel_group` for parallelism). Step inputs use template substitution (`{{dataset_path}}`, `{{run_id}}`, etc.).
 
-### ml-autoresearch (workflow principal)
+### ml-autoresearch (primary workflow)
 
 ```
 eda → features → arena → report
 ```
 
-- **`eda`** (data-analyst): EDA rigorosa, gera `eda_report` + `eda_config`.
-- **`features`** (feature-engineer): produz `features.parquet`, `split.pkl`, baseline, `benchmark_config.json`, `benchmark_runner.py`.
-- **`arena`** (step especial): **não é executado por um agente único** — o runner detecta `step_id === "arena"` e invoca o `runArena()` (o engine de competição). Marcado como `max_retries: 0`.
-- **`report`** (reporter): consolida a competição e escreve o relatório final.
+- **`eda`** (data-analyst): rigorous EDA, produces `eda_report` + `eda_config`.
+- **`features`** (feature-engineer): produces `features.parquet`, `split.pkl`, baseline, `benchmark_config.json`, `benchmark_runner.py`.
+- **`arena`** (special step): **not executed by a single agent** — the runner detects `step_id === "arena"` and invokes `runArena()` (the competition engine). Marked `max_retries: 0`.
+- **`report`** (reporter): consolidates the competition and writes the final report.
 
-### ml-pipeline (workflow legado)
+### ml-pipeline (legacy workflow)
 
 ```
 eda → features → (model-classic ∥ model-advanced) → audit
 ```
 
-Os dois modelers usam `parallel_group: modelers` para competir concorrentemente; o `audit` (agente `ml-critic`) só é claimable após ambos completarem.
+The two modelers use `parallel_group: modelers` to compete concurrently; `audit` (the `ml-critic` agent) is only claimable after both complete.
 
-### Detecção do step "arena"
+### Arena step detection
 
-`src/installer/scheduler/direct-spawn.ts` intercepta o step `arena`: em vez de spawnar o harness, chama `launchArenaFromStep()` (em `src/arena/arena-workflow.ts`), que monta o `ArenaConfig` do `run.context` + `benchmark_config.json`, executa `runArena()`, e então `completeStep()` para avançar o pipeline. O step arena também é **excluído do circuit de heartbeat-failure** (o dono é o arena-engine, não o polling).
+`src/installer/scheduler/direct-spawn.ts` intercepts the `arena` step: instead of spawning the harness, it calls `launchArenaFromStep()` (in `src/arena/arena-workflow.ts`), which builds the `ArenaConfig` from `run.context` + `benchmark_config.json`, runs `runArena()`, and then `completeStep()` to advance the pipeline. The arena step is also **excluded from the heartbeat-failure circuit** (its owner is the arena engine, not the polling loop).
 
 ---
 
-## 4. Scheduler e orquestração (claim-based)
+## 4. Scheduler and orchestration (claim-based)
 
-O trabalho é distribuído por um modelo **claim-based por polling, run-scoped**. Cada agente tem um cron job (run_id, agent_id) que periodicamente pergunta "tem trabalho?" e atomicamente "claima" um step.
+Work is distributed by a **polling-based, run-scoped claim model**. Each agent has a cron job (run_id, agent_id) that periodically asks "is there work?" and atomically "claims" a step.
 
-### Ciclo de um tick (`src/installer/scheduler/polling-round.ts`)
+### A tick's lifecycle (`src/installer/scheduler/polling-round.ts`)
 
-1. **In-flight guard** (race-safe, síncrono antes de qualquer await) — previne spawns duplicados.
-2. **Verificação de trabalho pendente** — consulta steps `pending`/`waiting` no (run, agent); se vazio, aplica heartbeat backoff e retorna.
-3. **Pre-claim** — `claimStep()` ANTES de spawnar o harness (remove a classe de bug onde o modelo erra o comando de discovery/claim — o step já vem claimado e injetado no prompt).
-4. **Spawn do harness** — `pi --print` ou `hermes`, com stdout streamado em disco (previne OOM). `onSpawn` registra pid/pgid para recovery de órfãos.
-5. **Classificação do output** — `heartbeat` / `work_done` / `other_output`.
-6. **Auto-complete fallback** — se o output tem `STATUS: done` mas o agente não chamou o CLI, completa o step automaticamente.
+1. **In-flight guard** (race-safe, synchronous before any await) — prevents duplicate spawns.
+2. **Pending-work check** — queries `pending`/`waiting` steps for the (run, agent); if empty, applies heartbeat backoff and returns.
+3. **Pre-claim** — `claimStep()` BEFORE spawning the harness (eliminates the bug class where the model mistypes the discovery/claim command — the step is already claimed and injected into the prompt).
+4. **Harness spawn** — `pi --print` or `hermes`, with stdout streamed to disk (prevents OOM). `onSpawn` records pid/pgid for orphan recovery.
+5. **Output classification** — `heartbeat` / `work_done` / `other_output`.
+6. **Auto-complete fallback** — if the output contains `STATUS: done` but the agent didn't call the CLI, the step is completed automatically.
 
-### Claim atômico (`src/installer/steps/claim.ts`)
+### Atomic claim (`src/installer/steps/claim.ts`)
 
-`claimStep()` roda SQL raw (Prisma não expressa o self-join): seleciona steps `pending` do (agent, run) onde **não existe step anterior** (`step_index <`) com status fora de `done`/`skipped` — garantindo progressão serial do pipeline. Duas exceções:
-- **`verify_each`:** loop step `running` sem `current_story_id` não bloqueia verify.
-- **`parallel_group`:** siblings do mesmo grupo não se bloqueiam (paralelismo).
+`claimStep()` runs raw SQL (Prisma can't express the self-join): it selects `pending` steps for the (agent, run) where **no previous step** (`step_index <`) has a status other than `done`/`skipped` — enforcing serial pipeline progression. Two exceptions:
+- **`verify_each`:** a `running` loop step with no `current_story_id` doesn't block verify.
+- **`parallel_group`:** siblings in the same group don't block each other (parallelism).
 
-O claim é atômico via `updateMany WHERE status='pending'` — workers concorrentes não double-claim. Para steps `loop` (`over: stories`), atomicamente avança para a próxima story `pending`.
+The claim is atomic via `updateMany WHERE status='pending'` — concurrent workers can't double-claim. For `loop` steps (`over: stories`), it atomically advances to the next `pending` story.
 
 ### Event-driven acceleration
 
-`postAdvanceSpawn()` (`src/installer/steps/complete.ts`) chama `spawnAgentsForPendingSteps()` (`src/installer/scheduler/direct-spawn.ts`) — quando um step completa, o próximo é despachado imediatamente (<1s), sem esperar o próximo tick de cron. Fallback para cron se o direct-spawn falhar.
+`postAdvanceSpawn()` (`src/installer/steps/complete.ts`) calls `spawnAgentsForPendingSteps()` (`src/installer/scheduler/direct-spawn.ts`) — when a step completes, the next one is dispatched immediately (<1s) instead of waiting for the next cron tick. Falls back to cron if direct-spawn fails.
 
-### Recuperação e observabilidade
+### Recovery and observability
 
-- **Stale-claim sweeper:** recupera claims de processos mortos (threshold `timeout * 1.5`).
-- **Heartbeat-failure circuit:** após N heartbeats consecutivos sem progresso, falha o step terminalmente — exceto o step `arena`.
-- **Colunas de observabilidade** em `Step`: `claim_job_id`/`claim_pid`/`claim_pgid`/`claim_updated_at`, `consecutive_heartbeats`, `spawn_count`, `last_outcome`/`last_outcome_at`.
-- **Medic:** watchdog que detecta steps presos, runs zumbi, e auto-remedia.
+- **Stale-claim sweeper:** reclaims steps from dead processes (threshold `timeout * 1.5`).
+- **Heartbeat-failure circuit:** after N consecutive heartbeats with no progress, fails the step terminally — except the `arena` step.
+- **Observability columns** on `Step`: `claim_job_id`/`claim_pid`/`claim_pgid`/`claim_updated_at`, `consecutive_heartbeats`, `spawn_count`, `last_outcome`/`last_outcome_at`.
+- **Medic:** a watchdog that detects stuck steps, zombie runs, and auto-remediates.
 
 ---
 
-## 5. Banco de dados
+## 5. Database
 
-**Engine:** SQLite em `~/.formiga/formiga.db` (overridável via `FORMIGA_DB_PATH`). Conexão singleton com `PRAGMA journal_mode=WAL` e `PRAGMA foreign_keys=ON`.
+**Engine:** SQLite at `~/.formiga/formiga.db` (overridable via `FORMIGA_DB_PATH`). Singleton connection with `PRAGMA journal_mode=WAL` and `PRAGMA foreign_keys=ON`.
 
-### Models principais (`prisma/schema.prisma`)
+### Main models (`prisma/schema.prisma`)
 
-| Model | Propósito |
+| Model | Purpose |
 |---|---|
-| **`Run`** | Uma execução inteira de workflow. Tem `status`, `context` (JSON compartilhado), `tokens_spent`, campos de scheduling. |
-| **`Step`** | Unidade de trabalho de um agente. `step_id` lógico, `agent_id`, `step_index`, `input_template`, `expects`, `status` (waiting/pending/running/done/failed/skipped), `type` (single/loop), `parallel_group`, campos de claim e observabilidade. |
-| **`Story`** | Unidade de iteração dentro de um step `loop` (`over: stories`). |
-| **`Experiment`** | **Dobra como leaderboard + arena journal** (uma linha por experimento, verdict append-only). Métricas ricas, campos de journal (fold_scores, content_hash, notes, verdict_locked_at), `decision` (keep/discard/crash/baseline/checks_failed), `status` (PENDING/SUCCESS/FAILED/AUDITED/OVERFITTED). |
-| **`ArenaSession`** | Estado da competição (1:1 com Run): métrica, best, rounds, contadores de convergência. |
-| **`AgentArtifact`** | Artefatos JSON persistidos pelos agentes via `save_artifact`. Unique em `(run_id, artifact_key)`. |
-| **`AgentEvent`** | Log de atividade: tool calls, thinking, step events, round summaries. |
-| **`DatasetSignature`** | Hash de colunas+rows para warm-start cross-run. |
+| **`Run`** | A full workflow execution. Has `status`, `context` (shared JSON), `tokens_spent`, scheduling fields. |
+| **`Step`** | A unit of work for an agent. Logical `step_id`, `agent_id`, `step_index`, `input_template`, `expects`, `status` (waiting/pending/running/done/failed/skipped), `type` (single/loop), `parallel_group`, claim and observability fields. |
+| **`Story`** | An iteration unit inside a `loop` step (`over: stories`). |
+| **`Experiment`** | **Doubles as leaderboard + arena journal** (one row per experiment, append-only verdict). Rich metrics, journal fields (fold_scores, content_hash, notes, verdict_locked_at), `decision` (keep/discard/crash/baseline/checks_failed), `status` (PENDING/SUCCESS/FAILED/AUDITED/OVERFITTED). |
+| **`ArenaSession`** | Competition state (1:1 with Run): metric, best, rounds, convergence counters. |
+| **`AgentArtifact`** | JSON artifacts persisted by agents via `save_artifact`. Unique on `(run_id, artifact_key)`. |
+| **`AgentEvent`** | Activity log: tool calls, thinking, step events, round summaries. |
+| **`DatasetSignature`** | Hash of columns+rows for cross-run warm-start. |
 
-Outros: `AutoresearchSession`, `RunWorktree` (isolamento git), `SpecApproval`/`ChecklistState` (UX), `JobRegistry` (polling jobs para crash recovery), `FormigaStat` (tokens globais), `MedicCheck` (health checks).
+Others: `AutoresearchSession`, `RunWorktree` (git isolation), `SpecApproval`/`ChecklistState` (UX), `JobRegistry` (polling jobs for crash recovery), `FormigaStat` (global tokens), `MedicCheck` (health checks).
 
-### Migrations — duas camadas idempotentes
+### Migrations — two idempotent layers
 
-Não há pasta `prisma/migrations`; `prisma migrate deploy` é no-op. O schema é aplicado por DDL bruto via introspecção `PRAGMA table_info` (additive — `ALTER TABLE ADD COLUMN` só se a coluna não existe):
+There is no `prisma/migrations` folder; `prisma migrate deploy` is a no-op. The schema is applied via raw DDL with `PRAGMA table_info` introspection (additive — `ALTER TABLE ADD COLUMN` only if the column doesn't exist):
 
-- `src/database/migrations.ts` — `migrate(db)`: cria `runs`, `steps`, `stories`, `arena_sessions`, `agent_events`, etc.
-- `src/leaderboard/schema.ts` — `initLeaderboardSchema(db)`: cria `experiments` + migrations additivas em arrays (`ARENA_COLUMNS`, `JOURNAL_LEDGER_COLUMNS`, etc.).
-- `src/database/init.ts` — `initDatabase()`: roda `migrate(getDb())` uma vez no startup, antes de qualquer write Prisma.
+- `src/database/migrations.ts` — `migrate(db)`: creates `runs`, `steps`, `stories`, `arena_sessions`, `agent_events`, etc.
+- `src/leaderboard/schema.ts` — `initLeaderboardSchema(db)`: creates `experiments` + additive migrations in arrays (`ARENA_COLUMNS`, `JOURNAL_LEDGER_COLUMNS`, etc.).
+- `src/database/init.ts` — `initDatabase()`: runs `migrate(getDb())` once at startup, before any Prisma write.
 
 ---
 
-## 6. Servidor MCP (formiga-agent-tools)
+## 6. MCP server (formiga-agent-tools)
 
-O Formiga expõe um servidor **MCP** (Model Context Protocol, JSON-RPC 2.0) embutido no dashboard (`src/mcp/server.ts`), na rota `/mcp`. É a extensão que os agentes usam para interagir com o Formiga — gravar e ler artefatos, registrar decisões, reportar métricas, consultar leaderboard e arena. **Toda interação agente→Formiga é por tool**, nunca por `curl`.
+Formiga exposes an **MCP** (Model Context Protocol, JSON-RPC 2.0) server embedded in the dashboard (`src/mcp/server.ts`), at the `/mcp` route. It is the extension agents use to interact with Formiga — writing and reading artifacts, logging decisions, reporting metrics, querying the leaderboard and the arena. **Every agent→Formiga interaction is a tool call**, never `curl`.
 
-### As 6 tools (`src/mcp/tools/`)
+### The 6 tools (`src/mcp/tools/`)
 
-| Tool | Modo | O que faz |
+| Tool | Mode | What it does |
 |---|---|---|
-| **`save_artifact`** | fire-and-forget | Persiste JSON estruturado no dashboard (`key` + `data`, max 500KB). |
-| **`read_artifact`** | síncrono | Lê um artefato por `key`, ou lista todos os artefatos do run se `key` omitido. Contraparte de leitura do `save_artifact`. |
-| **`log_decision`** | fire-and-forget | Audit trail de decisões (`model_selection`, `feature_drop`, `hyperparameter`, etc.). Salva como artifact com key sequencial. |
-| **`report_metric`** | fire-and-forget | Reporta uma métrica numérica (`name` + `value` + `tags`). Salva como artifact `metric_<name>`. |
-| **`query_leaderboard`** | síncrono | Retorna o top-N de experimentos (CV, train, gap, round) para o agente decidir a próxima abordagem. |
-| **`query_arena`** | síncrono | Lê o estado da arena: `view` = `session` (best, rounds, convergência), `rounds` (experimentos por rodada), ou `convergence` (série temporal de métricas). |
+| **`save_artifact`** | fire-and-forget | Persists structured JSON to the dashboard (`key` + `data`, max 500KB). |
+| **`read_artifact`** | synchronous | Reads an artifact by `key`, or lists all artifacts for the run if `key` is omitted. The read counterpart to `save_artifact`. |
+| **`log_decision`** | fire-and-forget | Audit trail of decisions (`model_selection`, `feature_drop`, `hyperparameter`, etc.). Saved as an artifact with a sequential key. |
+| **`report_metric`** | fire-and-forget | Reports a numeric metric (`name` + `value` + `tags`). Saved as a `metric_<name>` artifact. |
+| **`query_leaderboard`** | synchronous | Returns the top-N experiments (CV, train, gap, round) so the agent can decide its next approach. |
+| **`query_arena`** | synchronous | Reads arena state: `view` = `session` (best, rounds, convergence), `rounds` (experiments per round), or `convergence` (metric time series). |
 
 **Design (SOLID):**
-- **ISP** — interfaces segregadas: `IArtifactService`, `ILeaderboardService`, `IArenaService` (arena ≠ ranking).
-- **DIP** — services recebem repositórios injetados; mapeiam linhas internas para read models estáveis (sem vazar `ExperimentRow`).
-- **SRP** — handlers só validam (allowlist) + formatam; services só mapeiam.
-- **Segurança** — entradas validadas por allowlist (ex: `view` ∈ {session, rounds, convergence}), regex de keys, limites de tamanho.
+- **ISP** — segregated interfaces: `IArtifactService`, `ILeaderboardService`, `IArenaService` (arena ≠ ranking).
+- **DIP** — services receive injected repositories; they map internal rows to stable read models (no `ExperimentRow` leakage).
+- **SRP** — handlers only validate (allowlist) + format; services only map.
+- **Security** — inputs validated by allowlist (e.g. `view` ∈ {session, rounds, convergence}), key regex, size limits.
 
-O `ToolContext` (runId/stepId/agentId) é extraído de `params._meta` ou env vars `FORMIGA_RUN_ID`/`FORMIGA_STEP_ID`/`FORMIGA_AGENT_ID`.
+The `ToolContext` (runId/stepId/agentId) is extracted from `params._meta` or the env vars `FORMIGA_RUN_ID`/`FORMIGA_STEP_ID`/`FORMIGA_AGENT_ID`.
 
 ---
 
-## 7. Comunicação entre agentes
+## 7. Agent communication
 
-A comunicação é **pelo banco de dados (SQLite), não por mensagens diretas**. Múltiplos canais:
+Communication happens **through the database (SQLite), not via direct messages**. Multiple channels:
 
-### 7.1 Artefatos (`save_artifact` / `read_artifact`) — canal primário
+### 7.1 Artifacts (`save_artifact` / `read_artifact`) — primary channel
 
-Cada agente grava JSON estruturado na tabela `agent_artifacts` (`eda_report`, `features_report`, `benchmark_config`, `modeler-classic_report_roundN`, `arena_report`, etc.); o downstream lê via `read_artifact` ou HTTP GET. Os personas declaram explicitamente: **"os artefatos do banco são a fonte da verdade"** — arquivos `.md` legados são opcionais. PROIBIDO usar `curl` para escrever ou ler artefatos.
+Each agent writes structured JSON to the `agent_artifacts` table (`eda_report`, `features_report`, `benchmark_config`, `modeler-classic_report_roundN`, `arena_report`, etc.); downstream agents read it via `read_artifact` or HTTP GET. Personas explicitly declare: **"bank artifacts are the source of truth"** — legacy `.md` files are optional. Using `curl` to write or read artifacts is forbidden.
 
-Pipeline de handoff narrativo:
+Narrative handoff pipeline:
 ```
 data-analyst ──save_artifact("eda_report")──► SQLite ──read_artifact──► feature-engineer
 feature-engineer ──save_artifact("features_report")──► SQLite ──read_artifact──► modelers
@@ -199,179 +199,179 @@ modelers ──save_artifact("modeler-X_report_roundN")──► SQLite ──re
 reporter ──save_artifact("arena_report")──► SQLite
 ```
 
-### 7.2 `Run.context` — contexto compartilhado
+### 7.2 `Run.context` — shared context
 
-JSON string do run, populado com variáveis de template (`dataset_path`, `target_column`, `workspace`, etc.) lidas pelos steps. O `arena-workflow.ts` lê `run.context` para montar o `ArenaConfig`.
+A JSON string for the run, populated with template variables (`dataset_path`, `target_column`, `workspace`, etc.) read by steps. `arena-workflow.ts` reads `run.context` to build the `ArenaConfig`.
 
 ### 7.3 `Experiment.notes` — cross-pollination
 
-Canal de sugestões dirigidas **ao outro time**, distinto de `learned` (reflexão própria). O `arena-engine` injeta as `notes` dos times adversários no prompt do próximo round como "### Sugestões do Outro Time". O modeler-creative tem `notes` obrigatório — é seu canal principal de contribuição para o ensemble.
+A channel for suggestions directed **at the other team**, distinct from `learned` (own reflection). The arena engine injects the other teams' `notes` into the next round's prompt as "### Sugestões do Outro Time" (Suggestions from the Other Team). modeler-creative has `notes` as required — it is its main channel of contribution to the ensemble.
 
-### 7.4 `query_leaderboard` / `query_arena` — leitura síncrona do estado
+### 7.4 `query_leaderboard` / `query_arena` — synchronous state reads
 
-Os modelers consultam o leaderboard antes de decidir a próxima abordagem; o reporter consulta o estado da arena (session/rounds/convergence) para o relatório final.
+Modelers query the leaderboard before deciding their next approach; the reporter queries arena state (session/rounds/convergence) for the final report.
 
-### 7.5 Warm-start cross-run
+### 7.5 Cross-run warm-start
 
-`leaderboardRepo.getBestByDatasetSignature(signature, 3)` injeta os 3 melhores resultados passados para o mesmo dataset (via `dataset_signature`) no round 1 — transfer learning entre runs.
+`leaderboardRepo.getBestByDatasetSignature(signature, 3)` injects the 3 best past results for the same dataset (via `dataset_signature`) into round 1 — transfer learning across runs.
 
 ### 7.6 CLI `formiga message`
 
-Existe um canal secundário agent→agent via `sendMessage`/`listMessages`/`readMessage` (persistido como artifacts), mas não é referenciado nos personas do ml-autoresearch — o handoff por artefatos é o canal canônico.
+There is a secondary agent→agent channel via `sendMessage`/`listMessages`/`readMessage` (persisted as artifacts), but it is not referenced in the ml-autoresearch personas — artifact handoff is the canonical channel.
 
 ---
 
-## 8. A corrida da Arena
+## 8. The Arena race
 
-O engine de competição (`src/arena/arena-engine.ts`, `runArena()`) é o coração do ml-autoresearch. Três times de modelers competem por múltiplas rodadas para atingir a melhor métrica.
+The competition engine (`src/arena/arena-engine.ts`, `runArena()`) is the heart of ml-autoresearch. Three teams of modelers compete across multiple rounds to achieve the best metric.
 
 ### Setup
 
-1. Cria a `ArenaSession` no banco.
-2. Estabelece o baseline lendo `benchmark_config.json` (ou rodando o benchmark com `baseline.pkl`).
-3. Lê o contexto do dataset uma vez; deriva o compute budget do tier de complexidade (RF-#90).
-4. **Tier gate:** se o dataset é `medium`/`large`, usa os 3 times; senão filtra o `modeler-creative` (ROI negativo em TINY/SMALL).
-5. **Warm-start:** injeta os 3 melhores resultados passados para este dataset.
-6. Carrega o `content_hash` (MD5 de features‖split‖config) como âncora de integridade intra-run.
+1. Creates the `ArenaSession` in the database.
+2. Establishes the baseline by reading `benchmark_config.json` (or running the benchmark with `baseline.pkl`).
+3. Reads the dataset context once; derives the compute budget from the complexity tier (RF-#90).
+4. **Tier gate:** if the dataset is `medium`/`large`, uses all 3 teams; otherwise filters out `modeler-creative` (negative ROI on TINY/SMALL).
+5. **Warm-start:** injects the 3 best past results for this dataset.
+6. Loads the `content_hash` (MD5 of features‖split‖config) as the intra-run integrity anchor.
 
-### Loop de rodadas (até `max_rounds`)
+### Round loop (up to `max_rounds`)
 
-Para cada rodada:
+For each round:
 
-1. **`buildPromptsForRound()`** — monta o prompt por agente com: histórico próprio, resultados `keep`/`baseline` dos outros times, **notes cross-pollination**, dicas de warm-start (round 1), regras de saída JSON (`_results.json`), e o contrato de métricas ricas.
+1. **`buildPromptsForRound()`** — builds the per-agent prompt with: its own history, the other teams' `keep`/`baseline` results, **cross-pollination notes**, warm-start hints (round 1), JSON output rules (`_results.json`), and the rich-metrics contract.
 
-2. **Fan-out paralelo** — `runAgentsParallel()` spawna todos os times ativos simultaneamente (`pi --print --mode json` com a extensão `formiga-agent-tools`). Cada agente gera um script Python autônomo que treina e avalia um modelo.
+2. **Parallel fan-out** — `runAgentsParallel()` spawns all active teams simultaneously (`pi --print --mode json` with the `formiga-agent-tools` extension). Each agent generates a standalone Python script that trains and evaluates a model.
 
-3. **Medição sequencial** (contention de recursos) — para cada agente:
-   - Escreve o script Python gerado em `artifacts/models/<agent>_round<N>.py`.
-   - `trainScript()` spawna `python3` detached (process group) com prelude `RLIMIT_CPU` e env vars de budget. Timeout = min(180s, budget). Kill tree graceful: SIGTERM → SIGKILL após 2s.
-   - `extractMetric()` parseia `<metric_name>: <valor>` do stdout/stderr.
-   - `tryLoadRichMetrics()` lê o `_results.json` sidecar: `fold_scores`, `train_score`, `oof_path`/`prod_path`, `brier_*`, `ece_calibrated`, `n_unique_probs`, `notes`, `category`.
+3. **Sequential measurement** (resource contention) — for each agent:
+   - Writes the generated Python script to `artifacts/models/<agent>_round<N>.py`.
+   - `trainScript()` spawns `python3` detached (process group) with an `RLIMIT_CPU` prelude and budget env vars. Timeout = min(180s, budget). Graceful tree kill: SIGTERM → SIGKILL after 2s.
+   - `extractMetric()` parses `<metric_name>: <value>` from stdout/stderr.
+   - `tryLoadRichMetrics()` reads the `_results.json` sidecar: `fold_scores`, `train_score`, `oof_path`/`prod_path`, `brier_*`, `ece_calibrated`, `n_unique_probs`, `notes`, `category`.
 
-4. **Pré-write audit** — `auditExperiment()` (ver §9) roda ANTES de persistir; pode rejeitar, baixar para `warn`, ou manter `keep`.
+4. **Pre-write audit** — `auditExperiment()` (see §9) runs BEFORE persisting; it may reject, downgrade to `warn`, or keep `keep`.
 
-5. **Persistência** — `registerArena()` grava o `Experiment` com todos os campos do journal (incluindo `verdict_locked_at` — ledger append-only).
+5. **Persistence** — `registerArena()` writes the `Experiment` with all journal fields (including `verdict_locked_at` — append-only ledger).
 
-6. **Promoção** — só `keep`/`baseline` (estatisticamente significativos) promovem `bestMetric`/`bestAgent` e resetam o contador de no-improve. As `fold_scores` do novo best são capturadas para o próximo teste Nadeau-Bengio.
+6. **Promotion** — only `keep`/`baseline` (statistically significant) entries promote `bestMetric`/`bestAgent` and reset the no-improve counter. The new best's `fold_scores` are captured for the next Nadeau-Bengio test.
 
-### Convergência
+### Convergence
 
-Para em `target_reached` (métrica alvo atingida), `converged` (`consecutiveNoImprove >= maxNoImprove`), ou `max_rounds`.
+Stops at `target_reached` (target metric hit), `converged` (`consecutiveNoImprove >= maxNoImprove`), or `max_rounds`.
 
-### Os três times (territórios segregados)
+### The three teams (segregated territories)
 
-| Time | Território | Anti-invasão |
+| Team | Territory | Anti-invasion |
 |---|---|---|
-| **modeler-classic** | GBM (XGB/LGBM/CatBoost), linear, trees, SVM/KNN, Stacking L1 | Sem NN/AutoML |
-| **modeler-advanced** | MLP, TabNet, FT-Transformer, TabPFN, AutoML, Stacking multi-nível, Entity Embeddings | Sem GBM/linear padrão |
-| **modeler-creative** | DAE, mRMR agressivo, target permutation, monotonic constraints, blending Bayesiano, SHAP interactions | Sem abordagens padrão; meta é **decorrelação** (Spearman OOF corr <0.85 vs top-1) |
+| **modeler-classic** | GBM (XGB/LGBM/CatBoost), linear, trees, SVM/KNN, Stacking L1 | No NN/AutoML |
+| **modeler-advanced** | MLP, TabNet, FT-Transformer, TabPFN, AutoML, multi-level Stacking, Entity Embeddings | No standard GBM/linear |
+| **modeler-creative** | DAE, aggressive mRMR, target permutation, monotonic constraints, Bayesian blending, SHAP interactions | No standard approaches; goal is **decorrelation** (Spearman OOF corr <0.85 vs top-1) |
 
-Cada time tem budget de até 5 iterações e regra de early-stop: se a iteração N não venceu o best com significância e não há hipótese diferenciada, para.
+Each team has a budget of up to 5 iterations and an early-stop rule: if iteration N didn't beat the best with significance and there's no differentiated hypothesis, stop.
 
 ---
 
-## 9. Auditor pré-escrita (gates de qualidade)
+## 9. Pre-write auditor (quality gates)
 
-`src/arena/audit.ts` — `auditExperiment()` é uma função pura que roda **antes** de o experimento entrar no ledger (análogo ao `auto_critic` síncrono). Verdicts: `keep` | `warn` | `rejected`.
+`src/arena/audit.ts` — `auditExperiment()` is a pure function that runs **before** the experiment enters the ledger (the synchronous `auto_critic` equivalent). Verdicts: `keep` | `warn` | `rejected`.
 
-### Gates em ordem (primeiro REJECTED para)
+### Gates in order (first REJECTED stops)
 
-| Gate | Tag | Regra |
+| Gate | Tag | Rule |
 |---|---|---|
-| **G7** dedup | `budget` | `(team, model_type, hyperparams, metric)` idêntico a entrada anterior → `[dedup]`. Não persiste, não consome slot. |
-| **G6** budget | `budget` | Time atingiu `maxIterationsPerTeam` (5) → `[budget]`. Ainda persiste para transparência. |
-| **G2** content_hash | `stale` | `contentHash` do experimento ≠ hash da sessão → `[stale]` (dataset regerado). |
-| **G3** no_folds | `no_folds` | `fold_scores` ausente ou <2 → `[no_folds]` (sem folds não dá Nadeau-Bengio). |
+| **G7** dedup | `budget` | `(team, model_type, hyperparams, metric)` identical to a prior entry → `[dedup]`. Not persisted, doesn't consume a slot. |
+| **G6** budget | `budget` | Team reached `maxIterationsPerTeam` (5) → `[budget]`. Still persisted for transparency. |
+| **G2** content_hash | `stale` | Experiment `contentHash` ≠ session hash → `[stale]` (dataset was regenerated). |
+| **G3** no_folds | `no_folds` | `fold_scores` missing or <2 → `[no_folds]` (no folds means no Nadeau-Bengio). |
 | **G1** overfit | `overfit` | `|train - val| > threshold(tier)` (TINY=0.06, SMALL=0.05, MEDIUM/LARGE=0.03). |
-| **G4** cal_leak | `cal_leak` | OOF com <50 probs únicas (saturação) OU ECE <1e-6 (suspeitosamente perfeito — calibrador fitado no OOF). |
-| **G5** too_good | warning | AUC univariada ≥0.99 (provável proxy do target). Não rejeita. |
-| **G8** significance | warning | Nadeau-Bengio p≥0.05 OU delta<0.5pp → downgrade para `warn` (fica no ledger, não promove). |
+| **G4** cal_leak | `cal_leak` | OOF with <50 unique probs (saturation) OR ECE <1e-6 (suspiciously perfect — calibrator fit on OOF). |
+| **G5** too_good | warning | Univariate AUC ≥0.99 (likely a target proxy). Does not reject. |
+| **G8** significance | warning | Nadeau-Bengio p≥0.05 OR delta<0.5pp → downgrade to `warn` (stays in the ledger, not promoted). |
 
-### Nadeau-Bengio (significância)
+### Nadeau-Bengio (significance)
 
-Teste-t corrigido por overlap de folds (Nadeau & Bengio 2003): `correction = 1/n + (n-1)/n`. Critério "estatisticamente justo": `keep` só se `p < 0.05` **E** `delta ≥ 0.5pp`. Implementação própria de t-Student (regularized incomplete beta via continued-fraction) — sem dependência estatística externa.
+A fold-overlap-corrected t-test (Nadeau & Bengio 2003): `correction = 1/n + (n-1)/n`. "Statistically just" criterion: `keep` only if `p < 0.05` **AND** `delta ≥ 0.5pp`. Custom t-Student implementation (regularized incomplete beta via continued-fraction) — no external stats dependency.
 
-### Ledger append-only
+### Append-only ledger
 
-`registerArena()` seta `verdict_locked_at` no insert. Depois disso, `reject`/`autoAudit`/`updateTestMetric` lançam erro (imutabilidade do verdict). `setDatasetSignature` é exempt (metadata pré-verdict). Campos de display ficam separados dos campos de ledger.
+`registerArena()` sets `verdict_locked_at` on insert. After that, `reject`/`autoAudit`/`updateTestMetric` throw (verdict immutability). `setDatasetSignature` is exempt (pre-verdict metadata). Display fields are kept separate from ledger fields.
 
-### Ensemble Nelder-Mead
+### Nelder-Mead ensemble
 
-`nelderMeadEnsembleWeights(nModels, score)` otimiza pesos sobre o simplex Δⁿ (weights ≥0, soma 1) para blend de OOFs. Usado pelo reporter — não é um gate do auditor.
-
----
-
-## 10. Agentes e seus papéis
-
-Cada agente tem persona files em `workflows/ml-autoresearch/agents/<id>/` (`AGENTS.md` + `IDENTITY.md` + `SOUL.md`).
-
-1. **data-analyst** — EDA rigorosa, read-only (não treina). 9 seções obrigatórias no relatório. Técnicas: Mutual Information, Cramer's V, Theil's U, point-biserial (leakage flag >0.70), Kolmogorov-Smirnov (drift), Fisher skewness. ≥5 hipóteses acionáveis. Salva `eda_report` + `eda_config`.
-
-2. **feature-engineer** — consome EDA, produz a matriz canônica + split + baseline + scripts de benchmark. **Único criador de splits.** Compute budget derivado do tier. `content_hash` MD5. **Feature Quality Gate** com 10 gates bloqueantes (colinearidade, VIF, **adversarial validation** >0.80 = abort, too-good, estabilidade Nogueira, missing, dimensionalidade, leakage CV-interno, near-zero variance, re-execução bit-idêntica). Target encoding leakage-proof (fit-per-fold). OOT holdout como métrica oficial de produção. Salva `features_report`.
-
-3. **arena-modeler-classic** — ML clássico (GBM, linear, trees, SVM, stacking L1). Calibração leakage-proof (IsotonicRegression fit em train, predict em OOF — nunca `iso.fit(oof,y).predict(oof)`). Sem `scale_pos_weight`/`class_weight` para AUC. `_results.json` obrigatório com `fold_scores` + `train_score`. `_prod.pkl` = 1 modelo refitado em 100% não-OOT. Salva `modeler-classic_report_roundN` com `notes`.
-
-4. **arena-modeler-advanced** — ML de ponta (MLP, TabNet, FT-Transformer, TabPFN, AutoML, stacking multi-nível, entity embeddings). Reinstanciar modelo do zero a cada fold (`set_seed(42 + fold)`), nunca compartilhar pesos. Auto-rejeição se `train_val_gap > 0.08`. Mesmas regras de calibração/prod/notes.
-
-5. **arena-modeler-creative** — terceiro time, **diversidade**. Métrica de sucesso é decorrelação (Spearman OOF corr <0.85 vs top-1). Território: DAE (swap noise), mRMR agressivo, target permutation, monotonic constraints, blending Bayesiano, SHAP interactions. Só ativo em MEDIUM/LARGE. `notes` obrigatório (cross-pollination é seu canal principal). Salva `modeler-creative_report_roundN` com métrica de decorrelação.
-
-6. **reporter** — consolida a competição, escreve o relatório final. Read-only para artefatos de modelo. **Ensemble final por Nelder-Mead/SLSQP** sobre OOF dos top-5 mais decorrelacionados (descarta pares |corr|≥0.95). **OOT holdout como métrica oficial de produção** (carrega `_prod.pkl` do vencedor, prediz no OOT, computa AUC/Brier/ECE; se AUC OOT cai >5pp vs CV → concept drift severo). Distinção single vs ensemble pelo critério "estatisticamente justo". Salva `arena_report` + `competition_timeline`.
+`nelderMeadEnsembleWeights(nModels, score)` optimizes weights over the simplex Δⁿ (weights ≥0, sum to 1) for OOF blending. Used by the reporter — not an auditor gate.
 
 ---
 
-## 11. Dashboard e APIs
+## 10. Agents and their roles
 
-**Porta 3334** (default, overridável via `--port`/`FORMIGA_DASHBOARD_URL`). HTTP server node nativo (sem framework) servindo uma SPA React (buildada por Vite) + REST API + servidor MCP embutido.
+Each agent has persona files in `workflows/ml-autoresearch/agents/<id>/` (`AGENTS.md` + `IDENTITY.md` + `SOUL.md`).
 
-### O que mostra
+1. **data-analyst** — rigorous EDA, read-only (no training). 9 required report sections. Techniques: Mutual Information, Cramer's V, Theil's U, point-biserial (leakage flag >0.70), Kolmogorov-Smirnov (drift), Fisher skewness. ≥5 actionable hypotheses. Saves `eda_report` + `eda_config`.
 
-- **Pipeline Flow** — DAG gráfico ao vivo da execução dos agentes; clique num nó revela insights, código gerado e logs.
-- **Leaderboard** — ranking de todos os modelos com métricas task-adaptive (classification: accuracy/f1/precision/recall/AUC; regression: RMSE/MAE/R²). Mostra a classe real do algoritmo (ex: `LogisticRegression (Poly)`).
-- **Command Center** — controle de runs (pause/resume/cancel), logs ao vivo (SSE).
-- **Winner Consolidation** — coroa o vencedor e compila o relatório final quando a Arena converge.
+2. **feature-engineer** — consumes EDA, produces the canonical matrix + split + baseline + benchmark scripts. **The sole creator of splits.** Compute budget derived from the tier. `content_hash` MD5. **Feature Quality Gate** with 10 blocking gates (colinearity, VIF, **adversarial validation** >0.80 = abort, too-good, Nogueira stability, missing, dimensionality, CV-internal leakage, near-zero variance, bit-identical re-execution). Leakage-proof target encoding (fit-per-fold). OOT holdout as the official production metric. Saves `features_report`.
 
-### Endpoints principais
+3. **arena-modeler-classic** — classic ML (GBM, linear, trees, SVM, Stacking L1). Leakage-proof calibration (IsotonicRegression fit on train, predict on OOF — never `iso.fit(oof,y).predict(oof)`). No `scale_pos_weight`/`class_weight` for AUC. `_results.json` required with `fold_scores` + `train_score`. `_prod.pkl` = 1 model refit on 100% non-OOT. Saves `modeler-classic_report_roundN` with `notes`.
 
-- `GET /api/runs`, `/api/runs/:id` — lista/detalhe de runs.
-- `GET /api/runs/:id/agent-artifacts/:key` — ler artefato (usado por `read_artifact`).
-- `POST /api/runs/:id/agent-artifacts/:key` — salvar artefato (usado por `save_artifact`).
-- `GET /api/leaderboard`, `/api/leaderboard/agent-history`, `/api/leaderboard/current-best` — queries do leaderboard.
-- `GET /api/arena/:runId/{session,rounds,convergence}` — estado da arena.
-- `GET /api/events`, `/api/logs-tail` — eventos globais (SSE).
-- `POST/GET/DELETE /mcp`, `GET /mcp/info` — servidor MCP embutido.
+4. **arena-modeler-advanced** — advanced ML (MLP, TabNet, FT-Transformer, TabPFN, AutoML, multi-level stacking, entity embeddings). Re-instantiate the model from scratch each fold (`set_seed(42 + fold)`), never share weights. Auto-reject if `train_val_gap > 0.08`. Same calibration/prod/notes rules.
 
-### Control plane (porta 3339)
+5. **arena-modeler-creative** — the third team, **diversity**. Its success metric is decorrelation (Spearman OOF corr <0.85 vs top-1). Territory: DAE (swap noise), aggressive mRMR, target permutation, monotonic constraints, Bayesian blending, SHAP interactions. Only active on MEDIUM/LARGE. `notes` required (cross-pollination is its main channel). Saves `modeler-creative_report_roundN` with the decorrelation metric.
 
-API de scheduling run-scoped separada — qual agente está polling, dispatch de work sessions. CLI: `formiga control-plane start|stop|status`.
+6. **reporter** — consolidates the competition, writes the final report. Read-only for model artifacts. **Final ensemble via Nelder-Mead/SLSQP** over the OOFs of the top-5 most decorrelated (drops pairs with |corr|≥0.95). **OOT holdout as the official production metric** (loads the winner's `_prod.pkl`, predicts on OOT, computes AUC/Brier/ECE; if OOT AUC drops >5pp vs CV → severe concept drift). Single vs ensemble distinction via the "statistically just" criterion. Saves `arena_report` + `competition_timeline`.
 
 ---
 
-## 12. Padrões arquiteturais
+## 11. Dashboard and APIs
 
-| Padrão | Aplicação |
+**Port 3334** (default, overridable via `--port`/`FORMIGA_DASHBOARD_URL`). Native Node HTTP server (no framework) serving a React SPA (built with Vite) + REST API + the embedded MCP server.
+
+### What it shows
+
+- **Pipeline Flow** — live graphical DAG of agent execution; clicking a node reveals insights, generated code, and logs.
+- **Leaderboard** — ranking of all models with task-adaptive metrics (classification: accuracy/f1/precision/recall/AUC; regression: RMSE/MAE/R²). Shows the real algorithm class (e.g. `LogisticRegression (Poly)`).
+- **Command Center** — run control (pause/resume/cancel), live logs (SSE).
+- **Winner Consolidation** — crowns the winner and compiles the final report when the Arena converges.
+
+### Main endpoints
+
+- `GET /api/runs`, `/api/runs/:id` — list/detail of runs.
+- `GET /api/runs/:id/agent-artifacts/:key` — read artifact (used by `read_artifact`).
+- `POST /api/runs/:id/agent-artifacts/:key` — save artifact (used by `save_artifact`).
+- `GET /api/leaderboard`, `/api/leaderboard/agent-history`, `/api/leaderboard/current-best` — leaderboard queries.
+- `GET /api/arena/:runId/{session,rounds,convergence}` — arena state.
+- `GET /api/events`, `/api/logs-tail` — global events (SSE).
+- `POST/GET/DELETE /mcp`, `GET /mcp/info` — embedded MCP server.
+
+### Control plane (port 3339)
+
+A separate run-scoped scheduling API — which agent is polling, dispatch of work sessions. CLI: `formiga control-plane start|stop|status`.
+
+---
+
+## 12. Architectural patterns
+
+| Pattern | Application |
 |---|---|
-| **Claim-based scheduling** | Steps no banco com `status: pending`; agents atomically claimam via `updateMany WHERE status='pending'`. Race-safe, crash-safe. |
-| **Repository Pattern** | `LeaderboardRepositoryImpl`/`ArenaRepositoryImpl` isolam o SQLite da lógica de negócio. |
-| **Interface Segregation (ISP)** | `LeaderboardReadonly`/`ArenaReadonly` separados das interfaces de escrita; `IArenaService` segregado de `ILeaderboardService`. |
-| **Dependency Inversion** | Services recebem repositórios injetados; handlers dependem de interfaces de service. |
-| **Additive Migration** | `PRAGMA table_info()` introspection — `ALTER TABLE ADD COLUMN` só se a coluna não existe. Bancos antigos não quebram. |
-| **Template Substitution** | Chaves `{{...}}` resolvidas no YAML para passar caminhos/contexto entre steps. |
-| **Sidecar JSON** | `_results.json` separado do stdout — o harness normaliza o stdout e pode descartar linhas; o sidecar é o canal determinístico. |
-| **Ledger append-only** | `Experiment` com `verdict_locked_at` — o verdict é imutável após commit. |
-| **Pre-write audit** | Gates de qualidade rodam ANTES de persistir, não depois. |
-| **Determinism** | `random_state=42` obrigatório; `split.pkl` imutável; re-execução bit-idêntica verificada por MD5. |
-| **Read-only audit** | Agentes de auditoria/report não mutam artefatos de modelo. |
-| **Territory segregation** | Os 3 times da arena têm territórios distintos para maximizar diversidade. |
+| **Claim-based scheduling** | Steps in the DB with `status: pending`; agents atomically claim via `updateMany WHERE status='pending'`. Race-safe, crash-safe. |
+| **Repository Pattern** | `LeaderboardRepositoryImpl`/`ArenaRepositoryImpl` isolate SQLite from business logic. |
+| **Interface Segregation (ISP)** | `LeaderboardReadonly`/`ArenaReadonly` separate from write interfaces; `IArenaService` segregated from `ILeaderboardService`. |
+| **Dependency Inversion** | Services receive injected repositories; handlers depend on service interfaces. |
+| **Additive Migration** | `PRAGMA table_info()` introspection — `ALTER TABLE ADD COLUMN` only if the column doesn't exist. Old databases don't break. |
+| **Template Substitution** | `{{...}}` keys resolved in the YAML to pass paths/context between steps. |
+| **Sidecar JSON** | `_results.json` separate from stdout — the harness normalizes stdout and may drop lines; the sidecar is the deterministic channel. |
+| **Append-only ledger** | `Experiment` with `verdict_locked_at` — the verdict is immutable after commit. |
+| **Pre-write audit** | Quality gates run BEFORE persisting, not after. |
+| **Determinism** | `random_state=42` required; `split.pkl` immutable; bit-identical re-execution verified by MD5. |
+| **Read-only audit** | Audit/report agents don't mutate model artifacts. |
+| **Territory segregation** | The 3 arena teams have distinct territories to maximize diversity. |
 
 ---
 
-## Decisões técnicas que sustentam o sistema
+## Technical decisions that support the system
 
-1. **Dataset signature é computada no runner, não nos agentes** — garante determinismo e que todos usam a mesma signature (warm-start cross-run).
-2. **Workspace isolado por run** — evita poluição do diretório raiz e permite auditoria.
-3. **Baseline definido pelo feature-engineer, não pelos modelers** — garante um piso honesto e comparável.
-4. **Leaderboard usa `val_metric` como score primário** — o auditor/o reporter podem avaliar com teste/OOT depois, mas a classificação é por validação.
-5. **Schema é additive** — novas colunas podem ser adicionadas sem destruir bancos antigos.
-6. **MCP embutido no dashboard** — uma única porta serve SPA + REST + MCP; sem serviço separado.
-7. **Toda leitura é tool** — `read_artifact`, `query_leaderboard`, `query_arena`; zero `curl` nos personas.
-8. **O `Experiment` é o journal** — uma tabela dobra como leaderboard e ledger append-only, em vez de duas fontes de verdade.
+1. **Dataset signature is computed in the runner, not in the agents** — guarantees determinism and that everyone uses the same signature (cross-run warm-start).
+2. **Per-run isolated workspace** — avoids polluting the root directory and enables auditing.
+3. **Baseline defined by the feature-engineer, not by the modelers** — guarantees an honest, comparable floor.
+4. **Leaderboard uses `val_metric` as the primary score** — the auditor/reporter can later evaluate with test/OOT, but ranking is by validation.
+5. **Schema is additive** — new columns can be added without destroying old databases.
+6. **MCP embedded in the dashboard** — a single port serves SPA + REST + MCP; no separate service.
+7. **Every read is a tool** — `read_artifact`, `query_leaderboard`, `query_arena`; zero `curl` in the personas.
+8. **`Experiment` is the journal** — one table doubles as leaderboard and append-only ledger, instead of two sources of truth.
