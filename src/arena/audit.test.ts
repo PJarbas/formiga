@@ -9,6 +9,7 @@ import {
   nadeauBengio,
   twoSidedTsf,
   overfitGapThreshold,
+  classifyAdversarialAuc,
   dedupSignature,
   type AuditInput,
   type ComplexityTier,
@@ -278,5 +279,32 @@ describe("overfitGapThreshold", () => {
     const tiny = overfitGapThreshold("TINY" as ComplexityTier);
     const medium = overfitGapThreshold("MEDIUM" as ComplexityTier);
     assert.ok(tiny > medium, "TINY should be more permissive than MEDIUM");
+  });
+});
+
+describe("classifyAdversarialAuc", () => {
+  it("classifies AUC <= 0.55 as iid", () => {
+    assert.equal(classifyAdversarialAuc(0.50), "iid");
+    assert.equal(classifyAdversarialAuc(0.55), "iid");
+  });
+
+  it("classifies 0.55–0.70 as drift", () => {
+    assert.equal(classifyAdversarialAuc(0.60), "drift");
+    assert.equal(classifyAdversarialAuc(0.70), "drift");
+  });
+
+  it("classifies 0.70–0.80 as warn (drop leaked columns)", () => {
+    assert.equal(classifyAdversarialAuc(0.75), "warn");
+    assert.equal(classifyAdversarialAuc(0.80), "warn");
+  });
+
+  it("classifies > 0.80 as fail (abort features step)", () => {
+    assert.equal(classifyAdversarialAuc(0.81), "fail");
+    assert.equal(classifyAdversarialAuc(0.99), "fail");
+  });
+
+  it("fails on non-finite AUC", () => {
+    assert.equal(classifyAdversarialAuc(NaN), "fail");
+    assert.equal(classifyAdversarialAuc(Infinity), "fail");
   });
 });
