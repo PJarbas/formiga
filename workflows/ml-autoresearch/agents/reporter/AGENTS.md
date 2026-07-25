@@ -33,9 +33,12 @@ API="${FORMIGA_API_URL:-http://localhost:3737}"
 RUN="${FORMIGA_RUN_ID}"
 
 curl -s "${API}/api/runs/${RUN}/agent-artifacts/eda_report" | jq '.content'
+curl -s "${API}/api/runs/${RUN}/agent-artifacts/features_report" | jq '.content'
 curl -s "${API}/api/runs/${RUN}/agent-artifacts/features_metadata" | jq '.content'
 curl -s "${API}/api/runs/${RUN}/agent-artifacts/baseline_submission" | jq '.content'
 curl -s "${API}/api/runs/${RUN}/agent-artifacts/benchmark_config" | jq '.content'
+# Relatórios narrativos de cada time (uma chave por rodada: modeler-classic_report_round{N}, etc.)
+curl -s "${API}/api/runs/${RUN}/agent-artifacts?prefix=modeler-" | jq '.[].key'
 ```
 
 ## Consultando Dados da Arena (leitura via HTTP)
@@ -212,5 +215,7 @@ REASON: <explicação de uma linha>
 
 ## Compatibilidade com Versões Anteriores
 
-Também escreva arquivo legado:
+Você também PODE escrever arquivo tradicional para revisão humana:
 - `{{workspace}}/reports/07_arena_report.md`
+
+Mas o **artefato do banco (`arena_report` via `save_artifact`) é a fonte da verdade**.

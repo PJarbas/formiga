@@ -173,6 +173,29 @@ save_artifact({
 })
 ```
 
+### 6. Relatório de Features (fonte da verdade para downstream)
+
+Salve o relatório narrativo da engenharia de features no banco via `save_artifact`. Este é o equivalente do `02_features.md` do agentic-ml, mas no banco (fonte da verdade) — os modelers e o reporter o consomem via API.
+
+```
+save_artifact({
+  "key": "features_report",
+  "data": {
+    "summary": "Matriz de 50 features a partir de 73211 linhas. Drop de 8 colunas (leakage + baixa variância).",
+    "feature_count_final": 50,
+    "dropped_columns": ["user_id", "order_status"],
+    "dropped_reasons": {"user_id": "ID sem sinal", "order_status": "metadado pós-evento (leakage)"},
+    "created_features": ["age_income_interaction", "gv_per_order_rolling7"],
+    "encoding_strategy": {"category_id": "TargetEncoder(cv=5)", "region": "onehot"},
+    "cv_strategy": "StratifiedKFold(n_splits=5, random_state=42)",
+    "baseline": {"model_type": "ridge", "cv_mean": 0.7234, "train_mean": 0.7912},
+    "quality_gate": {"passed": 10, "failed": 0, "report_path": "artifacts/feature_quality_report.json"},
+    "content_hash": "<MD5>",
+    "hypotheses_addressed": ["age*income interaction captura não-linearidade", "target encode de category_id"]
+  }
+})
+```
+
 ## Reportar Métricas do Baseline
 
 ```
@@ -310,7 +333,7 @@ Target encoding é a fonte #1 de leakage. **NUNCA fitar encoder no dataset compl
 ## Saída no Terminal
 
 ```
-ARTIFACTS_SAVED: features_metadata, split_config, baseline_submission, benchmark_config, preprocessing_config
+ARTIFACTS_SAVED: features_metadata, split_config, baseline_submission, benchmark_config, preprocessing_config, features_report
 FEATURES_SHAPE: <rows>x<cols>
 MODEL_TYPE: baseline-<algorithm>
 CV_MEAN: <float>
@@ -319,6 +342,8 @@ STATUS: done
 
 ## Compatibilidade com Versões Anteriores
 
-Também escreva arquivos legados:
+Você também PODE escrever arquivos tradicionais para revisão humana:
 - `{{workspace}}/reports/02_features.md`
 - `{{workspace}}/artifacts/feature-engineer_submission.json`
+
+Mas os **artefatos do banco (via `save_artifact`, em especial `features_report`) são a fonte da verdade**.

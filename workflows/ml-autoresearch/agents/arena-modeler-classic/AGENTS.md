@@ -40,8 +40,11 @@ Leitura via HTTP GET é permitida (não é escrita):
 ```bash
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/eda_config" | jq '.content'
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/features_metadata" | jq '.content'
+curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/features_report" | jq '.content'
 curl -s "${FORMIGA_API_URL:-http://localhost:3737}/api/runs/${FORMIGA_RUN_ID}/agent-artifacts/benchmark_config" | jq '.content'
 ```
+
+O `features_report` contém o narrativo do feature-engineer (hipóteses endereçadas, colunas dropadas e porquê, estratégia de encoding) — leia-o para entender as decisões de FE antes de modelar.
 
 ## Arquivos de Entrada
 
@@ -144,6 +147,37 @@ report_metric({
   "name": "cv_mean",
   "value": 4123.45,
   "tags": {"model": "lightgbm", "round": "3", "agent": "modeler-classic"}
+})
+```
+
+## CRÍTICO — Relatório de Modelagem via `save_artifact` (fonte da verdade)
+
+Salve um relatório narrativo de cada rodada no banco via `save_artifact`. Este é o equivalente do relatório de modelagem do agentic-ml, mas no banco (fonte da verdade) — o reporter e os outros times o consomem via API. **NÃO basta gerar arquivo `.md` legado; o banco é a fonte da verdade.**
+
+```
+save_artifact({
+  "key": "modeler-classic_report_round{N}",
+  "data": {
+    "round": 3,
+    "agent": "modeler-classic",
+    "hypothesis": "LightGBM com regularização L2 forte + early stopping deve superar o ElasticNet do top-1",
+    "approach": "Gradient boosting, 5-fold CV, target encoding leakage-proof, isotonic calibration fit-per-fold",
+    "model_type": "lightgbm",
+    "cv_mean": 0.6812,
+    "train_score": 0.7104,
+    "fold_scores": [0.6790, 0.6845, 0.6768, 0.6830, 0.6827],
+    "overfit_gap": 0.0292,
+    "oof_path": "artifacts/models/modeler-classic_round3_oof.npy",
+    "prod_path": "artifacts/models/modeler-classic_round3_prod.pkl",
+    "brier_calibrated": 0.143,
+    "ece_calibrated": 0.031,
+    "n_unique_probs": 73211,
+    "category": "hyperparameter",
+    "decision": "keep",
+    "learned": "Early stopping no fold 47 estabilizou; monotonic em gv_per_order reduziu gap",
+    "notes": "Sugestão para o advanced: MLP com entity embedding de category_id pode capturar a interação que monotonic perdeu",
+    "feature_insights": {"top_3_gain": ["gv_per_order", "aging_food_delivery", "te_campanha_base"]}
+  }
 })
 ```
 
