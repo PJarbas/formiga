@@ -61,6 +61,10 @@ export interface IBackgroundQueue {
 export interface IArtifactService {
   save(input: ArtifactInput): Promise<number>;
   getNextCounter(input: { runId: string; agentId: string; artifactKey: string }): Promise<number>;
+  /** Read a single artifact by (runId, key). Returns null if not found. */
+  getByKey(runId: string, artifactKey: string): Promise<ArtifactRecord | null>;
+  /** List all artifacts for a run, newest first. */
+  listByRun(runId: string): Promise<ArtifactRecord[]>;
 }
 
 /**
@@ -74,6 +78,19 @@ export interface ArtifactInput {
   content: Record<string, unknown>;
   contentType?: string;
   sizeBytes?: number;
+}
+
+/**
+ * A persisted artifact record (read model).
+ */
+export interface ArtifactRecord {
+  artifactKey: string;
+  agentId: string;
+  stepId: string;
+  content: Record<string, unknown>;
+  contentType: string;
+  sizeBytes: number | null;
+  createdAt: string;
 }
 
 /**
