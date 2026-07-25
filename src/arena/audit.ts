@@ -112,6 +112,29 @@ export function overfitGapThreshold(tier: ComplexityTier): number {
   }
 }
 
+// ── Adversarial validation (feature-engineer gate G3) ────────────────────
+
+export type AdversarialVerdict = "iid" | "drift" | "warn" | "fail";
+
+/**
+ * Classify an adversarial-validation AUC (a LightGBM trained to distinguish
+ * train vs holdout). Used by the feature-engineer's quality gate to decide
+ * whether the train/holdout split is defensible or leaking temporal/ID signal.
+ *
+ * Thresholds mirror the agentic-ml feature-engineer persona:
+ *   ≤ 0.55      iid   — train and holdout are indistinguishable (good)
+ *   0.55–0.70   drift — mild covariate drift (record, proceed)
+ *   0.70–0.80   warn  — drop leaked columns and re-run
+ *   > 0.80      fail  — severe drift / leakage, abort the features step
+ */
+export function classifyAdversarialAuc(auc: number): AdversarialVerdict {
+  if (!Number.isFinite(auc)) return "fail";
+  if (auc <= 0.55) return "iid";
+  if (auc <= 0.70) return "drift";
+  if (auc <= 0.80) return "warn";
+  return "fail";
+}
+
 // ── Nadeau-Bengio corrected resampled t-test (Nadeau & Bengio, 2003) ──────
 
 /**
