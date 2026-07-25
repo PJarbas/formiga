@@ -7,12 +7,13 @@
 import path from "node:path";
 import fs from "node:fs";
 import { spawn } from "node:child_process";
-import type { ArenaConfig, ArenaSession, ArenaStatus, AgentRoundResult, BenchmarkResult } from "./arena-types.js";
+import type { ArenaConfig, ArenaSession, ArenaStatus, AgentRoundResult, ArenaDecision, BenchmarkResult } from "./arena-types.js";
 import type { ArenaRepository } from "./arena-repository.js";
 import type { ArenaExperiment } from "../leaderboard/repository.js";
 import { makeDecision, isImprovement } from "./arena-decision.js";
 import { extractMetric } from "./arena-benchmark.js";
 import { readDatasetContext, formatDatasetContextForPrompt, type DatasetContext } from "./dataset-context.js";
+import { auditExperiment, dedupSignature, type ComplexityTier, type AuditInput } from "./audit.js";
 
 const SCRIPT_DIR = "artifacts/models";
 const BENCHMARK_TIMEOUT_MS = 120_000;
@@ -215,6 +216,25 @@ export async function runArena(
     } catch { /* best-effort: warm-start is optional */ }
   }
 
+  // ── content_hash: intra-run dataset integrity anchor ──
+  // MD5(features ‖ split ‖ config) computed by the feature-engineer. The
+  // auditor (gate G2) rejects experiments whose hash does not match the
+  // session's — catches stale-dataset submissions after features are rebuilt.
+  const sessionContentHash = readSessionContentHash(config.workspacePath);
+
+  // ── Best-fold-scores tracker for Nadeau-Bengio significance ──
+  // Holds the per-fold scores of the current best experiment (any team), so
+  // each new candidate can be statistically compared rather than judged by a
+  // raw scalar comparison. Populated when an experiment becomes the new best.
+  let bestFoldScores: number[] | null = null;
+
+  // ── Per-team experiment ledger (budget + dedup) ──
+  const teamExperimentCount = new Map<string, number>();
+  const existingDedupSignatures = new Set<string>();
+  // Max iterations per team: default 5 (agentic-ml budget). Configurable per
+  // agent via ArenaAgentConfig in a future iteration; today uniform.
+  const maxIterationsPerTeam = 5;
+
   // 3. Round loop
   for (let round = 1; round <= config.maxRounds; round++) {
     session.currentRound = round;
@@ -270,37 +290,131 @@ export async function runArena(
 
       const richMetrics = tryLoadRichMetrics(config.workspacePath, agent.id, round, datasetCtx.problemType);
 
-      // Register experiment in leaderboard
-      const experimentId = await leaderboardRepo.registerArena({
-        run_id: config.runId,
-        round_number: round,
-        agent_name: agent.id,
-        model_type: agent.modelType ?? agent.id,
-        model_algorithm: richMetrics.modelAlgorithm ?? agent.modelType ?? agent.id,
-        hyperparameters: richMetrics.hyperparameters ?? {},
-        hypothesis: output.hypothesis,
-        learned: output.learned,
-        next_focus: output.nextFocus,
-        measured_metric: bench.metric,
-        benchmark_stdout: bench.stdout,
-        benchmark_stderr: bench.stderr,
-        benchmark_exit_code: bench.exitCode,
-        decision,
-        duration_ms: bench.durationMs,
-        artifact_script: result.scriptPath,
-        metric_name: config.metricName,
-        artifact_path: result.scriptPath,
-        metric_bag: richMetrics.metricBag,
-        problem_type: datasetCtx.problemType,
-      });
-      result.experimentId = experimentId;
+      // ── Pre-write audit (agentic-ml auto_critic) ────────────────────────
+      // Run the blocking quality gates BEFORE persisting. The audit may
+      // override the raw `makeDecision` verdict: a metric that "improves" on
+      // the scalar comparison can still be REJECTED (overfit, stale dataset,
+      // no folds, cal leak, budget) or downgraded to `warn` (not statistically
+      // significant). REJECTED entries are still written to the ledger for
+      // transparency, with a structured rejection_reason.
+      const tier = mapTier(datasetCtx.complexityTier);
+      const isCrash = bench.exitCode !== 0 || bench.metric === null;
 
-      // Update session state
+      // Crashes skip the quality gates (nothing to audit) and are recorded
+      // directly as FAILED. A valid metric is run through the full auditor.
+      let auditedDecision: ArenaDecision;
+      let auditedStatus: string | undefined;
+      let rejectionReason: string | null = null;
+      let iterationTeam = (teamExperimentCount.get(agent.id) ?? 0) + 1;
+      let isDuplicate = false;
+
+      if (isCrash) {
+        auditedDecision = "crash";
+        auditedStatus = "FAILED";
+      } else {
+        const audit = auditExperiment({
+          metric: bench.metric as number,
+          trainScore: richMetrics.trainScore ?? null,
+          foldScores: richMetrics.foldScores ?? null,
+          bestFoldScores,
+          bestMetric: session.bestMetric,
+          contentHash: sessionContentHash,
+          sessionContentHash,
+          oofUniqueProbs: null, // populated by a future OOF-loader hook (ISSUE-05)
+          eceCalibrated: richMetrics.eceCalibrated ?? null,
+          maxUnivariateAuc: null, // populated by feature-engineer gate (ISSUE-07)
+          teamExperimentCount: teamExperimentCount.get(agent.id) ?? 0,
+          maxIterationsPerTeam,
+          problemType: datasetCtx.problemType,
+          tier,
+          direction: config.metricDirection,
+          dedupSignature: dedupSignature(
+            agent.id,
+            agent.modelType ?? agent.id,
+            richMetrics.hyperparameters ?? {},
+            bench.metric as number,
+          ),
+          existingDedupSignatures,
+        });
+        iterationTeam = audit.iterationTeam;
+
+        if (audit.verdict === "rejected") {
+          // REJECTED is recorded as discard + FAILED/OVERFITTED with a reason.
+          auditedDecision = audit.rejectionTag === "overfit" ? "checks_failed" : "discard";
+          auditedStatus = audit.rejectionTag === "overfit" ? "OVERFITTED" : "FAILED";
+          rejectionReason = audit.rejectionReason;
+          isDuplicate = audit.rejectionReason?.startsWith("[dedup]") ?? false;
+        } else if (audit.verdict === "warn") {
+          // Statistically non-significant: keep on the ledger but do not promote.
+          auditedDecision = "discard";
+          auditedStatus = "SUCCESS";
+        } else {
+          // keep — promoted as a new best candidate.
+          auditedDecision = session.bestMetric === null ? "baseline" : "keep";
+          auditedStatus = "AUDITED";
+        }
+      }
+
+      // A crash or budget-exceeded experiment still consumes a team slot
+      // (transparency); dedup does NOT consume a slot and is not persisted.
+      if (!isDuplicate) {
+        teamExperimentCount.set(agent.id, (teamExperimentCount.get(agent.id) ?? 0) + 1);
+      }
+
+      // Register experiment in leaderboard (skip persist for pure duplicates).
+      let experimentId: number | undefined;
+      if (!isDuplicate) {
+        experimentId = await leaderboardRepo.registerArena({
+          run_id: config.runId,
+          round_number: round,
+          agent_name: agent.id,
+          model_type: agent.modelType ?? agent.id,
+          model_algorithm: richMetrics.modelAlgorithm ?? agent.modelType ?? agent.id,
+          hyperparameters: richMetrics.hyperparameters ?? {},
+          hypothesis: output.hypothesis,
+          learned: output.learned,
+          next_focus: output.nextFocus,
+          measured_metric: bench.metric,
+          benchmark_stdout: bench.stdout,
+          benchmark_stderr: bench.stderr,
+          benchmark_exit_code: bench.exitCode,
+          decision: auditedDecision,
+          duration_ms: bench.durationMs,
+          artifact_script: result.scriptPath,
+          metric_name: config.metricName,
+          artifact_path: result.scriptPath,
+          metric_bag: richMetrics.metricBag,
+          problem_type: datasetCtx.problemType,
+          status: auditedStatus,
+          fold_scores: richMetrics.foldScores,
+          train_score: richMetrics.trainScore ?? null,
+          content_hash: sessionContentHash,
+          oof_artifact_key: richMetrics.oofArtifactKey ?? null,
+          prod_artifact_key: richMetrics.prodArtifactKey ?? null,
+          brier_raw: richMetrics.brierRaw ?? null,
+          brier_calibrated: richMetrics.brierCalibrated ?? null,
+          ece_calibrated: richMetrics.eceCalibrated ?? null,
+          notes: richMetrics.notes ?? null,
+          category: richMetrics.category ?? null,
+          iteration_team: iterationTeam,
+        });
+        // Track dedup signature for future iterations.
+        existingDedupSignatures.add(
+          dedupSignature(agent.id, agent.modelType ?? agent.id, richMetrics.hyperparameters ?? {}, bench.metric as number),
+        );
+      }
+      result.experimentId = experimentId;
+      result.decision = auditedDecision;
+
+      // Update session state — only a genuine `keep`/`baseline` (statistically
+      // significant) promotes the best and resets the no-improve counter.
       const improved = result.decision === "keep" || result.decision === "baseline";
       if (improved && result.metric !== null) {
         session.bestMetric = result.metric;
         session.bestAgent = agent.id;
         session.bestExperimentId = result.experimentId ?? null;
+        // Capture fold scores of the new best for the next Nadeau-Bengio test.
+        bestFoldScores = richMetrics.foldScores ?? null;
         consecutiveNoImprove = 0;
       } else {
         consecutiveNoImprove++;
@@ -444,13 +558,21 @@ function buildPromptsForRound(
       prompt += `    "precision": <float_ou_null_precision_macro>,\n`;
       prompt += `    "recall": <float_ou_null_recall_macro>,\n`;
       prompt += `    "roc_auc": <float_ou_null_roc_auc_ou_roc_auc_ovr>,\n`;
-      prompt += `    "log_loss": <float_ou_null_neg_log_loss_invertido_sinal>\n`;
+      prompt += `    "log_loss": <float_ou_null_neg_log_loss_invertido_sinal>,\n`;
+      prompt += `    "fold_scores": [<float>, ...],  // OBRIGATÓRIO: score de cada fold da CV (ex: [0.81, 0.79, 0.82, 0.80, 0.83]). Sem isso o experimento é rejeitado [no_folds].\n`;
+      prompt += `    "train_score": <float>,         // OBRIGATÓRIO: métrica no treino (para gate de overfitting). gap > threshold → rejeitado [overfit].\n`;
+      prompt += `    "oof_path": "<string_ou_null>",  // caminho do _oof.npy (probabilidades out-of-fold). Necessário p/ ensemble e detecção de cal-leak.\n`;
+      prompt += `    "prod_path": "<string_ou_null>", // caminho do _prod.pkl (modelo refitado em 100% não-OOT).\n`;
+      prompt += `    "brier_raw": <float_ou_null>,\n`;
+      prompt += `    "brier_calibrated": <float_ou_null>,\n`;
+      prompt += `    "ece_calibrated": <float_ou_null>,\n`;
+      prompt += `    "category": "<hyperparameter|feature_engineering|ensemble|model_selection|regularization|calibration>"\n`;
       prompt += `  }\n\n`;
       prompt += `  Exemplo de código para salvar o JSON no final do seu script:\n`;
       prompt += `  \`\`\`python\n`;
-      prompt += `  import json\n`;
-      prompt += `  # Calcule as métricas ricas usando cross_val_score ou cross_validate com a mesma estratégia de splits (CV)\n`;
-      prompt += `  # Ex: f1 = cross_val_score(model, X, y, cv=cv, scoring="f1_macro").mean()\n`;
+      prompt += `  import json, numpy as np\n`;
+      prompt += `  # Calcule as métricas ricas usando cross_validate com a mesma estratégia de splits (CV)\n`;
+      prompt += `  # fold_scores = lista com o score de CADA fold (não a média!)\n`;
       prompt += `  results = {\n`;
       prompt += `      "model": type(model).__name__ if not hasattr(model, "steps") else type(model.steps[-1][1]).__name__,\n`;
       prompt += `      "best_params": model.get_params() if not hasattr(model, "steps") else model.steps[-1][1].get_params(),\n`;
@@ -458,8 +580,17 @@ function buildPromptsForRound(
       prompt += `      "precision": float(precision),\n`;
       prompt += `      "recall": float(recall),\n`;
       prompt += `      "roc_auc": float(roc_auc),\n`;
-      prompt += `      "log_loss": float(log_loss)  # use o valor positivo do log_loss\n`;
+      prompt += `      "log_loss": float(log_loss),\n`;
+      prompt += `      "fold_scores": [float(s) for s in fold_scores],\n`;
+      prompt += `      "train_score": float(train_score),\n`;
+      prompt += `      "oof_path": "artifacts/models/${agent.id}_round${session.currentRound}_oof.npy",\n`;
+      prompt += `      "prod_path": "artifacts/models/${agent.id}_round${session.currentRound}_prod.pkl",\n`;
+      prompt += `      "brier_raw": float(brier_raw) if brier_raw is not None else None,\n`;
+      prompt += `      "brier_calibrated": float(brier_cal) if brier_cal is not None else None,\n`;
+      prompt += `      "ece_calibrated": float(ece_cal) if ece_cal is not None else None,\n`;
+      prompt += `      "category": "hyperparameter"\n`;
       prompt += `  }\n`;
+      prompt += `  np.save("artifacts/models/${agent.id}_round${session.currentRound}_oof.npy", oof_probs)\n`;
       prompt += `  with open("artifacts/models/${agent.id}_round${session.currentRound}_results.json", "w") as f:\n`;
       prompt += `      json.dump(results, f, indent=2)\n`;
       prompt += `  \`\`\`\n`;
@@ -470,20 +601,30 @@ function buildPromptsForRound(
       prompt += `    "best_params": { ..._parâmetros_de_hiperparametrização_... },\n`;
       prompt += `    "mae": <float_ou_null_mae>,\n`;
       prompt += `    "rmse": <float_ou_null_rmse>,\n`;
-      prompt += `    "r2_score": <float_ou_null_r2_score>\n`;
+      prompt += `    "r2_score": <float_ou_null_r2_score>,\n`;
+      prompt += `    "fold_scores": [<float>, ...],  // OBRIGATÓRIO: score de cada fold da CV. Sem isso o experimento é rejeitado [no_folds].\n`;
+      prompt += `    "train_score": <float>,         // OBRIGATÓRIO: métrica no treino (gate de overfitting).\n`;
+      prompt += `    "oof_path": "<string_ou_null>",\n`;
+      prompt += `    "prod_path": "<string_ou_null>",\n`;
+      prompt += `    "category": "<hyperparameter|feature_engineering|ensemble|model_selection|regularization|calibration>"\n`;
       prompt += `  }\n\n`;
       prompt += `  Exemplo de código para salvar o JSON no final do seu script:\n`;
       prompt += `  \`\`\`python\n`;
-      prompt += `  import json\n`;
-      prompt += `  # Calcule as métricas ricas usando cross_val_score ou cross_validate com a mesma estratégia de splits (CV)\n`;
-      prompt += `  # Ex: r2 = cross_val_score(model, X, y, cv=cv, scoring="r2").mean()\n`;
+      prompt += `  import json, numpy as np\n`;
+      prompt += `  # fold_scores = lista com o score de CADA fold (não a média!)\n`;
       prompt += `  results = {\n`;
       prompt += `      "model": type(model).__name__ if not hasattr(model, "steps") else type(model.steps[-1][1]).__name__,\n`;
       prompt += `      "best_params": model.get_params() if not hasattr(model, "steps") else model.steps[-1][1].get_params(),\n`;
       prompt += `      "mae": float(mae),\n`;
       prompt += `      "rmse": float(rmse),\n`;
-      prompt += `      "r2_score": float(r2_score)\n`;
+      prompt += `      "r2_score": float(r2_score),\n`;
+      prompt += `      "fold_scores": [float(s) for s in fold_scores],\n`;
+      prompt += `      "train_score": float(train_score),\n`;
+      prompt += `      "oof_path": "artifacts/models/${agent.id}_round${session.currentRound}_oof.npy",\n`;
+      prompt += `      "prod_path": "artifacts/models/${agent.id}_round${session.currentRound}_prod.pkl",\n`;
+      prompt += `      "category": "hyperparameter"\n`;
       prompt += `  }\n`;
+      prompt += `  np.save("artifacts/models/${agent.id}_round${session.currentRound}_oof.npy", oof_preds)\n`;
       prompt += `  with open("artifacts/models/${agent.id}_round${session.currentRound}_results.json", "w") as f:\n`;
       prompt += `      json.dump(results, f, indent=2)\n`;
       prompt += `  \`\`\`\n`;
@@ -549,6 +690,16 @@ interface RichMetricsResult {
   modelAlgorithm?: string | null;
   hyperparameters?: Record<string, unknown>;
   metricBag?: Record<string, number>;
+  // ── Journal/ledger fields (agentic-ml expertise port) ──
+  foldScores?: number[];
+  trainScore?: number | null;
+  oofArtifactKey?: string | null;
+  prodArtifactKey?: string | null;
+  brierRaw?: number | null;
+  brierCalibrated?: number | null;
+  eceCalibrated?: number | null;
+  notes?: string | null;
+  category?: string | null;
 }
 
 function tryLoadRichMetrics(
@@ -614,9 +765,76 @@ function tryLoadRichMetrics(
     const r2 = getNum(json.r2 ?? json.r2_score ?? json.cv_r2 ?? json.val_r2);
     if (r2 !== undefined) metricBag.r2_score = r2;
 
-    return { modelAlgorithm, hyperparameters, metricBag };
+    // ── Journal/ledger fields ──
+    // fold_scores: per-fold array, the input to Nadeau-Bengio significance.
+    // Accept `fold_scores` or legacy `folds`. Each element must be a finite number.
+    const foldSrc = json.fold_scores ?? json.folds;
+    const foldScores = Array.isArray(foldSrc)
+      ? foldSrc
+          .map((v) => getNum(v))
+          .filter((v): v is number => v !== undefined && Number.isFinite(v))
+      : undefined;
+
+    const trainScore = getNum(json.train_score ?? json.train_mean ?? json.cv_train_mean) ?? null;
+    const oofArtifactKey = typeof json.oof_path === "string" ? json.oof_path : null;
+    const prodArtifactKey = typeof json.prod_path === "string" ? json.prod_path : null;
+    const brierRaw = getNum(json.brier_raw ?? json.brier_score_raw) ?? null;
+    const brierCalibrated = getNum(json.brier_calibrated ?? json.brier_score_calibrated) ?? null;
+    const eceCalibrated = getNum(json.ece_calibrated ?? json.ece) ?? null;
+    const notes = typeof json.notes === "string" && json.notes.length > 0 ? json.notes : null;
+    const category = typeof json.category === "string" && json.category.length > 0 ? json.category : null;
+
+    return {
+      modelAlgorithm,
+      hyperparameters,
+      metricBag,
+      foldScores,
+      trainScore,
+      oofArtifactKey,
+      prodArtifactKey,
+      brierRaw,
+      brierCalibrated,
+      eceCalibrated,
+      notes,
+      category,
+    };
   } catch (err) {
     // Silently degrade if file is corrupt or unreadable
     return {};
   }
+}
+
+// ── Audit helpers ─────────────────────────────────────────────────────────
+
+/** Map the dataset-context tier (lowercase) to the auditor's ComplexityTier. */
+function mapTier(tier: DatasetContext["complexityTier"]): ComplexityTier {
+  switch (tier) {
+    case "tiny": return "TINY";
+    case "small": return "SMALL";
+    case "medium": return "MEDIUM";
+    case "large": return "LARGE";
+    default: return "UNKNOWN";
+  }
+}
+
+/**
+ * Read the session content_hash — MD5(features ‖ split ‖ config) — written by
+ * the feature-engineer into benchmark_config.json. This is the intra-run
+ * integrity anchor for gate G2. Returns null when absent (audit degrades
+ * gracefully: no hash check, no stale rejection).
+ */
+function readSessionContentHash(workspacePath: string): string | null {
+  const cfgPath = path.join(workspacePath, "benchmark_config.json");
+  const altCfgPath = path.join(workspacePath, "artifacts", "benchmark_config.json");
+  for (const candidate of [cfgPath, altCfgPath]) {
+    if (!fs.existsSync(candidate)) continue;
+    try {
+      const cfg = JSON.parse(fs.readFileSync(candidate, "utf-8")) as Record<string, unknown>;
+      const hash = cfg.content_hash ?? cfg.contentHash;
+      if (typeof hash === "string" && hash.length > 0) return hash;
+    } catch {
+      // ignore — try next path
+    }
+  }
+  return null;
 }
