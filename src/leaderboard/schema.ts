@@ -84,6 +84,32 @@ const RICH_METRICS_COLUMNS: Array<{ name: string; ddl: string }> = [
 ];
 
 /**
+ * Additive migration: arena competitor fields.
+ *
+ * These columns are declared in prisma/schema.prisma (written by
+ * fromArenaExperiment) but were never created by the raw-SQL schema, leaving
+ * the two schemas out of sync. Test DBs (and legacy DBs that only run
+ * initLeaderboardSchema) were missing them, causing Prisma create() to fail
+ * with "column does not exist". This closes the gap additively.
+ *
+ * Applied idempotently by introspecting PRAGMA table_info(experiments).
+ */
+const ARENA_COLUMNS: Array<{ name: string; ddl: string }> = [
+  { name: "hypothesis",          ddl: "ALTER TABLE experiments ADD COLUMN hypothesis TEXT" },
+  { name: "learned",             ddl: "ALTER TABLE experiments ADD COLUMN learned TEXT" },
+  { name: "next_focus",          ddl: "ALTER TABLE experiments ADD COLUMN next_focus TEXT" },
+  { name: "measured_metric",     ddl: "ALTER TABLE experiments ADD COLUMN measured_metric REAL" },
+  { name: "benchmark_stdout",    ddl: "ALTER TABLE experiments ADD COLUMN benchmark_stdout TEXT" },
+  { name: "benchmark_stderr",    ddl: "ALTER TABLE experiments ADD COLUMN benchmark_stderr TEXT" },
+  { name: "benchmark_exit_code", ddl: "ALTER TABLE experiments ADD COLUMN benchmark_exit_code INTEGER" },
+  { name: "confidence_score",    ddl: "ALTER TABLE experiments ADD COLUMN confidence_score REAL" },
+  { name: "confidence_band",     ddl: "ALTER TABLE experiments ADD COLUMN confidence_band TEXT" },
+  { name: "decision",            ddl: "ALTER TABLE experiments ADD COLUMN decision TEXT" },
+  { name: "duration_ms",         ddl: "ALTER TABLE experiments ADD COLUMN duration_ms INTEGER" },
+  { name: "artifact_script",     ddl: "ALTER TABLE experiments ADD COLUMN artifact_script TEXT" },
+];
+
+/**
  * Additive migration: agentic-ml expertise port — journal/ledger fields.
  *
  * The `experiments` table absorbs the role of the agentic-ml `journal.jsonl`
@@ -144,6 +170,13 @@ export function initLeaderboardSchema(db: DatabaseSync): void {
 
   // ── Rich metrics migration ──
   for (const col of RICH_METRICS_COLUMNS) {
+    if (!existingNames.has(col.name)) {
+      db.exec(col.ddl);
+    }
+  }
+
+  // ── Arena competitor columns (sync raw-SQL schema with prisma schema) ──
+  for (const col of ARENA_COLUMNS) {
     if (!existingNames.has(col.name)) {
       db.exec(col.ddl);
     }

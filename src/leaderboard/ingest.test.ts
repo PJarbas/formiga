@@ -4,29 +4,38 @@
 
 import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { getDb } from "../../dist/db.js";
 import { ingestStepOutput } from "../../dist/leaderboard/ingest.js";
+import { resetPrisma } from "../../dist/database/index.js";
+import { migrate } from "../../dist/database/migrations.js";
 
 describe("ingestStepOutput", () => {
   let tempHome: string;
   let origHome: string | undefined;
   let origDbPath: string | undefined;
 
-  before(() => {
+  before(async () => {
     tempHome = mkdtempSync(path.join(os.tmpdir(), "formiga-ingest-test-"));
     origHome = process.env.HOME;
     origDbPath = process.env.FORMIGA_DB_PATH;
     process.env.HOME = tempHome;
-    process.env.FORMIGA_DB_PATH = path.join(tempHome, ".formiga", "test.db");
-    // Force migration + leaderboard schema creation on the temp DB.
-    getDb();
+    const dbPath = path.join(tempHome, ".formiga", "test.db");
+    process.env.FORMIGA_DB_PATH = dbPath;
+    // Ensure the DB directory exists before any client (Prisma or getDb) opens it.
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    // Reset the Prisma singleton so it re-binds to the temp DB, then apply
+    // the full migration (creates the experiments table + all columns) on the
+    // raw handle that the assertions read through.
+    await resetPrisma();
+    migrate(getDb());
   });
 
-  after(() => {
+  after(async () => {
+    await resetPrisma();
     if (origHome) process.env.HOME = origHome;
     else delete process.env.HOME;
     if (origDbPath) process.env.FORMIGA_DB_PATH = origDbPath;
@@ -40,8 +49,8 @@ describe("ingestStepOutput", () => {
   });
 
   describe("agent gating", () => {
-    it("skips non-leaderboard agents (e.g. data-analyst)", () => {
-      const result = ingestStepOutput({
+    it("skips non-leaderboard agents (e.g. data-analyst)", async () => {
+      const result = await ingestStepOutput({
         agentId: "data-analyst",
         runId: "run-1",
         parsedKv: {
@@ -55,8 +64,8 @@ describe("ingestStepOutput", () => {
       assert.equal(result.reason, "non-leaderboard agent");
     });
 
-    it("skips ml-critic (audit, not modeling)", () => {
-      const result = ingestStepOutput({
+    it("skips ml-critic (audit, not modeling)", async () => {
+      const result = await ingestStepOutput({
         agentId: "ml-pipeline_ml-critic",
         runId: "run-1",
         parsedKv: {
@@ -70,8 +79,8 @@ describe("ingestStepOutput", () => {
       assert.equal(result.reason, "non-leaderboard agent");
     });
 
-    it("accepts bare leaderboard agent id (modeler-classic)", () => {
-      const result = ingestStepOutput({
+    it("accepts bare leaderboard agent id (modeler-classic)", async () => {
+      const result = await ingestStepOutput({
         agentId: "modeler-classic",
         runId: "run-1",
         parsedKv: {
@@ -84,8 +93,8 @@ describe("ingestStepOutput", () => {
       assert.ok(result.experimentId !== null && result.experimentId > 0);
     });
 
-    it("accepts suffix-scoped agent id (ml-pipeline_modeler-advanced)", () => {
-      const result = ingestStepOutput({
+    it("accepts suffix-scoped agent id (ml-pipeline_modeler-advanced)", async () => {
+      const result = await ingestStepOutput({
         agentId: "ml-pipeline_modeler-advanced",
         runId: "run-1",
         parsedKv: {
@@ -98,8 +107,8 @@ describe("ingestStepOutput", () => {
       assert.ok(result.experimentId !== null && result.experimentId > 0);
     });
 
-    it("accepts feature-engineer for baseline submissions", () => {
-      const result = ingestStepOutput({
+    it("accepts feature-engineer for baseline submissions", async () => {
+      const result = await ingestStepOutput({
         agentId: "feature-engineer",
         runId: "run-1",
         parsedKv: {
@@ -125,24 +134,24 @@ describe("ingestStepOutput", () => {
       },
     };
 
-    it("rejects missing MODEL_TYPE", () => {
+    it("rejects missing MODEL_TYPE", async () => {
       const kv = { ...base.parsedKv };
       delete (kv as Record<string, string>)["model_type"];
-      const result = ingestStepOutput({ ...base, parsedKv: kv });
+      const result = await ingestStepOutput({ ...base, parsedKv: kv });
       assert.equal(result.experimentId, null);
       assert.equal(result.reason, "missing MODEL_TYPE");
     });
 
-    it("rejects missing CV_MEAN", () => {
+    it("rejects missing CV_MEAN", async () => {
       const kv = { ...base.parsedKv };
       delete (kv as Record<string, string>)["cv_mean"];
-      const result = ingestStepOutput({ ...base, parsedKv: kv });
+      const result = await ingestStepOutput({ ...base, parsedKv: kv });
       assert.equal(result.experimentId, null);
       assert.equal(result.reason, "missing or non-numeric CV_MEAN");
     });
 
-    it("rejects non-numeric CV_MEAN", () => {
-      const result = ingestStepOutput({
+    it("rejects non-numeric CV_MEAN", async () => {
+      const result = await ingestStepOutput({
         ...base,
         parsedKv: { ...base.parsedKv, cv_mean: "not-a-number" },
       });
@@ -150,16 +159,16 @@ describe("ingestStepOutput", () => {
       assert.equal(result.reason, "missing or non-numeric CV_MEAN");
     });
 
-    it("rejects missing TRAIN_MEAN", () => {
+    it("rejects missing TRAIN_MEAN", async () => {
       const kv = { ...base.parsedKv };
       delete (kv as Record<string, string>)["train_mean"];
-      const result = ingestStepOutput({ ...base, parsedKv: kv });
+      const result = await ingestStepOutput({ ...base, parsedKv: kv });
       assert.equal(result.experimentId, null);
       assert.equal(result.reason, "missing or non-numeric TRAIN_MEAN");
     });
 
-    it("rejects non-numeric TRAIN_MEAN", () => {
-      const result = ingestStepOutput({
+    it("rejects non-numeric TRAIN_MEAN", async () => {
+      const result = await ingestStepOutput({
         ...base,
         parsedKv: { ...base.parsedKv, train_mean: "NaN?" },
       });
@@ -167,16 +176,16 @@ describe("ingestStepOutput", () => {
       assert.equal(result.reason, "missing or non-numeric TRAIN_MEAN");
     });
 
-    it("rejects missing ARTIFACT_PATH", () => {
+    it("rejects missing ARTIFACT_PATH", async () => {
       const kv = { ...base.parsedKv };
       delete (kv as Record<string, string>)["artifact_path"];
-      const result = ingestStepOutput({ ...base, parsedKv: kv });
+      const result = await ingestStepOutput({ ...base, parsedKv: kv });
       assert.equal(result.experimentId, null);
       assert.equal(result.reason, "missing ARTIFACT_PATH");
     });
 
-    it("rejects empty ARTIFACT_PATH", () => {
-      const result = ingestStepOutput({
+    it("rejects empty ARTIFACT_PATH", async () => {
+      const result = await ingestStepOutput({
         ...base,
         parsedKv: { ...base.parsedKv, artifact_path: "" },
       });
@@ -186,8 +195,8 @@ describe("ingestStepOutput", () => {
   });
 
   describe("successful registration", () => {
-    it("registers an experiment and returns its ID", () => {
-      const result = ingestStepOutput({
+    it("registers an experiment and returns its ID", async () => {
+      const result = await ingestStepOutput({
         agentId: "modeler-classic",
         runId: "run-ok",
         roundNumber: 2,
@@ -220,8 +229,8 @@ describe("ingestStepOutput", () => {
       assert.deepEqual(hp, { lr: 0.05, depth: 7 });
     });
 
-    it("defaults roundNumber to 1 when not provided", () => {
-      const result = ingestStepOutput({
+    it("defaults roundNumber to 1 when not provided", async () => {
+      const result = await ingestStepOutput({
         agentId: "modeler-classic",
         runId: "run-default-round",
         parsedKv: {
@@ -238,8 +247,8 @@ describe("ingestStepOutput", () => {
       assert.equal(row.round_number, 1);
     });
 
-    it("defaults metric_name to 'cv_mean' when not provided", () => {
-      const result = ingestStepOutput({
+    it("defaults metric_name to 'cv_mean' when not provided", async () => {
+      const result = await ingestStepOutput({
         agentId: "modeler-classic",
         runId: "run-default-metric",
         parsedKv: {
@@ -257,8 +266,8 @@ describe("ingestStepOutput", () => {
   });
 
   describe("hyperparameters parsing", () => {
-    it("parses valid JSON object", () => {
-      const result = ingestStepOutput({
+    it("parses valid JSON object", async () => {
+      const result = await ingestStepOutput({
         agentId: "modeler-classic",
         runId: "run-hp-json",
         parsedKv: {
@@ -278,8 +287,8 @@ describe("ingestStepOutput", () => {
       });
     });
 
-    it("falls back to {raw: ...} for non-JSON hyperparameters", () => {
-      const result = ingestStepOutput({
+    it("falls back to {raw: ...} for non-JSON hyperparameters", async () => {
+      const result = await ingestStepOutput({
         agentId: "modeler-classic",
         runId: "run-hp-raw",
         parsedKv: {
@@ -298,8 +307,8 @@ describe("ingestStepOutput", () => {
       });
     });
 
-    it("falls back to {raw: ...} for JSON arrays (not objects)", () => {
-      const result = ingestStepOutput({
+    it("falls back to {raw: ...} for JSON arrays (not objects)", async () => {
+      const result = await ingestStepOutput({
         agentId: "modeler-classic",
         runId: "run-hp-array",
         parsedKv: {
@@ -318,8 +327,8 @@ describe("ingestStepOutput", () => {
       });
     });
 
-    it("defaults hyperparameters to {} when absent", () => {
-      const result = ingestStepOutput({
+    it("defaults hyperparameters to {} when absent", async () => {
+      const result = await ingestStepOutput({
         agentId: "modeler-classic",
         runId: "run-hp-none",
         parsedKv: {
