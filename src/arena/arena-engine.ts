@@ -6,7 +6,7 @@
 
 import path from "node:path";
 import fs from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import type { ArenaConfig, ArenaSession, ArenaStatus, AgentRoundResult, ArenaDecision, BenchmarkResult } from "./arena-types.js";
 import type { ArenaRepository } from "./arena-repository.js";
 import type { ArenaExperiment } from "../leaderboard/repository.js";
@@ -18,6 +18,44 @@ import { auditExperiment, dedupSignature, type ComplexityTier, type AuditInput }
 const SCRIPT_DIR = "artifacts/models";
 const BENCHMARK_TIMEOUT_MS = 120_000;
 const TRAIN_TIMEOUT_MS = 180_000;
+
+/**
+ * Kill an entire process tree (the spawned child + all its descendants).
+ *
+ * `child.kill(signal)` only signals the direct child — but arena scripts
+ * are typically `bash -c python3 << EOF` (shell → python → possibly
+ * multiprocessing workers). SIGTERM on the bash parent leaves the python
+ * grandchild orphaned and running (run c682204f leaked a 55-min grid
+ * search this way). Spawn with `detached: true` puts the child in its own
+ * process group (pgid === child.pid); `process.kill(-pgid, signal)`
+ * signals every member of that group, killing the whole tree.
+ *
+ * Graceful: SIGTERM first, then SIGKILL after 2s for survivors.
+ */
+function killProcessTree(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  if (!child.pid) return;
+  try {
+    // Negative pid → signal the whole process group.
+    process.kill(-child.pid, signal);
+  } catch {
+    // Group already gone or not detached — fall back to direct kill.
+    try { child.kill(signal); } catch { /* already dead */ }
+  }
+}
+
+/**
+ * Ensure a detached child's process group is fully reaped after a kill.
+ * SIGTERM, wait briefly, then SIGKILL if still alive. Returns a disposer
+ * that clears the escalation timer (call it on normal close).
+ */
+function killTreeGracefully(child: ChildProcess): { cancel: () => void } {
+  killProcessTree(child, "SIGTERM");
+  const escalate = setTimeout(() => killProcessTree(child, "SIGKILL"), 2000);
+  escalate.unref?.();
+  return {
+    cancel: () => clearTimeout(escalate),
+  };
+}
 
 export interface ArenaResult {
   sessionId: string;
@@ -53,6 +91,7 @@ async function trainScript(
     const child = spawn("python3", [scriptPath], {
       cwd: workspacePath,
       shell: false,
+      detached: true, // own process group → killProcessTree can reap descendants
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, FORMIGA_WORKSPACE: workspacePath },
     });
@@ -60,10 +99,11 @@ async function trainScript(
     let stdout = "";
     let stderr = "";
     let killed = false;
+    let escalation: { cancel: () => void } | null = null;
 
     const timer = setTimeout(() => {
       killed = true;
-      child.kill("SIGTERM");
+      escalation = killTreeGracefully(child);
     }, TRAIN_TIMEOUT_MS);
 
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf-8"); });
@@ -71,6 +111,7 @@ async function trainScript(
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      escalation?.cancel();
       const exitCode = killed ? null : code;
       // Look for generated .pkl at the expected path
       const modelPath = fs.existsSync(expectedPkl) ? expectedPkl : null;
@@ -79,6 +120,7 @@ async function trainScript(
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      escalation?.cancel();
       resolve({ modelPath: null, stdout, stderr: stderr + err.message, exitCode: null });
     });
   });
@@ -97,6 +139,7 @@ async function benchmarkOne(
     const child = spawn(command, {
       cwd: config.workspacePath,
       shell: true,
+      detached: true, // own process group → killProcessTree can reap descendants
       stdio: [ "ignore", "pipe", "pipe" ],
       env: process.env,
     });
@@ -104,10 +147,11 @@ async function benchmarkOne(
     let stdout = "";
     let stderr = "";
     let killed = false;
+    let escalation: { cancel: () => void } | null = null;
 
     const timer = setTimeout(() => {
       killed = true;
-      child.kill("SIGTERM");
+      escalation = killTreeGracefully(child);
     }, BENCHMARK_TIMEOUT_MS);
 
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf-8"); });
@@ -115,6 +159,7 @@ async function benchmarkOne(
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      escalation?.cancel();
       // Try stdout first, then stderr (benchmark_runner.py prints to stderr)
       let metric: number | null = null;
       if (code === 0 && !killed) {
@@ -132,6 +177,7 @@ async function benchmarkOne(
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      escalation?.cancel();
       resolve({
         metric: null,
         exitCode: null,
@@ -320,7 +366,7 @@ export async function runArena(
           bestMetric: session.bestMetric,
           contentHash: sessionContentHash,
           sessionContentHash,
-          oofUniqueProbs: null, // populated by a future OOF-loader hook (ISSUE-05)
+          oofUniqueProbs: richMetrics.oofUniqueProbs ?? null,
           eceCalibrated: richMetrics.eceCalibrated ?? null,
           maxUnivariateAuc: null, // populated by feature-engineer gate (ISSUE-07)
           teamExperimentCount: teamExperimentCount.get(agent.id) ?? 0,
@@ -565,7 +611,8 @@ function buildPromptsForRound(
       prompt += `    "prod_path": "<string_ou_null>", // caminho do _prod.pkl (modelo refitado em 100% não-OOT).\n`;
       prompt += `    "brier_raw": <float_ou_null>,\n`;
       prompt += `    "brier_calibrated": <float_ou_null>,\n`;
-      prompt += `    "ece_calibrated": <float_ou_null>,\n`;
+      prompt += `    "ece_calibrated": <float_ou_null>,  // ECE com bins de QUANTIL (não equal-width). Robusto a colapso de probs.\n`;
+      prompt += `    "n_unique_probs": <int_ou_null>,   // nº de probabilidades únicas no array OOF. <50 = saturação (rejeitado [cal_leak]).\n`;
       prompt += `    "category": "<hyperparameter|feature_engineering|ensemble|model_selection|regularization|calibration>"\n`;
       prompt += `  }\n\n`;
       prompt += `  Exemplo de código para salvar o JSON no final do seu script:\n`;
@@ -587,7 +634,8 @@ function buildPromptsForRound(
       prompt += `      "prod_path": "artifacts/models/${agent.id}_round${session.currentRound}_prod.pkl",\n`;
       prompt += `      "brier_raw": float(brier_raw) if brier_raw is not None else None,\n`;
       prompt += `      "brier_calibrated": float(brier_cal) if brier_cal is not None else None,\n`;
-      prompt += `      "ece_calibrated": float(ece_cal) if ece_cal is not None else None,\n`;
+      prompt += `      "ece_calibrated": float(ece_cal) if ece_cal is not None else None,  # ECE com bins de QUANTIL\n`;
+      prompt += `      "n_unique_probs": int(np.unique(oof_probs).size) if oof_probs is not None else None,\n`;
       prompt += `      "category": "hyperparameter"\n`;
       prompt += `  }\n`;
       prompt += `  np.save("artifacts/models/${agent.id}_round${session.currentRound}_oof.npy", oof_probs)\n`;
@@ -698,6 +746,8 @@ interface RichMetricsResult {
   brierRaw?: number | null;
   brierCalibrated?: number | null;
   eceCalibrated?: number | null;
+  /** Distinct probability count in the OOF array (calibration-leak gate G4). */
+  oofUniqueProbs?: number | null;
   notes?: string | null;
   category?: string | null;
 }
@@ -781,6 +831,11 @@ function tryLoadRichMetrics(
     const brierRaw = getNum(json.brier_raw ?? json.brier_score_raw) ?? null;
     const brierCalibrated = getNum(json.brier_calibrated ?? json.brier_score_calibrated) ?? null;
     const eceCalibrated = getNum(json.ece_calibrated ?? json.ece) ?? null;
+    // n_unique_probs: distinct values in the OOF probability array. The agent
+    // computes this in Python (where it has the array) and reports it here;
+    // the auditor uses it to detect saturation (gate G4). Accept int forms.
+    const oofUniqueProbsRaw = json.n_unique_probs ?? json.unique_probs ?? json.oof_unique_probs;
+    const oofUniqueProbs = getNum(oofUniqueProbsRaw) ?? null;
     const notes = typeof json.notes === "string" && json.notes.length > 0 ? json.notes : null;
     const category = typeof json.category === "string" && json.category.length > 0 ? json.category : null;
 
@@ -795,6 +850,7 @@ function tryLoadRichMetrics(
       brierRaw,
       brierCalibrated,
       eceCalibrated,
+      oofUniqueProbs,
       notes,
       category,
     };
