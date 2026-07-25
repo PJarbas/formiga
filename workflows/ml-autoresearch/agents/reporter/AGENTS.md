@@ -58,6 +58,56 @@ curl -s "${API}/api/arena/${RUN}/convergence"
 
 `Read`, `Bash`, `Glob`, `Grep`. Você é **somente leitura** para artefatos de modelo mas pode salvar artefatos de relatório via `save_artifact`.
 
+## CRÍTICO — Ensemble Final por Nelder-Mead sobre OOF (ISSUE-11)
+
+Além do vencedor single-model, compute um **ensemble** dos top-5 modelos `keep`/`warn` mais decorrelacionados. Esta é a recomendação de produção quando o ensemble é estatisticamente superior ao single (Nadeau-Bengio p<0.05 E delta ≥ 0.5pp).
+
+Passos:
+1. Carregue os arrays `_oof.npy` dos top-5 experimentos (use `numpy.load`).
+2. Compute a matriz de correlação de Spearman entre os OOFs. Selecione os de **menor correlação média** (descarte pares com |corr| ≥ 0.95 — redundantes).
+3. Otimize os pesos `w ∈ Δⁿ` (soma 1, não-negativos) via Nelder-Mead (ou SLSQP), maximizando a métrica primária no OOF blend.
+4. Persista o ensemble como um `Experiment` separado (`agent_name: "ensemble"`, `prod_artifact_key: null`, `is_single_model: false`).
+
+```python
+import numpy as np
+from scipy.stats import spearmanr
+from scipy.optimize import minimize
+
+def ensemble_score(weights, oofs, y, metric_fn):
+    blend = sum(w * o for w, o in zip(weights, oofs))
+    return metric_fn(y, blend)
+
+n = len(oofs)
+cons = {"type": "eq", "fun": lambda w: np.sum(w) - 1}
+bounds = [(0, 1)] * n
+res = minimize(lambda w: -ensemble_score(w, oofs, y, metric), x0=np.ones(n)/n,
+               method="SLSQP", bounds=bounds, constraints=cons)
+weights = res.x / res.x.sum()
+```
+
+No relatório, reporte: pesos do ensemble, correlação média entre os OOFs selecionados, métrica do blend vs métrica do single, e o p-value Nadeau-Bengio entre eles.
+
+## CRÍTICO — OOT Holdout como Métrica Oficial de Produção (ISSUE-12)
+
+A métrica CV valida a hipótese; a **métrica OOT (out-of-time)** valida a produção. Se o feature-engineer reservou um holdout temporal/estratificado isolado (nunca visto em CV), declarado em `benchmark_config.json` como `oot_holdout.enabled`:
+
+1. Carregue o `_prod.pkl` (modelo refitado em 100% não-OOT) do vencedor.
+2. Gere predições calibradas no OOT holdout.
+3. Compute AUC/Brier/ECE no OOT.
+4. Se AUC OOT cai > 5pp vs CV → **concept drift severo** — promova com caveat explícito no relatório.
+
+Reporte a métrica OOT como a **métrica oficial de produção** no Sumário Executivo (não a CV). Se `oot_holdout.enabled` for false (sem dimensão temporal), registre "OOT: N/A (sem dimensão temporal)" — não fabrique.
+
+## CRÍTICO — Distinção Single-Model vs Ensemble (ISSUE-13)
+
+O `_prod.pkl` (1 modelo refitado em 100% não-OOT) é o artefato de produção preferido para single-models (1× latência/RAM, retraining de drift mais fácil). Blends/stackings declaram `prod_artifact_path = null` (tratados como Candidate B/ensemble).
+
+Recomendação final (critério "estatisticamente justo" do agentic-ml):
+- Se `melhor_single` é o top → recomende o single.
+- Se p ≥ 0.05 (não significante) → recomende o single (mais simples, sem perda significativa).
+- Se p < 0.05 E delta < 0.5pp → recomende o single (significante mas trivial).
+- Se p < 0.05 E delta ≥ 0.5pp → recomende o ensemble.
+
 ## Seções do Relatório
 
 Seu relatório DEVE incluir:

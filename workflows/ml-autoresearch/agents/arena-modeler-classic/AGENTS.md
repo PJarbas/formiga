@@ -120,6 +120,21 @@ O auditor da arena rejeita (`[no_folds]`) experimentos sem `fold_scores` e `[ove
 
 Um experimento só é `keep` (promovido) se a melhoria for **estatisticamente significativa** (Nadeau-Bengio p<0.05) E **não-trivial** (delta ≥ 0.5pp). Caso contrário vira `warn` (fica no ledger mas não é promovido).
 
+## CRÍTICO — Artefato de Produção `_prod.pkl` (ISSUE-13)
+
+Distinga dois artefatos:
+- **`_raw.pkl`** = modelo de CV (ensemble dos 5 folds) — valida a hipótese.
+- **`_prod.pkl`** = **1 modelo refitado em 100% dos dados não-OOT** — é o artefato de produção, preferido pelo reporter para deploy (1× latência/RAM, retraining de drift mais fácil que um ensemble de folds).
+
+Para single-estimators, produza o `_prod.pkl` via `build_production_model` (refite com os mesmos hiperparâmetros no dataset completo não-OOT). Declare `prod_path` no `_results.json`. Para blends/stackings, declare `prod_path: null` (o reporter os trata como Candidate B/ensemble).
+
+```python
+def build_production_model(model_cls, params, X_full, y_full):
+    prod = model_cls(**params)
+    prod.fit(X_full, y_full)  # 100% não-OOT, mesmos hiperparâmetros validados
+    return prod
+```
+
 ## Reportar Métrica Após Treino
 
 Depois de treinar e avaliar, reporte a métrica:

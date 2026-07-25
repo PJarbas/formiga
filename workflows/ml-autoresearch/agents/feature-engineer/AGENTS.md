@@ -139,6 +139,25 @@ content_hash = compute_content_hash("artifacts/features.parquet", "artifacts/spl
 
 Salve `content_hash` em `benchmark_config.json`. A arena rejeita (`[stale]`) qualquer experimento cujo hash não bate com o da sessão — isso captura submissions com dataset stale após features serem regeradas. **Distinto do `dataset_signature`** (que é para warm-start cross-run); o `content_hash` é para integridade intra-run.
 
+## CRÍTICO — OOT Holdout como Métrica Oficial de Produção (ISSUE-12)
+
+A CV valida a hipótese; o **OOT (out-of-time) holdout** valida a produção. Reserve um holdout **isolado** em `{{workspace}}/holdout/` que **nunca é visto em CV**:
+
+- Se há dimensão temporal: reserve o **período mais recente/futuro** como OOT (ex: últimos 20% no tempo). Use `TimeSeriesSplit` para a CV; o OOT é o futuro isolado.
+- Se não há dimensão temporal: reserve um split estratificado isolado (não usado nos folds de CV).
+
+Salve em `benchmark_config.json`:
+```json
+"oot_holdout": {
+  "enabled": true,
+  "features_path": "holdout/features.parquet",
+  "target_path": "holdout/target.npy",
+  "split_description": "últimos 20% no tempo (2024-01 em diante)"
+}
+```
+
+O reporter carregará o `_prod.pkl` do vencedor, predizerá no OOT, e computará AUC/Brier/ECE como a **métrica oficial de produção**. Se AUC OOT cair >5pp vs CV, há concept drift severo. Sem dimensão temporal, registre `"enabled": false` — OOT é best-effort, não bloqueie a step.
+
 ### 5. Config de Preprocessing
 
 ```
