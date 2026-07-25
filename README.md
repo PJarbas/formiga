@@ -35,11 +35,11 @@ Formiga structures agent execution in a Directed Acyclic Graph (DAG) of speciali
        ▼
 [ Feature Engineer ] (Transforms features and trains baseline model)
        │
- ┌─────┴─────────────────────┐
- ▼                           ▼
-[ Modeler Classic ]   [ Modeler Advanced ]  (Compete in multiple rounds in the Arena)
- └─────┬─────────────────────┘
-       │ (Best model converges or max rounds reached)
+ ┌─────┴──────────────┬──────────────────┐
+ ▼                    ▼                  ▼
+[ Modeler Classic ] [ Modeler Advanced ] [ Modeler Creative ]  (Compete in multiple rounds in the Arena)
+ └─────┬──────────────┴──────────────────┘
+       │ (Pre-write audit gates; best model converges or max rounds reached)
        ▼
 [ Arena Reporter ] (Consolidates the competition and writes final report)
 ```
@@ -62,7 +62,11 @@ Formiga structures agent execution in a Directed Acyclic Graph (DAG) of speciali
    * **What it does:** Experiments with high-performance algorithms and complex hyperparameter search spaces.
    * **How it works:** Utilizes state-of-the-art algorithms such as *XGBoost* or *LightGBM*, applying advanced polynomial feature scaling, regularizations, and aggressive tuning to beat the baseline.
 
-5. **Arena Reporter:**
+5. **Modeler (Creative):**
+   * **What it does:** Produces **decorrelated** models that the other two teams would not, so the final ensemble dominates.
+   * **How it works:** Explores diversity-seeking approaches — denoising autoencoders, aggressive mRMR, target permutation, monotonic constraints, Bayesian blending. Targets Spearman OOF correlation < 0.85 vs the top-1. Only runs on medium/large datasets.
+
+6. **Arena Reporter:**
    * **What it does:** Consolidates all modeling history from the competition.
    * **How it works:** Compiles results across all rounds, identifies the winning model and algorithm, outlines the performance improvements over the baseline, and writes a comprehensive executive summary detailing what worked and what failed.
 
@@ -105,7 +109,7 @@ Once the Arena converges or reaches the round limit, the winning model is crowne
 * **Node.js 22+** (check with `node -v`)
 * **Coding-Agent Harness:** Formiga leverages an agent harness to run code. Install one of the supported harnesses:
   * **pi-coding-agent** (Highly Recommended) — Follow the installation steps on [pi](https://github.com/mariozechner/pi-coding-agent)
-  * **hermes** — Excellent alternative for computer-use integrations: [hermes](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo)
+  * **hermes** — Excellent alternative for computer-use integrations: [hermes](https://github.com/nousresearch/hermes-agent)
 
 ### 2. Installation
 
@@ -227,7 +231,7 @@ CLI (Commands) ──┐
 Dashboard API (:3334) ◄─ Publishes rich metrics and artifacts
 ```
 
-For details regarding the orchestrator and daemon schemas, refer to [docs/WORKFLOW-ARCHITECTURE.md](docs/WORKFLOW-ARCHITECTURE.md).
+For details regarding the orchestrator and daemon schemas, refer to [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
