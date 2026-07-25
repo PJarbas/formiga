@@ -369,6 +369,116 @@ function canonicalJson(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
 }
 
+// ── Ensemble weight optimization (Nelder-Mead over the simplex) ──────────
+
+/**
+ * Optimize ensemble weights over the probability simplex Δⁿ (weights ≥ 0,
+ * sum to 1) via Nelder-Mead. The caller supplies a `score` callback that
+ * evaluates a weight vector — typically "blend the OOF arrays with these
+ * weights and return the primary metric" (agentic-ml ml-critic pattern).
+ *
+ * The simplex is initialized as the barycenter plus one vertex per model
+ * nudged toward that model. After each step, vertices are projected back to
+ * the simplex (clip negatives, renormalize) so weights stay valid.
+ *
+ * Pure optimizer — does NOT touch OOF files. The reporter/audit step loads
+ * the `_oof.npy` arrays and supplies the score callback.
+ *
+ * @param nModels  number of base models in the ensemble
+ * @param score    returns the metric for a weight vector (higher = better)
+ * @param maxIter  Nelder-Mead iteration cap (default 200)
+ * @returns        best weight vector found (length nModels, sums to ~1)
+ */
+export function nelderMeadEnsembleWeights(
+  nModels: number,
+  score: (weights: number[]) => number,
+  maxIter = 200,
+): number[] {
+  if (nModels <= 0) return [];
+  if (nModels === 1) return [1];
+
+  const alpha = 1;   // reflection
+  const gamma = 2;   // expansion
+  const rho = 0.5;   // contraction
+  const sigma = 0.5; // shrink
+
+  // Initialize simplex: barycenter + one vertex per model biased toward it.
+  const barycenter = Array(nModels).fill(1 / nModels);
+  const simplex: number[][] = [barycenter];
+  for (let i = 0; i < nModels; i++) {
+    const v = barycenter.slice();
+    v[i] = 0.6;
+    simplex.push(projectToSimplex(v));
+  }
+  const scores = simplex.map((v) => score(v));
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    // Sort vertices by score descending (best first).
+    const order = scores.map((s, i) => [s, i] as const).sort((a, b) => b[0] - a[0]);
+    const bestIdx = order[0][1];
+    const best = simplex[bestIdx];
+    const bestScore = scores[bestIdx];
+    const worstIdx = order[nModels][1];
+    const worst = simplex[worstIdx];
+    const worstScore = scores[worstIdx];
+
+    // Centroid of all but the worst.
+    const centroid = Array(nModels).fill(0);
+    for (let k = 0; k < nModels; k++) {
+      const idx = order[k][1];
+      for (let d = 0; d < nModels; d++) centroid[d] += simplex[idx][d];
+    }
+    for (let d = 0; d < nModels; d++) centroid[d] /= nModels;
+
+    // Reflection
+    const reflected = projectToSimplex(centroid.map((c, d) => c + alpha * (c - worst[d])));
+    const reflectedScore = score(reflected);
+    if (reflectedScore > bestScore && reflectedScore <= scores[order[nModels - 1][1]]) {
+      simplex[worstIdx] = reflected;
+      scores[worstIdx] = reflectedScore;
+      continue;
+    }
+    // Expansion
+    if (reflectedScore > bestScore) {
+      const expanded = projectToSimplex(centroid.map((c, d) => c + gamma * (c - worst[d])));
+      const expandedScore = score(expanded);
+      simplex[worstIdx] = expandedScore > reflectedScore ? expanded : reflected;
+      scores[worstIdx] = expandedScore > reflectedScore ? expandedScore : reflectedScore;
+      continue;
+    }
+    // Contraction
+    const contracted = projectToSimplex(centroid.map((c, d) => c + rho * (c - worst[d])));
+    const contractedScore = score(contracted);
+    if (contractedScore > worstScore) {
+      simplex[worstIdx] = contracted;
+      scores[worstIdx] = contractedScore;
+      continue;
+    }
+    // Shrink toward the best
+    for (let k = 1; k <= nModels; k++) {
+      const idx = order[k][1];
+      simplex[idx] = projectToSimplex(best.map((b, d) => b + sigma * (simplex[idx][d] - b)));
+      scores[idx] = score(simplex[idx]);
+    }
+  }
+
+  // Return the best vertex.
+  let bestIdx = 0;
+  let bestS = scores[0];
+  for (let i = 1; i < scores.length; i++) {
+    if (scores[i] > bestS) { bestS = scores[i]; bestIdx = i; }
+  }
+  return projectToSimplex(simplex[bestIdx]);
+}
+
+/** Project an arbitrary vector onto the probability simplex (clip negatives, renormalize). */
+function projectToSimplex(v: number[]): number[] {
+  const clamped = v.map((x) => Math.max(0, x));
+  const sum = clamped.reduce((a, b) => a + b, 0);
+  if (sum === 0) return clamped.map(() => 1 / v.length);
+  return clamped.map((x) => x / sum);
+}
+
 // ── Numerics: regularized incomplete beta function ───────────────────────
 // Continued-fraction expansion (Lentz). Source: Numerical Recipes §6.4.
 // Used by twoSidedTsf to compute the t-Student survival function.

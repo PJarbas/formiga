@@ -10,6 +10,7 @@ import {
   twoSidedTsf,
   overfitGapThreshold,
   classifyAdversarialAuc,
+  nelderMeadEnsembleWeights,
   dedupSignature,
   type AuditInput,
   type ComplexityTier,
@@ -306,5 +307,32 @@ describe("classifyAdversarialAuc", () => {
   it("fails on non-finite AUC", () => {
     assert.equal(classifyAdversarialAuc(NaN), "fail");
     assert.equal(classifyAdversarialAuc(Infinity), "fail");
+  });
+});
+
+describe("nelderMeadEnsembleWeights", () => {
+  it("returns [1] for a single model", () => {
+    assert.deepEqual(nelderMeadEnsembleWeights(1, () => 0.5), [1]);
+  });
+
+  it("returns [] for zero models", () => {
+    assert.deepEqual(nelderMeadEnsembleWeights(0, () => 0.5), []);
+  });
+
+  it("finds weights that favor the better model", () => {
+    // Blend score = w[0] + 2*w[1] = 1 + w[1] (since w[0]=1-w[1]). Optimum: w[1]=1.
+    const score = (w: number[]) => w[0] + 2 * w[1];
+    const weights = nelderMeadEnsembleWeights(2, score, 100);
+    assert.equal(weights.length, 2);
+    assert.ok(Math.abs(weights[0] + weights[1] - 1) < 1e-6);
+    assert.ok(weights[1] > weights[0], `expected w1>w0, got ${weights}`);
+  });
+
+  it("keeps weights non-negative and on the simplex", () => {
+    const score = (w: number[]) => w.reduce((s, wi, i) => s + wi * (i + 1), 0);
+    const weights = nelderMeadEnsembleWeights(4, score, 80);
+    const sum = weights.reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(sum - 1) < 1e-6, `weights must sum to 1, got ${sum}`);
+    assert.ok(weights.every((w) => w >= -1e-9), `weights must be non-negative, got ${weights}`);
   });
 });

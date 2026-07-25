@@ -87,6 +87,20 @@ agents:
         IDENTITY.md: agents/arena-modeler-advanced/IDENTITY.md
         SOUL.md: agents/arena-modeler-advanced/SOUL.md
 
+  - id: arena-modeler-creative
+    name: Arena Modeler Creative
+    role: coding
+    description: Creative ML competitor — produces decorrelated models for the final ensemble (DAE, mRMR, monotonic constraints, Bayesian blending). Only runs on MEDIUM/LARGE datasets.
+    timeoutSeconds: 3600
+    workspace:
+      baseDir: agents/arena-modeler-creative
+      skills:
+        - formiga-agents
+      files:
+        AGENTS.md: agents/arena-modeler-creative/AGENTS.md
+        IDENTITY.md: agents/arena-modeler-creative/IDENTITY.md
+        SOUL.md: agents/arena-modeler-creative/SOUL.md
+
   - id: reporter
     name: Arena Reporter
     role: analysis
