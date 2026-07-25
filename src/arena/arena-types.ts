@@ -81,6 +81,8 @@ export interface AgentRoundResult {
   benchmarkStderr: string;
   benchmarkExitCode: number | null;
   confidenceBand?: ConfidenceBand;
+  /** True when the script was killed for exceeding the compute budget (RF-#90). */
+  budgetExceeded?: boolean;
   scriptPath: string;
   experimentId?: number;
   /**

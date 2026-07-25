@@ -28,6 +28,39 @@ function computeComplexityTier(rows: number | null): DatasetContext["complexityT
   return "large";
 }
 
+// ── Compute budget (RF-#90) ───────────────────────────────────────────
+// Enforceable compute limits derived from the complexity tier. Unlike the
+// textual complexity gates (which a modeler can ignore — run c682204f ran
+// 32.400 fits on Iris despite "TINY: <=15 trials"), these are imposed
+// physically by the arena engine (env vars + RLIMIT_CPU + shorter timeout).
+// The modeler receives them as constraints with consequence, not advice.
+
+export interface ComputeBudget {
+  tier: DatasetContext["complexityTier"];
+  /** Max wall-clock seconds per train/benchmark script (enforced via timeout). */
+  maxFitSeconds: number;
+  /** Max Optuna trials / grid iterations (soft — injected as env for the modeler). */
+  maxTrials: number;
+  /** Max grid-search combinations (soft — injected as env). */
+  maxCombinations: number;
+  /** Cap on model complexity (soft — guides modeler choice). */
+  maxModelComplexity: "low" | "medium" | "high";
+}
+
+/** Derive an enforceable compute budget from the dataset's complexity tier. */
+export function deriveComputeBudget(tier: DatasetContext["complexityTier"]): ComputeBudget {
+  switch (tier) {
+    case "tiny":
+      return { tier, maxFitSeconds: 30, maxTrials: 15, maxCombinations: 50, maxModelComplexity: "low" };
+    case "small":
+      return { tier, maxFitSeconds: 60, maxTrials: 30, maxCombinations: 200, maxModelComplexity: "medium" };
+    case "medium":
+      return { tier, maxFitSeconds: 120, maxTrials: 50, maxCombinations: 1000, maxModelComplexity: "high" };
+    case "large":
+      return { tier, maxFitSeconds: 180, maxTrials: 50, maxCombinations: 2000, maxModelComplexity: "high" };
+  }
+}
+
 function extractReportSummary(filePath: string, maxLines: number = 20): string | null {
   if (!fs.existsSync(filePath)) return null;
   try {
@@ -181,6 +214,18 @@ export function formatDatasetContextForPrompt(ctx: DatasetContext, agentId: stri
   if (agentId.includes("classic")) {
     section += formatClassicComplexityGates(ctx);
   }
+
+  // RF-#90: enforceable compute budget. Unlike the textual gates above
+  // (which a modeler can ignore), these limits are imposed physically by
+  // the arena engine (timeout + RLIMIT_CPU). Stated as a constraint with
+  // consequence so the modeler calibrates its grid/trials accordingly.
+  const budget = deriveComputeBudget(ctx.complexityTier);
+  section += `\n### Compute Budget (ENFORCEABLE — não ignorável)\n`;
+  section += `- **Tempo máx por script**: ${budget.maxFitSeconds}s (exceder = script morto = budget_exceeded)\n`;
+  section += `- **Trials/Optuna máx**: ${budget.maxTrials}\n`;
+  section += `- **Combinações de grid máx**: ${budget.maxCombinations}\n`;
+  section += `- **Complexidade máx**: ${budget.maxModelComplexity}\n`;
+  section += `Leia os limites em runtime via os.environ: FORMIGA_MAX_FIT_SECONDS, FORMIGA_MAX_TRIALS, FORMIGA_MAX_COMBINATIONS, FORMIGA_MAX_MODEL_COMPLEXITY.\n`;
 
   if (ctx.edaSummary) {
     section += `\n### EDA Key Findings (from data-analyst)\n`;

@@ -12,7 +12,7 @@ import type { ArenaRepository } from "./arena-repository.js";
 import type { ArenaExperiment } from "../leaderboard/repository.js";
 import { makeDecision, isImprovement } from "./arena-decision.js";
 import { extractMetric } from "./arena-benchmark.js";
-import { readDatasetContext, formatDatasetContextForPrompt, type DatasetContext } from "./dataset-context.js";
+import { readDatasetContext, formatDatasetContextForPrompt, type DatasetContext, type ComputeBudget, deriveComputeBudget } from "./dataset-context.js";
 import { auditExperiment, dedupSignature, type ComplexityTier, type AuditInput } from "./audit.js";
 
 const SCRIPT_DIR = "artifacts/models";
@@ -82,18 +82,64 @@ function ensureScriptDir(workspacePath: string): void {
  * Execute an agent-generated Python script to produce a trained model (.pkl).
  * Returns the path to the generated pickle, or null if training failed.
  */
+/**
+ * Build env vars carrying the compute budget (RF-#90). The modeler's script
+ * can read these to self-calibrate (soft); the arena enforces the hard
+ * limits separately (timeout + RLIMIT_CPU).
+ */
+function buildBudgetEnv(base: NodeJS.ProcessEnv, budget: ComputeBudget | undefined, workspacePath: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, FORMIGA_WORKSPACE: workspacePath };
+  if (budget) {
+    env.FORMIGA_MAX_FIT_SECONDS = String(budget.maxFitSeconds);
+    env.FORMIGA_MAX_TRIALS = String(budget.maxTrials);
+    env.FORMIGA_MAX_COMBINATIONS = String(budget.maxCombinations);
+    env.FORMIGA_MAX_MODEL_COMPLEXITY = budget.maxModelComplexity;
+    env.FORMIGA_COMPLEXITY_TIER = budget.tier;
+  }
+  return env;
+}
+
+/**
+ * Build a Python prelude that enforces RLIMIT_CPU (RF-#90). The modeler's
+ * script path is passed as argv[1]; the prelude sets
+ * `resource.setrlimit(RLIMIT_CPU, ...)` then execs the script. Exceeding
+ * the CPU cap raises SIGXCPU, killing a runaway grid even if the wall-clock
+ * timeout (#89) is slow. Returns null on non-POSIX platforms.
+ */
+function buildRlimitPrelude(budget: ComputeBudget | undefined): string | null {
+  if (!budget || process.platform === "win32") return null;
+  const cpuHard = budget.maxFitSeconds + 2; // grace beyond the wall-clock timeout
+  // Setrlimit caps CPU seconds; on exceed the process gets SIGXCPU.
+  // The modeler script path is argv[1] (passed separately by the caller).
+  return [
+    "import resource as _r, sys as _s",
+    `_r.setrlimit(_r.RLIMIT_CPU, (${budget.maxFitSeconds}, ${cpuHard}))`,
+    "_path = _s.argv[1]",
+    "exec(compile(open(_path, encoding='utf-8').read(), _path, 'exec'))",
+  ].join("\n");
+}
+
 async function trainScript(
   scriptPath: string,
   workspacePath: string,
-): Promise<{ modelPath: string | null; stdout: string; stderr: string; exitCode: number | null }> {
+  budget?: ComputeBudget,
+): Promise<{ modelPath: string | null; stdout: string; stderr: string; exitCode: number | null; budgetExceeded: boolean }> {
   const expectedPkl = scriptPath.replace(/\.py$/, ".pkl");
+  // Effective timeout: the tighter of the global TRAIN_TIMEOUT and the
+  // budget's per-fit cap. For tiny datasets this kills a runaway grid in
+  // ~30s instead of 180s.
+  const timeoutMs = budget ? Math.min(TRAIN_TIMEOUT_MS, budget.maxFitSeconds * 1000) : TRAIN_TIMEOUT_MS;
   return new Promise((resolve) => {
-    const child = spawn("python3", [scriptPath], {
+    // Wrap the modeler's script with a RLIMIT_CPU prelude when a budget is
+    // set, so CPU-time is capped independently of the wall-clock timer.
+    const prelude = buildRlimitPrelude(budget);
+    const args = prelude ? ["-c", prelude, scriptPath] : [scriptPath];
+    const child = spawn("python3", args, {
       cwd: workspacePath,
       shell: false,
       detached: true, // own process group → killProcessTree can reap descendants
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, FORMIGA_WORKSPACE: workspacePath },
+      env: buildBudgetEnv(process.env, budget, workspacePath),
     });
 
     let stdout = "";
@@ -104,7 +150,7 @@ async function trainScript(
     const timer = setTimeout(() => {
       killed = true;
       escalation = killTreeGracefully(child);
-    }, TRAIN_TIMEOUT_MS);
+    }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf-8"); });
     child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf-8"); });
@@ -115,13 +161,13 @@ async function trainScript(
       const exitCode = killed ? null : code;
       // Look for generated .pkl at the expected path
       const modelPath = fs.existsSync(expectedPkl) ? expectedPkl : null;
-      resolve({ modelPath, stdout, stderr, exitCode });
+      resolve({ modelPath, stdout, stderr, exitCode, budgetExceeded: killed });
     });
 
     child.on("error", (err) => {
       clearTimeout(timer);
       escalation?.cancel();
-      resolve({ modelPath: null, stdout, stderr: stderr + err.message, exitCode: null });
+      resolve({ modelPath: null, stdout, stderr: stderr + err.message, exitCode: null, budgetExceeded: false });
     });
   });
 }
@@ -132,8 +178,12 @@ async function trainScript(
 async function benchmarkOne(
   config: ArenaConfig,
   scriptPath: string,
+  budget?: ComputeBudget,
 ): Promise<BenchmarkResult> {
   const start = Date.now();
+  // Tighter timeout when a budget is set (RF-#90): tiny datasets shouldn't
+  // spend BENCHMARK_TIMEOUT_MS (120s) on a single benchmark run.
+  const timeoutMs = budget ? Math.min(BENCHMARK_TIMEOUT_MS, budget.maxFitSeconds * 1000) : BENCHMARK_TIMEOUT_MS;
   return new Promise((resolve) => {
     const command = `bash ${config.benchmarkScript} "${scriptPath}"`;
     const child = spawn(command, {
@@ -141,7 +191,7 @@ async function benchmarkOne(
       shell: true,
       detached: true, // own process group → killProcessTree can reap descendants
       stdio: [ "ignore", "pipe", "pipe" ],
-      env: process.env,
+      env: buildBudgetEnv(process.env, budget, config.workspacePath),
     });
 
     let stdout = "";
@@ -152,7 +202,7 @@ async function benchmarkOne(
     const timer = setTimeout(() => {
       killed = true;
       escalation = killTreeGracefully(child);
-    }, BENCHMARK_TIMEOUT_MS);
+    }, timeoutMs);
 
     child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf-8"); });
     child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf-8"); });
@@ -228,11 +278,18 @@ export async function runArena(
       break;
     }
   }
+  // Read dataset context once for the entire arena run
+  const datasetCtx = readDatasetContext(config.workspacePath);
+  // Derive the enforceable compute budget from the tier (RF-#90). Passed to
+  // trainScript/benchmarkOne so runaway scripts (e.g. a 6480-combo grid on
+  // a 150-row dataset) are killed by timeout + RLIMIT_CPU, not just advised.
+  const budget = deriveComputeBudget(datasetCtx.complexityTier);
+
   // Fallback: run benchmark with baseline .pkl if no config baseline
   if (baselineMetric === null) {
     const baselinePkl = path.join(config.workspacePath, "artifacts", "baseline.pkl");
     if (fs.existsSync(baselinePkl)) {
-      const baseline = await benchmarkOne(config, baselinePkl);
+      const baseline = await benchmarkOne(config, baselinePkl, budget);
       baselineMetric = baseline.metric;
     }
   }
@@ -248,8 +305,6 @@ export async function runArena(
   // History tracking for prompts
   const allResults: AgentRoundResult[] = [];
 
-  // Read dataset context once for the entire arena run
-  const datasetCtx = readDatasetContext(config.workspacePath);
 
   // ── Tier gate for the creative team (ISSUE-10) ──
   // The 3rd team (modeler-creative) explores decorrelation-seeking approaches
@@ -313,7 +368,7 @@ export async function runArena(
       fs.writeFileSync(scriptPath, output.script, "utf-8");
 
       // Execute the agent's script directly — it trains, evaluates, and prints metric
-      const exec = await trainScript(scriptPath, config.workspacePath);
+      const exec = await trainScript(scriptPath, config.workspacePath, budget);
       const combinedOutput = exec.stdout + "\n" + exec.stderr;
       const metric = exec.exitCode === 0 ? extractMetric(combinedOutput, config.metricName) : null;
       const bench: BenchmarkResult = {
@@ -338,6 +393,7 @@ export async function runArena(
         benchmarkStdout: bench.stdout,
         benchmarkStderr: bench.stderr,
         benchmarkExitCode: bench.exitCode,
+        budgetExceeded: exec.budgetExceeded,
         scriptPath: scriptPath.replace(config.workspacePath + path.sep, ""),
       };
 

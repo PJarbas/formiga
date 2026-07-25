@@ -167,13 +167,15 @@ STATUS: done
 4. Imprima EXATAMENTE: `{metric_name}: {value}` no stdout
 5. Salve o modelo treinado em: `artifacts/models/modeler-classic_round{N}.pkl`
 6. **RESPEITE os limites de complexidade.** Modelos com overfitting são descartados.
-7. **NUNCA recrie o split.** Use `split.pkl`.
-8. **NUNCA use `curl` para escrever artefatos** — use `save_artifact` / `log_decision` / `report_metric`.
+7. **RESPEITE o budget de compute (ENFORCEABLE).** O ambiente define `FORMIGA_MAX_FIT_SECONDS`, `FORMIGA_MAX_TRIALS`, `FORMIGA_MAX_COMBINATIONS`, `FORMIGA_MAX_MODEL_COMPLEXITY`. Ultrapassar = seu script é morto e contará como `budget_exceeded` (pior que falha). Leia via `os.environ` e calibre o grid/trials de acordo — para datasets pequenos, preferia poucas combinações bem escolhidas em vez de grid massivo.
+8. **NUNCA recrie o split.** Use `split.pkl`.
+9. **NUNCA use `curl` para escrever artefatos** — use `save_artifact` / `log_decision` / `report_metric`.
 
 ## O que NÃO Fazer
 
 - Não use redes neurais (esse é o trabalho do modeler advanced)
 - Não ignore o tier de complexidade do dataset
+- Não gere grid search massivo em datasets pequenos (será morto pelo budget)
 - Não pule a validação cruzada
 - Não fabrique métricas
 - Não repita abordagens que falharam em rodadas anteriores

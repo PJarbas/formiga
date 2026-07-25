@@ -13,6 +13,8 @@ interface AgentAttempt {
   metric: number | null;
   decision: string;
   learned: string | null;
+  /** True when the script was killed for exceeding the compute budget (RF-#90). */
+  budgetExceeded?: boolean;
 }
 
 function formatLeaderboardTable(topN: ExperimentRow[], direction: MetricDirection): string {
@@ -31,11 +33,18 @@ function formatMyHistory(attempts: AgentAttempt[]): string {
   const headers = "| Rodada | Hipótese | Métrica | Decisão | Aprendizado |";
   const sep = "|--------|----------|---------|---------|-------------|";
   const rows = attempts.map((a) => {
-    const metricStr = a.metric !== null ? a.metric.toFixed(6) : "falha";
+    const metricStr = a.budgetExceeded ? "BUDGET_EXCEEDED" : a.metric !== null ? a.metric.toFixed(6) : "falha";
     const dec = a.decision === "keep" || a.decision === "baseline" ? "manter" : a.decision;
     return `| ${a.round} | ${a.hypothesis.slice(0, 40)} | ${metricStr} | ${dec} | ${(a.learned ?? "").slice(0, 40)} |`;
   });
-  return [headers, sep, ...rows].join("\n");
+  const out = [headers, sep, ...rows].join("\n");
+  // Surface a concrete nudge if the last attempt was killed by the budget —
+  // the modeler must reduce grid/trials, or it will be killed again.
+  const last = attempts[attempts.length - 1];
+  if (last?.budgetExceeded) {
+    return out + "\n\n⚠ Seu último script excedeu o budget de compute (foi morto). Reduza drasticamente o grid/trials — use os limites FORMIGA_MAX_* abaixo.";
+  }
+  return out;
 }
 
 function formatOthersInsights(keptResults: AgentRoundResult[]): string {
@@ -74,6 +83,7 @@ export function buildAgentPrompt(
       metric: h.metric,
       decision: h.decision,
       learned: h.learned,
+      budgetExceeded: h.budgetExceeded,
     }));
 
   const directionLabel = session.metricDirection === "lower" ? "(menor é melhor)" : "(maior é melhor)";
