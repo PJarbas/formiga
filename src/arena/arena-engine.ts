@@ -7,7 +7,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
-import type { ArenaConfig, ArenaSession, ArenaStatus, AgentRoundResult, ArenaDecision, BenchmarkResult } from "./arena-types.js";
+import type { ArenaConfig, ArenaSession, ArenaStatus, AgentRoundResult, ArenaDecision, ArenaAgentConfig, BenchmarkResult } from "./arena-types.js";
 import type { ArenaRepository } from "./arena-repository.js";
 import type { ArenaExperiment } from "../leaderboard/repository.js";
 import { makeDecision, isImprovement } from "./arena-decision.js";
@@ -251,6 +251,15 @@ export async function runArena(
   // Read dataset context once for the entire arena run
   const datasetCtx = readDatasetContext(config.workspacePath);
 
+  // ── Tier gate for the creative team (ISSUE-10) ──
+  // The 3rd team (modeler-creative) explores decorrelation-seeking approaches
+  // (DAE, aggressive mRMR, etc.) whose ROI is negative on small datasets —
+  // they overfit or burn budget without diversity benefit. Only activate it
+  // on MEDIUM/LARGE tiers. The two standard teams always run.
+  const activeAgents = (datasetCtx.complexityTier === "medium" || datasetCtx.complexityTier === "large")
+    ? config.agents
+    : config.agents.filter((a) => a.id !== "modeler-creative");
+
   // Warm-start: inject past best results for this dataset signature
   let warmStartHints: string[] = [];
   if (config.datasetSignature) {
@@ -286,14 +295,14 @@ export async function runArena(
     session.currentRound = round;
 
     // Build prompts with dataset context for complexity-aware generation
-    const prompts = buildPromptsForRound(config, session, allResults, datasetCtx, warmStartHints);
+    const prompts = buildPromptsForRound(config, session, allResults, datasetCtx, warmStartHints, activeAgents);
 
     // Fan-out: run all agents in parallel
     const agentOutputs = await runAgentsParallel(prompts, config);
 
     // Measure sequentially (resource contention)
     const roundResults: AgentRoundResult[] = [];
-    for (const agent of config.agents) {
+    for (const agent of activeAgents) {
       const output = agentOutputs[agent.id];
       if (!output) {
         roundResults.push(createCrashResult(agent.id, "Agent returned no output"));
@@ -335,6 +344,9 @@ export async function runArena(
       roundResults.push(result);
 
       const richMetrics = tryLoadRichMetrics(config.workspacePath, agent.id, round, datasetCtx.problemType);
+      // Surface the cross-pollination note on the in-memory result so the
+      // next round's prompt can inject it for the other team(s).
+      result.notes = richMetrics.notes ?? undefined;
 
       // ── Pre-write audit (agentic-ml auto_critic) ────────────────────────
       // Run the blocking quality gates BEFORE persisting. The audit may
@@ -520,6 +532,9 @@ function buildPromptsForRound(
   allResults: AgentRoundResult[],
   datasetCtx: DatasetContext,
   warmStartHints: string[] = [],
+  // Active agents for this run (may exclude modeler-creative on TINY/SMALL
+  // tiers — see the tier gate in runArena). Defaults to all configured agents.
+  activeAgents: ArenaAgentConfig[] = config.agents,
 ): Record<string, string> {
   const prompts: Record<string, string> = {};
 
@@ -533,7 +548,7 @@ function buildPromptsForRound(
     }
   }
 
-  for (const agent of config.agents) {
+  for (const agent of activeAgents) {
     const myHistory = allResults.filter(r => r.agentId === agent.id);
     const othersKept = allResults.filter(r => r.agentId !== agent.id && (r.decision === "keep" || r.decision === "baseline"));
 
@@ -559,6 +574,18 @@ function buildPromptsForRound(
       for (const o of othersKept) {
         prompt += `  ${o.agentId}: "${o.hypothesis}" → ${o.metric !== null ? o.metric.toFixed(6) : "falha"}\n`;
       }
+    }
+    // ── Cross-pollination: notes the other team(s) directed at you ──
+    // Distinct from their `learned` (own reflection) — these are explicit
+    // suggestions for you. Incentivizes teams to build on each other's
+    // findings (agentic-ml journal `notes` channel).
+    const othersNotes = othersKept
+      .filter((o) => o.notes && o.notes.trim().length > 0)
+      .map((o) => `  ${o.agentId}: ${o.notes!.trim()}`);
+    if (othersNotes.length > 0) {
+      prompt += `\n### Sugestões do Outro Time (cross-pollination)\n`;
+      prompt += othersNotes.join("\n") + "\n";
+      prompt += `Considere essas sugestões ao formular sua hipótese — você pode explorá-las ou refutá-las.\n`;
     }
     prompt += `\n### Estratégia\n${agent.strategyHint}\n\n`;
     if (warmStartHints.length > 0 && session.currentRound === 1) {
@@ -613,7 +640,8 @@ function buildPromptsForRound(
       prompt += `    "brier_calibrated": <float_ou_null>,\n`;
       prompt += `    "ece_calibrated": <float_ou_null>,  // ECE com bins de QUANTIL (não equal-width). Robusto a colapso de probs.\n`;
       prompt += `    "n_unique_probs": <int_ou_null>,   // nº de probabilidades únicas no array OOF. <50 = saturação (rejeitado [cal_leak]).\n`;
-      prompt += `    "category": "<hyperparameter|feature_engineering|ensemble|model_selection|regularization|calibration>"\n`;
+      prompt += `    "category": "<hyperparameter|feature_engineering|ensemble|model_selection|regularization|calibration>",\n`;
+      prompt += `    "notes": "<string_ou_null>"  // cross-pollination: sugestão/observação dirigida AO OUTRO time (ex: "MLP com embedding de X pode extrair interações"). Distinto de learned.\n`;
       prompt += `  }\n\n`;
       prompt += `  Exemplo de código para salvar o JSON no final do seu script:\n`;
       prompt += `  \`\`\`python\n`;
@@ -636,7 +664,8 @@ function buildPromptsForRound(
       prompt += `      "brier_calibrated": float(brier_cal) if brier_cal is not None else None,\n`;
       prompt += `      "ece_calibrated": float(ece_cal) if ece_cal is not None else None,  # ECE com bins de QUANTIL\n`;
       prompt += `      "n_unique_probs": int(np.unique(oof_probs).size) if oof_probs is not None else None,\n`;
-      prompt += `      "category": "hyperparameter"\n`;
+      prompt += `      "category": "hyperparameter",\n`;
+      prompt += `      "notes": "Sugestão para o outro time: ..."  # cross-pollination (opcional)\n`;
       prompt += `  }\n`;
       prompt += `  np.save("artifacts/models/${agent.id}_round${session.currentRound}_oof.npy", oof_probs)\n`;
       prompt += `  with open("artifacts/models/${agent.id}_round${session.currentRound}_results.json", "w") as f:\n`;
@@ -654,7 +683,8 @@ function buildPromptsForRound(
       prompt += `    "train_score": <float>,         // OBRIGATÓRIO: métrica no treino (gate de overfitting).\n`;
       prompt += `    "oof_path": "<string_ou_null>",\n`;
       prompt += `    "prod_path": "<string_ou_null>",\n`;
-      prompt += `    "category": "<hyperparameter|feature_engineering|ensemble|model_selection|regularization|calibration>"\n`;
+      prompt += `    "category": "<hyperparameter|feature_engineering|ensemble|model_selection|regularization|calibration>",\n`;
+      prompt += `    "notes": "<string_ou_null>"  // cross-pollination: sugestão dirigida AO OUTRO time.\n`;
       prompt += `  }\n\n`;
       prompt += `  Exemplo de código para salvar o JSON no final do seu script:\n`;
       prompt += `  \`\`\`python\n`;
@@ -670,7 +700,8 @@ function buildPromptsForRound(
       prompt += `      "train_score": float(train_score),\n`;
       prompt += `      "oof_path": "artifacts/models/${agent.id}_round${session.currentRound}_oof.npy",\n`;
       prompt += `      "prod_path": "artifacts/models/${agent.id}_round${session.currentRound}_prod.pkl",\n`;
-      prompt += `      "category": "hyperparameter"\n`;
+      prompt += `      "category": "hyperparameter",\n`;
+      prompt += `      "notes": "Sugestão para o outro time: ..."  # cross-pollination (opcional)\n`;
       prompt += `  }\n`;
       prompt += `  np.save("artifacts/models/${agent.id}_round${session.currentRound}_oof.npy", oof_preds)\n`;
       prompt += `  with open("artifacts/models/${agent.id}_round${session.currentRound}_results.json", "w") as f:\n`;

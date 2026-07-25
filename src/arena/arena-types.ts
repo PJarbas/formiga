@@ -83,6 +83,13 @@ export interface AgentRoundResult {
   confidenceBand?: ConfidenceBand;
   scriptPath: string;
   experimentId?: number;
+  /**
+   * Cross-pollination note directed at the OTHER team(s) — a suggestion or
+   * observation, distinct from `learned` (own reflection). Injected into the
+   * next round's prompt so teams build on each other's findings (agentic-ml
+   * `notes` channel). Sourced from the agent's `_results.json`.
+   */
+  notes?: string;
 }
 
 export interface BenchmarkResult {
