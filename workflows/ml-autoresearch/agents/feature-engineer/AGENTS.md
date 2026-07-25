@@ -40,7 +40,7 @@ Produza estes arquivos em `{{workspace}}/artifacts/`:
 2. **`split.pkl`** — índices de split em pickle
 3. **`baseline.pkl`** — modelo baseline serializado
 4. **`baseline.json`** — metadados do baseline (score CV, hiperparâmetros)
-5. **`benchmark_config.json`** — configuração para benchmark da arena
+5. **`benchmark_config.json`** — configuração para benchmark da arena. Inclua um campo `compute_budget` derivado do tamanho do dataset (ex: `{"tier":"tiny","max_fit_seconds":30,"max_trials":15,"max_combinations":50,"max_model_complexity":"low"}`). Para datasets pequenos (<2k linhas), prefira budgets baixos — a arena impõe esses limites fisicamente (timeout + RLIMIT_CPU).
 6. **`benchmark_runner.py`** — script Python para avaliar modelos
 7. **`autoresearch.sh`** — wrapper Shell para o benchmark runner
 
