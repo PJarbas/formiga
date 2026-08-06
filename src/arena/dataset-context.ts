@@ -20,8 +20,8 @@ export interface DatasetContext {
   complexityTier: "tiny" | "small" | "medium" | "large";
 }
 
-function computeComplexityTier(rows: number | null): DatasetContext["complexityTier"] {
-  if (rows === null) return "medium";
+export function computeComplexityTier(rows: number | null): DatasetContext["complexityTier"] {
+  if (rows === null) return "tiny";
   if (rows < 2_000) return "tiny";
   if (rows < 10_000) return "small";
   if (rows < 50_000) return "medium";
@@ -103,21 +103,27 @@ function readDatasetShape(workspace: string): { rows: number | null; cols: numbe
   if (fs.existsSync(edaReport)) {
     try {
       const content = fs.readFileSync(edaReport, "utf-8");
-      const shapeMatch = content.match(/shape[:\s]*\(?(\d+)[,x\s]+(\d+)\)?/i);
-      if (shapeMatch) {
-        return { rows: parseInt(shapeMatch[1], 10), cols: parseInt(shapeMatch[2], 10) };
-      }
-      const rowsMatch = content.match(/(\d{2,})\s*(?:rows|samples|observations)/i);
-      const colsMatch = content.match(/(\d+)\s*(?:columns|features|variables)/i);
-      if (rowsMatch) {
-        return {
-          rows: parseInt(rowsMatch[1], 10),
-          cols: colsMatch ? parseInt(colsMatch[1], 10) : null,
-        };
-      }
+      return parseShapeFromText(content);
     } catch { /* ignore */ }
   }
 
+  return { rows: null, cols: null };
+}
+
+/** Parse shape (rows, cols) from a text blob such as an EDA report. */
+export function parseShapeFromText(content: string): { rows: number | null; cols: number | null } {
+  const shapeMatch = content.match(/\*{0,2}shape\*{0,2}[:\s]*\(?(\d+)[,x\s]+(\d+)\)?/i);
+  if (shapeMatch) {
+    return { rows: parseInt(shapeMatch[1], 10), cols: parseInt(shapeMatch[2], 10) };
+  }
+  const rowsMatch = content.match(/(\d{2,})\s*(?:rows|samples|observations|amostras)/i);
+  const colsMatch = content.match(/(\d+)\s*(?:columns|features|variables)/i);
+  if (rowsMatch) {
+    return {
+      rows: parseInt(rowsMatch[1], 10),
+      cols: colsMatch ? parseInt(colsMatch[1], 10) : null,
+    };
+  }
   return { rows: null, cols: null };
 }
 
