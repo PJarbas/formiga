@@ -446,7 +446,7 @@ export async function runArena(
             agent.id,
             agent.modelType ?? agent.id,
             richMetrics.hyperparameters ?? {},
-            bench.metric as number,
+            bench.metric,
           ),
           existingDedupSignatures,
         });
@@ -514,7 +514,7 @@ export async function runArena(
         });
         // Track dedup signature for future iterations.
         existingDedupSignatures.add(
-          dedupSignature(agent.id, agent.modelType ?? agent.id, richMetrics.hyperparameters ?? {}, bench.metric as number),
+          dedupSignature(agent.id, agent.modelType ?? agent.id, richMetrics.hyperparameters ?? {}, bench.metric),
         );
       }
       result.experimentId = experimentId;

@@ -271,6 +271,23 @@ describe("dedupSignature", () => {
     const b = dedupSignature("x", "lgbm", { lr: 0.01 }, 0.81);
     assert.notEqual(a, b);
   });
+
+  it("handles null metric without throwing", () => {
+    const a = dedupSignature("x", "lgbm", { lr: 0.01 }, null);
+    assert.ok(a.includes("null"), "null metric should produce 'null' in signature");
+  });
+
+  it("null metric produces different signature than zero", () => {
+    const nullSig = dedupSignature("x", "lgbm", {}, null);
+    const zeroSig = dedupSignature("x", "lgbm", {}, 0.0);
+    assert.notEqual(nullSig, zeroSig);
+  });
+
+  it("null metric is deterministic", () => {
+    const a = dedupSignature("x", "lgbm", {}, null);
+    const b = dedupSignature("x", "lgbm", {}, null);
+    assert.equal(a, b);
+  });
 });
 
 // ── overfitGapThreshold ──────────────────────────────────────────────────
