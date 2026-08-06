@@ -404,7 +404,8 @@ export async function launchArenaFromStep(
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error("Arena engine threw during run", { runId, stepId, error: msg });
+    const stack = err instanceof Error ? err.stack : undefined;
+    logger.error("Arena engine threw during run", { runId, stepId, error: msg, stack });
     await markStepFailed(stepId, runId, `Arena engine error: ${msg}`);
   }
 }

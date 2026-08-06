@@ -142,7 +142,7 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
       select: { retry_count: true, max_retries: true },
     });
     const newRetry = (meta?.retry_count ?? 0) + 1;
-    const maxRetries = meta?.max_retries ?? 0;
+    const maxRetries = meta?.max_retries ?? 4;
     const wfId = await getWorkflowId(step.run_id);
 
     if (newRetry > maxRetries) {
@@ -313,7 +313,7 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
             select: { retry_count: true, max_retries: true },
           });
           const newRetry = (meta?.retry_count ?? 0) + 1;
-          const maxRetries = meta?.max_retries ?? 0;
+          const maxRetries = meta?.max_retries ?? 4;
           const errorDetail =
             `Step output had no STORIES_JSON block, but the next step (${downstreamLoopExpectingStories.step_id}) is a loop over stories. ` +
             `The agent must emit a literal "STORIES_JSON: [ ... ]" line with at least one story. Resetting to pending for retry ${newRetry}/${maxRetries}.`;
