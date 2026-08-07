@@ -327,7 +327,7 @@ Each agent has persona files in `workflows/ml-autoresearch/agents/<id>/` (`AGENT
 
 - **Pipeline Flow** — live graphical DAG of agent execution; clicking a node reveals insights, generated code, and logs.
 - **Leaderboard** — ranking of all models with task-adaptive metrics (classification: accuracy/f1/precision/recall/AUC; regression: RMSE/MAE/R²). Shows the real algorithm class (e.g. `LogisticRegression (Poly)`).
-- **Command Center** — run control (pause/resume/cancel), live logs (SSE).
+- **Runs** — run control (pause/resume/cancel), live logs (SSE).
 - **Winner Consolidation** — crowns the winner and compiles the final report when the Arena converges.
 
 ### Main endpoints

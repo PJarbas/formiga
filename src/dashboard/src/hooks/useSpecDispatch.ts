@@ -2,7 +2,7 @@
 // useSpecDispatch.ts — Shared approve/reject dispatch logic
 // ══════════════════════════════════════════════════════════════════════
 // Eliminates duplicated 20-line approve/reject + toast blocks
-// from CommandCenter and ExperimentBoard.
+// from Runs and ExperimentBoard.
 // ══════════════════════════════════════════════════════════════════════
 
 import { useSpecActions } from "../api/api.js";

@@ -2,7 +2,7 @@
 // human-status.ts — Resolve composite pipeline state into human-readable status
 // ══════════════════════════════════════════════════════════════════════
 // Pure function — no React dependency. Rules evaluated in priority order.
-// Used by useHumanStatus() hook and consumed by App header + CommandCenter.
+// Used by useHumanStatus() hook and consumed by App header + Runs.
 // ══════════════════════════════════════════════════════════════════════
 
 import { getStatusConfig } from "./status-config.js";

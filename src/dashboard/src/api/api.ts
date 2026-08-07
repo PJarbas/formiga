@@ -20,7 +20,7 @@ import type {
   ChecklistState,
   ChecklistItem,
   TraceEntry,
-  CommandCenterSnapshot,
+  RunsSnapshot,
   PendingDecision,
   ModelReportResponse,
   ReproductionScriptResponse,
@@ -228,7 +228,7 @@ export function useDeleteRun() {
   return useMutation({
     mutationFn: (runId: string) => fetchJSON(`${BASE}/runs/${encodeURIComponent(runId)}`, { method: "DELETE" }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["command-center"] });
+      qc.invalidateQueries({ queryKey: ["runs"] });
       qc.invalidateQueries({ queryKey: ["pipeline"] });
     },
   });
@@ -263,7 +263,7 @@ export function useSpecActions() {
       }),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["specs", vars.specId] });
-      qc.invalidateQueries({ queryKey: ["command-center"] });
+      qc.invalidateQueries({ queryKey: ["runs"] });
       qc.invalidateQueries({ queryKey: ["decisions", "pending"] });
     },
   });
@@ -285,7 +285,7 @@ export function useSpecActions() {
       }),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["specs", vars.specId] });
-      qc.invalidateQueries({ queryKey: ["command-center"] });
+      qc.invalidateQueries({ queryKey: ["runs"] });
       qc.invalidateQueries({ queryKey: ["decisions", "pending"] });
     },
   });
@@ -342,7 +342,7 @@ export function useTrace(
   });
 }
 
-// ── Command Center aggregate ────────────────────────────────────────
+// ── Runs aggregate ──────────────────────────────────────────────────
 
 export function useArenaSession(runId: string | undefined) {
   return useQuery({
@@ -404,10 +404,10 @@ export function useArenaControls(runId: string | undefined) {
   });
 }
 
-export function useCommandCenter() {
+export function useRuns() {
   return useQuery({
-    queryKey: ["command-center"],
-    queryFn: () => fetchJSON<CommandCenterSnapshot>(`${BASE}/command-center`),
+    queryKey: ["runs"],
+    queryFn: () => fetchJSON<RunsSnapshot>(`${BASE}/runs`),
     refetchInterval: 3000,
   });
 }

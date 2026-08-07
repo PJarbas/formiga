@@ -7,7 +7,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import App from "./App";
-import CommandCenter from "./screens/CommandCenter";
+import Runs from "./screens/Runs";
 import PipelineFlowScreen from "./screens/PipelineFlowScreen";
 import Leaderboard from "./screens/Leaderboard";
 import { ToastContainer } from "./components/Toast";
@@ -28,12 +28,12 @@ const router = createBrowserRouter([
     path: "/",
     element: <App />,
     children: [
-      { index: true, element: <CommandCenter /> },
+      { index: true, element: <Runs /> },
       { path: "pipeline", element: <PipelineFlowScreen /> },
       { path: "leaderboard", element: <Leaderboard /> },
       { path: "kanban", element: <Navigate to="/pipeline" replace /> },
       { path: "runs/:id/kanban", element: <Navigate to="/pipeline" replace /> },
-      { path: "*", element: <CommandCenter /> },
+      { path: "*", element: <Runs /> },
     ],
   },
 ]);

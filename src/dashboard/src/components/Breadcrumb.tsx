@@ -9,7 +9,7 @@ import { Link, useLocation } from "react-router-dom";
 import { usePipelineStatus } from "../api/api.js";
 
 const NAV_ITEMS = [
-  { to: "/", label: "Command Center", end: true },
+  { to: "/", label: "Runs", end: true },
   { to: "/kanban", label: "Experiment Board" },
   { to: "/leaderboard", label: "Model Arena" },
 ];
