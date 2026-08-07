@@ -353,10 +353,11 @@ export function dedupSignature(
   agentName: string,
   modelType: string,
   hyperparameters: Record<string, unknown>,
-  metric: number,
+  metric: number | null,
 ): string {
   const hp = canonicalJson(hyperparameters);
-  return `${agentName}|${modelType}|${hp}|${metric.toFixed(8)}`;
+  const metricStr = metric !== null ? metric.toFixed(8) : "null";
+  return `${agentName}|${modelType}|${hp}|${metricStr}`;
 }
 
 /** Canonical (sorted-key) JSON for stable hashing. */
