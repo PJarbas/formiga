@@ -153,7 +153,7 @@ process.on("SIGHUP", () => {
 
 process.on("unhandledRejection", (reason) => {
   console.error("Unhandled rejection in daemon:", reason);
-  void shutdown("unhandledRejection", 1);
+  // Log only — do NOT crash the daemon. Individual operations handle their own errors.
 });
 
 process.on("uncaughtException", (err) => {

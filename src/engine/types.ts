@@ -1,30 +1,6 @@
 // ══════════════════════════════════════════════════════════════════════
-// types.ts — Re-export autoresearch types + ML pipeline types
+// types.ts — ML pipeline types (extracted from autoresearch/types.ts)
 // ══════════════════════════════════════════════════════════════════════
-
-export type {
-  AutoresearchDirection,
-  AutoresearchDecision,
-  AutoresearchRunStatus,
-  AutoresearchConfidenceBand,
-  AutoresearchSessionConfig,
-  AutoresearchPaths,
-  AutoresearchRunEntry,
-  AutoresearchRunResultEntry,
-  AutoresearchSessionEntry,
-  AutoresearchLogEntry,
-  AutoresearchSummary,
-  AutoresearchConfidence,
-  InitExperimentOptions,
-  RunExperimentOptions,
-  LogExperimentOptions,
-  RunLoopIterationOptions,
-  RunLoopIterationResult,
-  LoopAutoresearchOptions,
-  LoopAutoresearchResult,
-} from "./autoresearch.js";
-
-// ── ML Pipeline types ──────────────────────────────────────────────────
 
 export interface FormigaConfig {
   maxRounds: number;

@@ -167,6 +167,7 @@ async function trainScript(
     child.on("error", (err) => {
       clearTimeout(timer);
       escalation?.cancel();
+      console.error(`[arena-engine] child process error:`, err.stack ?? err.message);
       resolve({ modelPath: null, stdout, stderr: stderr + err.message, exitCode: null, budgetExceeded: false });
     });
   });
@@ -228,6 +229,7 @@ async function benchmarkOne(
     child.on("error", (err) => {
       clearTimeout(timer);
       escalation?.cancel();
+      console.error(`[arena-engine] check child process error:`, err.stack ?? err.message);
       resolve({
         metric: null,
         exitCode: null,
@@ -816,8 +818,9 @@ function emitArenaEvent(
         detail,
       });
     }
-  }).catch(() => {
+  }).catch((err) => {
     // Graceful degradation: arena works even without event system
+    console.error(`[arena-engine] failed to emit round_complete event:`, (err as Error).stack ?? String(err));
   });
 }
 
@@ -943,6 +946,7 @@ function tryLoadRichMetrics(
     };
   } catch (err) {
     // Silently degrade if file is corrupt or unreadable
+    console.error(`[arena-engine] failed to read rich metrics from benchmark output:`, (err as Error).stack ?? String(err));
     return {};
   }
 }
