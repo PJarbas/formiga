@@ -5,10 +5,8 @@
  *
  * Routes:
  *   GET /                        -> React SPA (ML dashboard)
- *   GET /api/autoresearch/runs   -> list workflow runs with AutoResearch state
  *   GET /api/runs                -> list all workflow runs
  *   GET /api/runs/:id            -> detail for a specific run
- *   GET /api/runs/:id/autoresearch -> AutoResearch progress for a run's harness cwd
  *   GET /api/runs/:id/agents/:name/figures -> list figures (png/jpg/svg/webp) for an agent
  *   GET /api/runs/:id/agents/:name/decisions -> list all decisions for an agent
  *   GET /api/runs/:id/agents/:name/metrics   -> list all metrics for an agent
@@ -36,7 +34,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getSystemTokenSpend, getAutoresearchSessions, getAutoresearchSessionById, upsertAutoresearchSession, initDatabase } from "../db.js";
+import { getSystemTokenSpend, initDatabase } from "../db.js";
 import { getPrisma } from "../database/prisma.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
@@ -45,15 +43,6 @@ import { runWorkflow } from "../installer/run.js";
 import { stopWorkflow, deleteWorkflow, getWorkflowStatus } from "../installer/status.js";
 import { getBuildVersion } from "../lib/version.js";
 import { logger } from "../lib/logger.js";
-import {
-  findAutoresearchSessionCwd,
-  calculateAutoresearchConfidence,
-  readAutoresearchLog,
-  summarizeAutoresearch,
-  type AutoresearchLogEntry,
-  type AutoresearchRunEntry,
-  type AutoresearchRunResultEntry,
-} from "../autoresearch/autoresearch.js";
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
@@ -153,59 +142,6 @@ function resolveRunHarnessCwd(run: { context?: string | null }): string | undefi
     stringFromContext(ctx, "worktree_path") ??
     stringFromContext(ctx, "cwd")
   );
-}
-
-function buildAutoresearchExperiments(entries: AutoresearchLogEntry[]) {
-  const results = new Map<number, AutoresearchRunResultEntry>();
-  for (const entry of entries) {
-    if (entry.type === "run_result") results.set(entry.run, entry);
-  }
-
-  const cumulativeEntries: AutoresearchLogEntry[] = entries.filter((entry) => entry.type === "session");
-  return entries
-    .filter((entry): entry is AutoresearchRunEntry => entry.type === "run")
-    .map((entry) => {
-      const result = results.get(entry.run);
-      cumulativeEntries.push(entry);
-      const hasStoredConfidence = Object.prototype.hasOwnProperty.call(entry, "confidence_band");
-      const confidence = !hasStoredConfidence
-        ? calculateAutoresearchConfidence(cumulativeEntries, entry.direction)
-        : {
-            confidence_score: entry.confidence_score,
-            confidence_band: entry.confidence_band,
-            noise_floor_mad: entry.noise_floor_mad,
-            confidence_sample_count: entry.confidence_sample_count,
-          };
-      return {
-        run: entry.run,
-        created_at: entry.created_at,
-        status: entry.status,
-        metric: entry.metric,
-        best_metric: entry.best_metric,
-        improvement_ratio: entry.improvement_ratio,
-        confidence_score: confidence.confidence_score,
-        confidence_band: confidence.confidence_band,
-        noise_floor_mad: confidence.noise_floor_mad,
-        confidence_sample_count: confidence.confidence_sample_count,
-        duration_ms: entry.duration_ms ?? result?.duration_ms,
-        description: entry.description,
-        hypothesis: entry.asi?.hypothesis,
-        learned: entry.asi?.learned,
-        next_focus: entry.asi?.next_focus,
-        command: entry.command ?? result?.command,
-        commit_before: entry.commit_before ?? result?.commit_before,
-        commit_after: entry.commit_after,
-        measured_status: result?.status,
-        exit_code: result?.exit_code,
-        checks: result?.checks
-          ? {
-              command: result.checks.command,
-              exit_code: result.checks.exit_code,
-              duration_ms: result.checks.duration_ms,
-            }
-          : undefined,
-      };
-    });
 }
 
 // ── API Handlers ─────────────────────────────────────────────────────
@@ -320,122 +256,6 @@ function handleRunDetail(
   })().catch((err) => errorResponse(res, `Failed to get run detail: ${(err as Error).message}`));
 }
 
-function handleRunAutoresearch(
-  _req: http.IncomingMessage,
-  res: http.ServerResponse,
-  runId: string,
-): void {
-  (async () => {
-    const prisma = getPrisma();
-
-    const run = await prisma.run.findUnique({
-      where: { id: runId },
-    });
-
-    if (!run) {
-      errorResponse(res, `Run not found: ${runId}`, 404);
-      return;
-    }
-
-    const cwd = resolveRunHarnessCwd(run);
-    if (!cwd) {
-      jsonResponse(res, {
-        exists: false,
-        run,
-        reason: "Run has no working_directory_for_harness in its context.",
-      });
-      return;
-    }
-
-    const autoresearchCwd = findAutoresearchSessionCwd(cwd) ?? cwd;
-    const summary = summarizeAutoresearch(autoresearchCwd);
-    if (!summary.exists) {
-      jsonResponse(res, {
-        exists: false,
-        run,
-        cwd,
-        reason: summary.nextPrompt,
-      });
-      return;
-    }
-
-    const entries = readAutoresearchLog(autoresearchCwd);
-    const results = entries.filter((entry): entry is AutoresearchRunResultEntry => entry.type === "run_result");
-    jsonResponse(res, {
-      exists: true,
-      run,
-      cwd: autoresearchCwd,
-      harnessCwd: cwd,
-      summary,
-      experiments: buildAutoresearchExperiments(entries),
-      pendingResults: results.filter((result) => !entries.some((entry) => entry.type === "run" && entry.run === result.run)),
-      entries: entries.slice(-100),
-    });
-  })().catch((err) => errorResponse(res, `Failed to get AutoResearch progress: ${(err as Error).message}`));
-}
-
-function handleAutoresearchRuns(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  (async () => {
-    const prisma = getPrisma();
-
-    const allRuns = await prisma.run.findMany({
-      orderBy: { created_at: "desc" },
-      take: 100,
-      include: { steps: true },
-    });
-
-    const rawRuns = allRuns.map((run) => {
-      const total_steps = run.steps.length;
-      const completed_steps = run.steps.filter((s) => s.status === "done").length;
-      const failed_steps = run.steps.filter((s) => s.status === "failed").length;
-      const running_steps = run.steps.filter((s) => s.status === "running").length;
-      const waiting_steps = run.steps.filter((s) => s.status === "waiting").length;
-
-      return {
-        id: run.id,
-        workflow_id: run.workflow_id,
-        task: run.task,
-        status: run.status,
-        context: run.context,
-        created_at: run.created_at,
-        updated_at: run.updated_at,
-        run_number: run.run_number,
-        tokens_spent: run.tokens_spent,
-        total_steps,
-        completed_steps,
-        failed_steps,
-        running_steps,
-        waiting_steps,
-      };
-    });
-
-    const filtered = rawRuns.filter((row) => {
-      const cwd = resolveRunHarnessCwd({ context: row.context as string | null | undefined });
-      if (!cwd) return false;
-      try {
-        const sessionCwd = findAutoresearchSessionCwd(cwd);
-        return !!sessionCwd;
-      } catch {
-        return false;
-      }
-    });
-
-    const runs = filtered.map((row) => {
-      let no_hurry = false;
-      try {
-        const ctx = JSON.parse(String(row.context ?? "{}"));
-        no_hurry = ctx.no_hurry_save_tokens_mode === "true";
-      } catch (err) {
-        logger.warn("handleListRuns: malformed run context", { runId: row.id, error: (err as Error).message });
-      }
-      return { ...row, no_hurry };
-    });
-
-    console.log(`[dashboard] GET /api/autoresearch/runs → ${runs.length} of ${rawRuns.length} total runs have AutoResearch state`);
-    jsonResponse(res, { runs });
-  })().catch((err) => errorResponse(res, `Failed to list AutoResearch runs: ${(err as Error).message}`));
-}
-
 function handleEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -504,116 +324,6 @@ function handleHealth(_req: http.IncomingMessage, res: http.ServerResponse): voi
   })().catch((err) =>
     errorResponse(res, `Health check failed: ${(err as Error).message}`, 503),
   );
-}
-
-// ── AutoResearch Session API Handlers ──────────────────────────────
-
-function handleAutoresearchSessions(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  (async () => {
-    const sessions = await getAutoresearchSessions();
-    const enriched = sessions.map((s) => {
-      const summary = summarizeAutoresearch(s.cwd);
-      return {
-        id: s.id,
-        cwd: s.cwd,
-        goal: s.goal,
-        metric_name: s.metric_name,
-        metric_unit: s.metric_unit,
-        direction: s.direction,
-        command: s.command,
-        created_at: s.created_at,
-        updated_at: s.updated_at,
-        last_seen_at: s.last_seen_at,
-        last_run_at: s.last_run_at,
-        total_runs: s.total_runs,
-        baseline_metric: s.baseline_metric,
-        best_metric: s.best_metric,
-        best_run: s.best_run,
-        files_missing: s.files_missing,
-        summary: summary.exists ? summary : undefined,
-      };
-    });
-
-    console.log(`[dashboard] GET /api/autoresearch/sessions → ${sessions.length} sessions`);
-    jsonResponse(res, { sessions: enriched });
-  })().catch((err) => errorResponse(res, `Failed to list AutoResearch sessions: ${(err as Error).message}`));
-}
-
-function handleAutoresearchSessionById(
-  _req: http.IncomingMessage,
-  res: http.ServerResponse,
-  sessionId: string,
-): void {
-  (async () => {
-    const session = await getAutoresearchSessionById(sessionId);
-    if (!session) {
-      errorResponse(res, `Session not found: ${sessionId}`, 404);
-      return;
-    }
-
-    const cwd = session.cwd;
-    const summary = summarizeAutoresearch(cwd);
-    const entries = summary.exists ? readAutoresearchLog(cwd) : [];
-    const results = entries.filter(
-      (entry): entry is AutoresearchRunResultEntry => entry.type === "run_result",
-    );
-
-    jsonResponse(res, {
-      session,
-      exists: summary.exists,
-      reason: summary.nextPrompt,
-      summary,
-      experiments: summary.exists ? buildAutoresearchExperiments(entries) : [],
-      pendingResults: results.filter(
-        (result) => !entries.some((entry) => entry.type === "run" && entry.run === result.run),
-      ),
-      entries: entries.slice(-100),
-    });
-  })().catch((err) => errorResponse(res, `Failed to get AutoResearch session: ${(err as Error).message}`));
-}
-
-// ── Backfill ────────────────────────────────────────────────────────
-
-export function backfillAutoresearchSessions(): void {
-  (async () => {
-    const prisma = getPrisma();
-    const rows = await prisma.run.findMany({
-      select: { context: true },
-      orderBy: { created_at: "desc" },
-      take: 100,
-    });
-
-    const seen = new Set<string>();
-    let backfilled = 0;
-
-    for (const row of rows) {
-      const cwd = resolveRunHarnessCwd({ context: row.context });
-      if (!cwd) continue;
-      try {
-        const sessionCwd = findAutoresearchSessionCwd(cwd);
-        if (!sessionCwd || seen.has(sessionCwd)) continue;
-        seen.add(sessionCwd);
-
-        // Only upsert if the cwd isn't already tracked
-        const sessionId = fs.existsSync(sessionCwd)
-          ? (() => { try { return fs.realpathSync(sessionCwd); } catch { return path.resolve(sessionCwd); } })()
-          : path.resolve(sessionCwd);
-        const existing = getAutoresearchSessionById(sessionId);
-        if (!existing) {
-          upsertAutoresearchSession(sessionCwd);
-          backfilled++;
-        }
-      } catch {
-        // Skip malformed or inaccessible cwds
-      }
-    }
-
-    if (backfilled > 0) {
-      console.log(`[dashboard] backfill: inserted ${backfilled} missing AutoResearch sessions from recent runs`);
-    }
-  })().catch((err) => {
-    console.error(`[dashboard] backfill error: ${(err as Error).message}`);
-  });
 }
 
 async function handlePauseRun(
@@ -1384,36 +1094,9 @@ function handleAgentReasoning(
       summary = step.output.slice(0, 2000);
     }
 
-    // Fetch autoresearch ASI data (hypothesis, learned, next_focus)
     let hypothesis: string | null = null;
     let learned: string | null = null;
     let nextFocus: string | null = null;
-
-    // Fallback chain: 1) autoresearch log  2) step output markers  3) agent_events thinking
-    const run = await prisma.run.findUnique({ where: { id: runId }, select: { context: true } });
-    if (run?.context) {
-      try {
-        const ctx = JSON.parse(run.context);
-        const cwd = ctx.working_directory_for_harness ?? ctx.cwd;
-        if (cwd) {
-          const logEntries = readAutoresearchLog(cwd);
-          const runEntries = logEntries.filter(
-            (e): e is AutoresearchRunEntry => e.type === "run",
-          );
-          const agentEntries = runEntries.filter((e) =>
-            e.description?.toLowerCase().includes(agentName.replace("-", " ")),
-          );
-          const latest = agentEntries.length > 0
-            ? agentEntries[agentEntries.length - 1]
-            : runEntries[runEntries.length - 1];
-          if (latest?.asi) {
-            hypothesis = latest.asi.hypothesis ?? null;
-            learned = latest.asi.learned ?? null;
-            nextFocus = latest.asi.next_focus ?? null;
-          }
-        }
-      } catch (err) { logger.warn("handleAgentReasoning: context not parseable", { agentName, error: (err as Error).message }); }
-    }
 
     // Fallback 2: extract HYPOTHESIS/LEARNED/NEXT_FOCUS markers from step output
     if (!hypothesis && step?.output) {
@@ -3085,44 +2768,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
-  // GET /api/runs/:id/autoresearch (registered before /api/runs/:id below)
-  const autoresearchApiMatch = pathname.match(/^\/api\/runs\/([a-zA-Z0-9_-]+)\/autoresearch$/);
-  if (method === "GET" && autoresearchApiMatch) {
-    handleRunAutoresearch(req, res, autoresearchApiMatch[1]);
-    return;
-  }
-
-  // GET /api/stats
-  if (method === "GET" && pathname === "/api/stats") {
-    handleStats(req, res);
-    return;
-  }
-
-  // GET /api/health
-  if (method === "GET" && pathname === "/api/health") {
-    handleHealth(req, res);
-    return;
-  }
-
-  // GET /api/autoresearch/sessions/:id (registered before /api/autoresearch/sessions to avoid prefix conflict)
-  const sessionIdMatch = pathname.match(/^\/api\/autoresearch\/sessions\/([a-zA-Z0-9_\/.%~-]+)$/);
-  if (method === "GET" && sessionIdMatch) {
-    handleAutoresearchSessionById(req, res, decodeURIComponent(sessionIdMatch[1]));
-    return;
-  }
-
-  // GET /api/autoresearch/sessions (registered before /api/autoresearch/runs)
-  if (method === "GET" && pathname === "/api/autoresearch/sessions") {
-    handleAutoresearchSessions(req, res);
-    return;
-  }
-
-  // GET /api/autoresearch/runs (registered before /api/runs to avoid route conflict)
-  if (method === "GET" && pathname === "/api/autoresearch/runs") {
-    handleAutoresearchRuns(req, res);
-    return;
-  }
-
   // GET /api/runs
   if (method === "GET" && pathname === "/api/runs") {
     handleListRuns(req, res);
@@ -3546,8 +3191,6 @@ export async function createDashboardServer(port: number, options: DashboardServ
 
   server.listen(port, () => {
     console.log(`Formiga dashboard listening on http://localhost:${port}`);
-    // Backfill AutoResearch sessions from recent workflow runs
-    backfillAutoresearchSessions();
   });
 
   server.on("error", (err: NodeJS.ErrnoException) => {

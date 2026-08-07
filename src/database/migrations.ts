@@ -214,38 +214,6 @@ export function migrate(db: DatabaseSync): void {
     "CREATE INDEX IF NOT EXISTS idx_run_worktrees_status ON run_worktrees(status)",
   );
 
-  // ── AutoResearch session registry ──
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS autoresearch_sessions (
-      id TEXT PRIMARY KEY,
-      cwd TEXT NOT NULL,
-      goal TEXT,
-      metric_name TEXT,
-      metric_unit TEXT,
-      direction TEXT,
-      command TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      last_seen_at TEXT NOT NULL,
-      last_run_at TEXT,
-      total_runs INTEGER NOT NULL DEFAULT 0,
-      baseline_metric REAL,
-      best_metric REAL,
-      best_run INTEGER,
-      files_missing INTEGER NOT NULL DEFAULT 0
-    );
-  `);
-
-  db.exec(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_autoresearch_sessions_cwd ON autoresearch_sessions(cwd)",
-  );
-  db.exec(
-    "CREATE INDEX IF NOT EXISTS idx_autoresearch_sessions_updated_at ON autoresearch_sessions(updated_at)",
-  );
-  db.exec(
-    "CREATE INDEX IF NOT EXISTS idx_autoresearch_sessions_last_seen_at ON autoresearch_sessions(last_seen_at)",
-  );
-
   // ── Arena sessions table (competitive loop state) ──
   db.exec(`
     CREATE TABLE IF NOT EXISTS arena_sessions (

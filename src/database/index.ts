@@ -9,10 +9,3 @@ export { getDb, getDbPath } from "./legacy-compat.js";
 
 // Legacy compat exports — now return Promises (callers must await)
 export { nextRunNumber, getSystemTokenSpend, incrementSystemTokenSpend } from "./token-repo.js";
-export {
-  upsertAutoresearchSession,
-  getAutoresearchSessions,
-  getAutoresearchSessionById,
-  deleteAutoresearchSession,
-  type AutoresearchSessionRow,
-} from "./session-repo.js";

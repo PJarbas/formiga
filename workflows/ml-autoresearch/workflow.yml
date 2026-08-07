@@ -191,7 +191,7 @@ steps:
 
       Benchmark config should be at {{workspace}}/artifacts/benchmark_config.json
     expects: "STATUS: done"
-    max_retries: 0
+    max_retries: 3
     on_fail:
       escalate_to: human
 

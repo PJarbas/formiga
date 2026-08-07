@@ -199,29 +199,6 @@ model ArenaSession {
   @@map("arena_sessions")
 }
 
-model AutoresearchSession {
-  id              String    @id
-  cwd             String    @unique
-  goal            String?
-  metric_name     String?
-  metric_unit     String?
-  direction       String?
-  command         String?
-  created_at      DateTime
-  updated_at      DateTime
-  last_seen_at    DateTime
-  last_run_at     DateTime?
-  total_runs      Int       @default(0)
-  baseline_metric Float?
-  best_metric     Float?
-  best_run        Int?
-  files_missing   Int       @default(0)
-
-  @@index([updated_at])
-  @@index([last_seen_at])
-  @@map("autoresearch_sessions")
-}
-
 model RunWorktree {
   run_id                         String    @id
   worktree_origin_repository     String

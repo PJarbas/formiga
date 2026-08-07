@@ -110,10 +110,10 @@ describe("nadeauBengio", () => {
 // ── Gates ────────────────────────────────────────────────────────────────
 
 describe("auditExperiment — G1 overfit", () => {
-  it("rejects when train-val gap exceeds tier threshold", () => {
+  it("rejects when relative train-val gap exceeds tier threshold", () => {
     const result = auditExperiment(baseInput({
       metric: 0.72,
-      trainScore: 0.99, // gap 0.27 >> 0.03 (MEDIUM)
+      trainScore: 0.99, // relGap = 0.27/0.72 = 37.5% > 20% (MEDIUM)
       tier: "MEDIUM",
     }));
     assert.equal(result.verdict, "rejected");
@@ -121,20 +121,20 @@ describe("auditExperiment — G1 overfit", () => {
     assert.match(result.rejectionReason!, /\[overfit\]/);
   });
 
-  it("keeps when gap is within threshold", () => {
+  it("keeps when relative gap is within threshold", () => {
     const result = auditExperiment(baseInput({
       metric: 0.82,
-      trainScore: 0.84, // gap 0.02 < 0.03
+      trainScore: 0.84, // relGap = 0.02/0.82 = 2.4% < 20% (MEDIUM)
       tier: "MEDIUM",
     }));
     assert.notEqual(result.verdict, "rejected");
   });
 
-  it("uses a looser threshold for TINY tier", () => {
-    // gap 0.055 would fail MEDIUM (0.03) but pass TINY (0.06)
+  it("uses a looser threshold for TINY tier (relative gap)", () => {
+    // relGap = 1.5 (150%) — fails MEDIUM (20%) but passes TINY (200%)
     const result = auditExperiment(baseInput({
-      metric: 0.80,
-      trainScore: 0.855,
+      metric: 1.0,
+      trainScore: 2.5,
       tier: "TINY",
     }));
     assert.notEqual(result.verdict, "rejected");

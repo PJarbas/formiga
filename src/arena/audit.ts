@@ -12,6 +12,30 @@
 
 import type { MetricDirection } from "./arena-types.js";
 
+// ── Runtime assertion ────────────────────────────────────────────────────────
+
+/**
+ * Assert that a value is non-null and non-undefined, narrowing its type.
+ * Throws with a descriptive message if the invariant is violated.
+ *
+ * Use this instead of `as` type assertions at the boundary between
+ * nullable and non-nullable code paths. Unlike `as`, this FAILS LOUDLY
+ * at runtime with a clear message rather than producing a cryptic
+ * "Cannot read properties of null" error 10 stack frames away.
+ *
+ * @example
+ *   invariant(bench.metric, "bench.metric must be a number for audit");
+ *   // bench.metric is narrowed to `number` from here on
+ */
+export function invariant<T>(
+  value: T | null | undefined,
+  message: string,
+): asserts value is T {
+  if (value === null || value === undefined) {
+    throw new Error(`Invariant violation: ${message}`);
+  }
+}
+
 // ── Public types ─────────────────────────────────────────────────────────
 
 export type AuditVerdict = "keep" | "warn" | "rejected";
@@ -100,14 +124,17 @@ export type ComplexityTier = "TINY" | "SMALL" | "MEDIUM" | "LARGE" | "UNKNOWN";
 
 // ── Overfit gate thresholds (by complexity tier) ─────────────────────────
 
-/** Max allowed |train − val| gap before the overfit gate rejects. */
+/** Max allowed relative |train − val| / |val| gap before the overfit gate rejects.
+ *  Ratios are relative to the metric magnitude (works for RMSE, MAE, R², etc.).
+ *  Tiny datasets get generous thresholds because CV variance is enormous with
+ *  few samples per fold (e.g. 10 rows × 5 folds = 2 samples/fold). */
 export function overfitGapThreshold(tier: ComplexityTier): number {
   switch (tier) {
-    case "TINY": return 0.06;
-    case "SMALL": return 0.05;
+    case "TINY": return 2.0;   // 200% gap — 10 rows, CV noise dominates
+    case "SMALL": return 0.50;  // 50%
     case "MEDIUM":
-    case "LARGE": return 0.03;
-    default: return 0.05;
+    case "LARGE": return 0.20;  // 20%
+    default: return 0.50;
   }
 }
 
@@ -254,14 +281,17 @@ export function auditExperiment(input: AuditInput): AuditResult {
     );
   }
 
-  // G1 — overfitting (train-val gap).
+  // G1 — overfitting (train-val gap, relative to metric magnitude).
+  // Relative gap works for any metric scale (RMSE in thousands, R² in [0,1], etc.)
+  // without requiring per-metric threshold calibration.
   if (input.trainScore !== null) {
-    const gap = Math.abs(input.trainScore - input.metric);
+    const absGap = Math.abs(input.trainScore - input.metric);
+    const relGap = Math.abs(input.metric) > 1e-9 ? absGap / Math.abs(input.metric) : absGap;
     const threshold = overfitGapThreshold(input.tier);
-    if (gap > threshold) {
+    if (relGap > threshold) {
       return reject(
         "overfit",
-        `[overfit] abs(train-val) ${gap.toFixed(4)} > ${threshold} (tier=${input.tier})`,
+        `[overfit] rel(train-val) ${(relGap * 100).toFixed(1)}% > ${(threshold * 100).toFixed(0)}% (tier=${input.tier})`,
         input,
         warnings,
         iterationTeam,
@@ -356,7 +386,7 @@ export function dedupSignature(
   metric: number | null,
 ): string {
   const hp = canonicalJson(hyperparameters);
-  const metricStr = metric !== null ? metric.toFixed(8) : "null";
+  const metricStr = metric !== null && Number.isFinite(metric) ? metric.toFixed(8) : "N/A";
   return `${agentName}|${modelType}|${hp}|${metricStr}`;
 }
 

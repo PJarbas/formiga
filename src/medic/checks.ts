@@ -143,15 +143,10 @@ export async function checkOrphanedCrons(): Promise<OrphanedCron[]> {
 export function checkDatabaseIntegrity(): IntegrityResult {
   try {
     const prisma = getPrisma();
-    const db = (prisma as any).$queryRawUnsafe
-      ? null
-      : null;
-    // Fallback: use raw sqlite through the legacy-compat db for integrity check
-    // since Prisma itself doesn't expose PRAGMA functionality.
-    // However, this is the only remaining place that might need raw.
-    // As a pragmatic approach, we'll skip PRAGMA through Prisma here
-    // and just return an indeterminate result because Prisma doesn't surface this.
-    return { ok: true, message: "Skipped — use native SQLite tool for PRAGMA integrity_check" };
+    const rows = (prisma as any).$queryRawUnsafe("PRAGMA integrity_check") as Array<{ integrity_check: string }>;
+    const ok = rows.length === 1 && rows[0].integrity_check === "ok";
+    const failures = !ok ? rows.map((r) => r.integrity_check).join("; ") : undefined;
+    return { ok, message: ok ? "Database integrity check passed" : `Database integrity issues found: ${failures}` };
   } catch (err) {
     return {
       ok: false,

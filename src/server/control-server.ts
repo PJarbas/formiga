@@ -972,7 +972,7 @@ export function startReconciler(): { stop: () => void } {
       // IMPORTANT: We must also check arena_sessions.updated_at since the arena
       // engine updates the session on every round, not the step itself.
       try {
-        const ARENA_STUCK_THRESHOLD_MINUTES = parseInt(process.env.FORMIGA_ARENA_STUCK_THRESHOLD_MINUTES ?? "30", 10) || 30;
+        const ARENA_STUCK_THRESHOLD_MINUTES = parseInt(process.env.FORMIGA_ARENA_STUCK_THRESHOLD_MINUTES ?? "10", 10) || 10;
         const ARENA_STUCK_THRESHOLD_MS = ARENA_STUCK_THRESHOLD_MINUTES * 60 * 1000; // default 30 minutes
         const arenaCutoff = new Date(Date.now() - ARENA_STUCK_THRESHOLD_MS);
         const stuckArenaSteps = await prisma.step.findMany({

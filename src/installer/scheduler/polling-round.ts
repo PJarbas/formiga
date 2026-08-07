@@ -34,9 +34,7 @@ import { readPort as readDashboardPort } from "../../server/daemonctl.js";
 import { completeStep, claimStep, recoverOrphanedStepsForAgent } from "../step-ops.js";
 import { recordRoundSummary } from "./activity-recorder.js";
 import type { WorkflowAgent, WorkflowSpec } from "../types.js";
-import { findHermesBinary } from "./binary-discovery.js";
-import { runHermes } from "./hermes-runner.js";
-import { runPi } from "./pi-runner.js";
+import { createHarnessRunner } from "./harness-runner.js";
 import {
   parsePollingRoundMetadata,
   summarizePollingRoundOutput,
@@ -856,47 +854,33 @@ export async function executePollingRound(
         FORMIGA_API_URL: resolveDashboardUrl(),
       };
 
-      if (harnessType === "hermes") {
-        const hermesPath = findHermesBinary();
-        output = await runHermes(pollingPrompt, {
-          timeout,
-          workdir: workingDirectoryForHarness,
-          env: {
-            ...agentContextEnv,
-            FORMIGA_HERMES_BINARY: hermesPath,
-          },
-          onSpawn,
-          outputFile,
-          activityContext,
-        });
-      } else {
-        // Load the bundled formiga-agent-tools extension so agents get the
-        // save_artifact / log_decision / report_metric / query_leaderboard
-        // tools. Missing extension is not fatal (falls back to base pi tools),
-        // but we log a warning so the operator can investigate.
-        const extensionPath = resolveFormigaAgentToolsExtension();
-        const piArgs: string[] = [];
-        if (extensionPath) {
-          piArgs.push("--extension", extensionPath);
-        } else {
-          logger.warn(
-            "formiga-agent-tools extension not found; agents will lack save_artifact tool",
-            { agentId: job.agentId },
-          );
-        }
-        piArgs.push("--print", "--mode", "json", "--no-session", pollingPrompt);
-
-        const piResult = await runPi(piArgs, {
-          timeout,
-          workdir: workingDirectoryForHarness,
-          env: agentContextEnv,
-          onSpawn,
-          outputFile,
-          activityContext,
-        });
-        output = piResult.assistantText;
-        extractedMetadata = piResult.metadata;
+      // Resolve PI extension for the formiga-agent-tools. Missing extension
+      // is not fatal (falls back to base pi tools), but we log a warning so
+      // the operator can investigate. Only PiRunner uses this; HermesRunner
+      // ignores it.
+      const extensionPath = resolveFormigaAgentToolsExtension();
+      if (!extensionPath && harnessType !== "hermes") {
+        logger.warn(
+          "formiga-agent-tools extension not found; agents will lack save_artifact tool",
+          { agentId: job.agentId },
+        );
       }
+
+      const runner = createHarnessRunner(harnessType, {
+        env: agentContextEnv,
+        ...(extensionPath ? { harnessSpecific: { extensionPath } } : {}),
+      });
+
+      const harnessResult = await runner.run(pollingPrompt, {
+        timeout,
+        workdir: workingDirectoryForHarness,
+        env: agentContextEnv,
+        onSpawn,
+        outputFile,
+        activityContext,
+      });
+      output = harnessResult.assistantText;
+      extractedMetadata = harnessResult.metadata;
       cleanupFile = outputFile;
     } finally {
       if (cleanupFile) {

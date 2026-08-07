@@ -32,23 +32,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { getBuildVersion } from "../lib/version.js";
 import { parseWorkflowRunArgs } from "./workflow-run-args.js";
 import type { HarnessType } from "../installer/types.js";
-import {
-  findAutoresearchSessionCwd,
-  initExperiment,
-  runExperiment,
-  logExperiment,
-  loopAutoresearch,
-  runLoopIteration,
-  readAutoresearchLog,
-  summarizeAutoresearch,
-  type AutoresearchDecision,
-  type AutoresearchDirection,
-  type AutoresearchRunEntry,
-  type AutoresearchSummary,
-  type RunLoopIterationOptions,
-  type RunLoopIterationResult,
-} from "../autoresearch/autoresearch.js";
-import { getPrisma, initDatabase, upsertAutoresearchSession } from "../db.js";
+import { getPrisma, initDatabase } from "../db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -167,122 +151,6 @@ function requireOption(args: string[], name: string, usage: string): string {
     process.exit(1);
   }
   return value;
-}
-
-function parseDirection(value: string): AutoresearchDirection {
-  if (value === "lower" || value === "higher") return value;
-  process.stderr.write(`Invalid --direction "${value}". Use "lower" or "higher".\n`);
-  process.exit(1);
-}
-
-function parseAutoresearchDecision(value: string | undefined): AutoresearchDecision | "auto" | undefined {
-  if (!value) return undefined;
-  if (value === "auto" || value === "baseline" || value === "keep" || value === "discard" || value === "crash" || value === "checks_failed") return value;
-  process.stderr.write(`Invalid --status "${value}". Use auto, baseline, keep, discard, crash, or checks_failed.\n`);
-  process.exit(1);
-}
-
-function formatAutoresearchConfidence(value: Pick<AutoresearchSummary, "confidence_score" | "confidence_band" | "noise_floor_mad" | "confidence_sample_count">): string {
-  if (value.confidence_score === null) {
-    return `unknown (${value.confidence_sample_count} sample${value.confidence_sample_count === 1 ? "" : "s"})`;
-  }
-  const score = value.confidence_score === Infinity ? "Infinity" : value.confidence_score.toFixed(2);
-  const mad = value.noise_floor_mad === null ? "unknown" : String(value.noise_floor_mad);
-  return `${value.confidence_band} (score=${score}, MAD=${mad}, n=${value.confidence_sample_count})`;
-}
-
-function printAutoresearchSummary(cwd?: string): void {
-  const summary = summarizeAutoresearch(cwd);
-  if (!summary.exists) {
-    console.log(summary.nextPrompt);
-    return;
-  }
-  console.log("AutoResearch");
-  console.log(`Goal:        ${summary.goal}`);
-  console.log(`Metric:      ${summary.metricName}${summary.metricUnit ? ` (${summary.metricUnit})` : ""}`);
-  console.log(`Direction:   ${summary.direction}`);
-  console.log(`Runs:        ${summary.totalRuns} logged (${summary.keptRuns} kept, ${summary.discardedRuns} discarded)`);
-  console.log(`Failures:    ${summary.crashedRuns} crash, ${summary.checksFailedRuns} checks_failed`);
-  console.log(`Baseline:    ${summary.baselineMetric ?? "(none)"}`);
-  console.log(`Best:        ${summary.bestMetric ?? "(none)"}${summary.bestRun ? ` at run ${summary.bestRun}` : ""}`);
-  console.log(`Confidence:  ${formatAutoresearchConfidence(summary)}`);
-  console.log("");
-  console.log(summary.nextPrompt);
-}
-
-async function resolveAutoresearchCwdForRun(runIdOrPrefix: string): Promise<{ runId: string; cwd?: string }> {
-  const detail = await getWorkflowStatus(runIdOrPrefix);
-  const prisma = getPrisma();
-  const run = await prisma.run.findUnique({
-    where: { id: detail.id },
-    select: { context: true },
-  });
-  if (!run?.context) return { runId: detail.id };
-
-  let context: Record<string, unknown> = {};
-  try {
-    const parsed = JSON.parse(run.context) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      context = parsed as Record<string, unknown>;
-    }
-  } catch {
-    return { runId: detail.id };
-  }
-
-  const readString = (key: string): string | undefined => {
-    const value = context[key];
-    return typeof value === "string" && value.trim() ? value : undefined;
-  };
-
-  return {
-    runId: detail.id,
-    cwd: readString("working_directory_for_harness") ?? readString("cwd"),
-  };
-}
-
-function printAutoresearchTimeline(cwd: string): void {
-  const entries = readAutoresearchLog(cwd);
-  const runs = entries.filter((entry): entry is AutoresearchRunEntry => entry.type === "run");
-  if (runs.length === 0) {
-    console.log("Timeline:    No logged experiments yet.");
-    return;
-  }
-
-  console.log("Timeline:");
-  for (const run of runs.slice(-12)) {
-    const metric = run.metric === null ? "-" : String(run.metric);
-    const confidence = run.confidence_score === null || run.confidence_score === undefined ? "" : ` confidence=${run.confidence_band}`;
-    const learned = run.asi?.learned ? ` — ${run.asi.learned}` : "";
-    const next = run.asi?.next_focus ? ` | next: ${run.asi.next_focus}` : "";
-    console.log(`  #${String(run.run).padStart(2, "0")} [${run.status.padEnd(13)}] ${metric.padEnd(8)} ${run.description}${confidence}${learned}${next}`);
-  }
-}
-
-async function printWorkflowAutoresearch(runIdOrPrefix: string): Promise<void> {
-  let resolved: { runId: string; cwd?: string };
-  try {
-    resolved = await resolveAutoresearchCwdForRun(runIdOrPrefix);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : `No run found matching "${runIdOrPrefix}".`;
-    console.log(message.startsWith("No run found matching") ? `No run found matching "${runIdOrPrefix}".` : message);
-    return;
-  }
-
-  if (!resolved.cwd) {
-    console.log(`Run ${resolved.runId.slice(0, 8)} has no harness working directory in its context.`);
-    return;
-  }
-
-  const autoresearchCwd = findAutoresearchSessionCwd(resolved.cwd) ?? resolved.cwd;
-  console.log(`Run:         ${resolved.runId.slice(0, 8)}`);
-  console.log(`Harness CWD: ${resolved.cwd}`);
-  if (autoresearchCwd !== resolved.cwd) console.log(`Session CWD: ${autoresearchCwd}`);
-  printAutoresearchSummary(autoresearchCwd);
-  const summary = summarizeAutoresearch(autoresearchCwd);
-  if (summary.exists) {
-    console.log("");
-    printAutoresearchTimeline(autoresearchCwd);
-  }
 }
 
 function getVersionHelp(): string {
@@ -857,19 +725,6 @@ Examples:
   formiga workflow status abc12345`;
 }
 
-function getWorkflowAutoresearchHelp(): string {
-  return `formiga workflow autoresearch — Show AutoResearch progress for a workflow run
-
-Usage: formiga workflow autoresearch <run-id>
-
-Resolves the run's harness working directory, reads its project-local
-autoresearch.config.json and autoresearch.jsonl files, then prints the
-current metric summary and recent experiment timeline.
-
-Examples:
-  formiga workflow autoresearch abc12345`;
-}
-
 function getWorkflowDeleteHelp(): string {
   return `formiga workflow delete — Permanently delete a workflow run
 
@@ -984,7 +839,7 @@ Examples:
 function getWorkflowGroupHelp(): string {
   return `formiga workflow — Manage workflows and runs
 
-Usage: formiga workflow <list|runs|install|uninstall|run|status|autoresearch|stop|delete|pause|resume|pause-all|resume-all>
+Usage: formiga workflow <list|runs|install|uninstall|run|status|stop|delete|pause|resume|pause-all|resume-all>
 
 Commands for managing Formiga workflows and their runs.
 
@@ -996,8 +851,6 @@ Subcommands:
               active-runs check)
   run         Start a new workflow run with the given task
   status      Show detailed run status with step listing
-  autoresearch
-              Show AutoResearch progress for a run
   stop        Cancel a running workflow
   delete      Permanently delete a run and all its data (--force for active runs)
   pause       Pause a running workflow via the daemon
@@ -1011,7 +864,6 @@ Examples:
   formiga workflow install feature-dev-merge
   formiga workflow run feature-dev-merge "Add a new feature"
   formiga workflow status abc12345
-  formiga workflow autoresearch abc12345
   formiga workflow pause abc12345 --drain`;
 }
 
@@ -1028,265 +880,6 @@ Examples:
   formiga nudge            # Nudge all scheduled agents for active runs`;
 }
 
-function getAutoresearchHelp(): string {
-  return `formiga autoresearch — Run ML AutoResearch arena workflow
-
-Usage: formiga autoresearch "[dataset_path=PATH target_column=COL ...] [options]"
-   or: formiga autoresearch <init|run-experiment|log-experiment|status|next|loop|prune>
-
-NEW WORKFLOW (recommended):
-  Runs the full ML AutoResearch pipeline:
-    EDA → Features → Arena (competing modelers) → Report
-
-  Arguments are space-separated key=value pairs embedded in the task string:
-    dataset_path=<abs-path>    (required)
-    target_column=<name>       (required)
-    max_rounds=<N>             (optional)
-    metric=<name>              (optional, e.g. cv_score, roc_auc)
-    direction=<lower|higher>   (optional, default: higher)
-
-  Options:
-    --working-directory-for-harness <dir>
-    --no-hurry-please-save-tokens-mode
-
-  Examples:
-    formiga autoresearch "dataset_path=/data/train.csv target_column=price max_rounds=5"
-    formiga autoresearch "dataset_path=./iris.csv target_column=species metric=accuracy direction=higher"
-
-LEGACY SUBCOMMANDS (deprecated — use workflow version above):
-  init            Create a new AutoResearch session
-  run-experiment  Run the configured experiment command and append a measured result
-  log-experiment  Log the keep/discard decision, learning, and next focus
-  loop            Run a bounded experiment loop with live terminal progress
-  run-loop-iteration
-                  Run a single transactional experiment iteration
-  status          Summarize baseline, best run, failures, and next prompt
-  next            Print the ratchet prompt for the next experiment
-  prune           Remove stale AutoResearch registry rows from SQLite (DB only)
-  wizard          Interactive setup wizard that guides you through creating
-                  an AutoResearch command sequence
-
-Legacy examples:
-  formiga autoresearch init --goal "reduce validation loss" --metric val_bpb --direction lower --command "uv run train.py"
-  formiga autoresearch run-experiment
-  formiga autoresearch log-experiment --status auto --description "try smaller LR" --learned "stable but slower" --next-focus "test warmup"`;
-}
-
-function getAutoresearchInitHelp(): string {
-  return `formiga autoresearch init — Create an AutoResearch session
-
-Usage: formiga autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd> [options]
-
-Options:
-  --unit <unit>             Metric unit, such as seconds, bpb, auc, or ms
-  --metric-regex <regex>    Regex with the metric value in capture group 1
-  --checks-command <cmd>    Correctness command to run after successful benchmarks
-  --cwd <dir>               Project directory (default: current directory)
-  --overwrite               Replace existing autoresearch files
-
-Examples:
-  formiga autoresearch init --goal "speed up tests" --metric total_ms --unit ms --direction lower --command "pnpm test --run"`;
-}
-
-function getAutoresearchRunExperimentHelp(): string {
-  return `formiga autoresearch run-experiment — Execute the current experiment
-
-Usage: formiga autoresearch run-experiment [options]
-
-Runs the configured command, captures stdout/stderr tails, parses the metric,
-runs optional checks, and appends a run_result entry to autoresearch.jsonl.
-
-Options:
-  --cwd <dir>               Project directory (default: current directory)
-  --command <cmd>           Override the configured command for this run
-  --metric-regex <regex>    Override metric parser for this run
-  --checks-command <cmd>    Override or provide correctness checks
-  --timeout-seconds <n>     Command timeout (default: 1800)
-
-Examples:
-  formiga autoresearch run-experiment
-  formiga autoresearch run-experiment --metric-regex "val_bpb=([0-9.]+)"`;
-}
-
-function getAutoresearchLogExperimentHelp(): string {
-  return `formiga autoresearch log-experiment — Record experiment learning and decision
-
-Usage: formiga autoresearch log-experiment --description <text> [options]
-
-By default --status auto classifies the latest measured result as baseline,
-keep, discard, crash, or checks_failed by comparing it with prior accepted
-runs in autoresearch.jsonl.
-
-Options:
-  --cwd <dir>               Project directory (default: current directory)
-  --status <status>         auto, baseline, keep, discard, crash, checks_failed
-  --metric <number>         Metric value if no latest run_result should be used
-  --description <text>      What changed in this experiment
-  --hypothesis <text>       Hypothesis tested
-  --learned <text>          Evidence learned from the result
-  --next-focus <text>       Next experiment direction
-  --commit                  Commit kept/baseline results with git
-  --revert-discard          Revert non-autoresearch tracked files on discard
-
-Examples:
-  formiga autoresearch log-experiment --status auto --description "cache parser" --learned "faster but flaky" --next-focus "fix invalidation"`;
-}
-
-function getAutoresearchStatusHelp(): string {
-  return `formiga autoresearch status — Summarize the experiment loop
-
-Usage: formiga autoresearch status [--cwd <dir>]
-
-Shows baseline, best result, keep/discard counts, failure counts, and the
-ratchet prompt for the next experiment.
-
-Examples:
-  formiga autoresearch status`;
-}
-
-function getAutoresearchNextHelp(): string {
-  return `formiga autoresearch next — Print the next experiment prompt
-
-Usage: formiga autoresearch next [--cwd <dir>]
-
-Prints the evidence-driven prompt that agents should read before proposing
-the next experiment. This is the ratchet: use prior results before editing.
-
-Examples:
-  formiga autoresearch next`;
-}
-
-function getAutoresearchLoopHelp(): string {
-  return `formiga autoresearch loop — Run a bounded experiment loop
-
-Usage: formiga autoresearch loop [options]
-
-Runs a bounded AutoResearch experiment loop. An action mode is REQUIRED —
-the loop will fail without one.
-
-Action modes:
-  --measure-only    Repeated benchmark only (no optimization). Honest measurement;
-                    no code/config changes between iterations.
-  --prompt          pi-driven optimization. Between iterations, spawns pi to make
-                    one small code change guided by AutoResearch history.
-
-Options:
-  --target-metric <number>        Stop loop when the target metric is reached
-                                  (compared via the configured direction)
-  --max-iterations <number>       Maximum number of iterations (default: 20)
-  --max-consecutive-failures <n>  Stop after N consecutive failures (default: 3)
-  --timeout <duration>            Per-pi-action timeout (default: 5m). Format: <number><s|m|h>
-                                  (e.g. 300s, 10m, 1h)
-  --cwd <dir>                     Project directory (default: current directory)
-
-Stop conditions (the loop stops when any one is met):
-  - Target metric reached (requires --target-metric or config target)
-  - Max iterations reached (--max-iterations)
-  - Too many consecutive failures (--max-consecutive-failures)
-  - User cancels with Ctrl-C / SIGINT
-
-Progress display shows for each iteration:
-  [measure-only] or [prompt] label, [N/MAX] iteration number, current focus,
-  measured metric, decision (keep/discard/crash), best metric (loop + all-time),
-  failure count, and stop reason.
-
-After the loop ends, a final summary prints: total iterations, best
-metric (this loop and all-time), best run number, and kept/discarded/crashed counts.
-
-Cancellation (Ctrl-C / SIGINT) prints the last completed iteration info
-and leaves autoresearch.jsonl in a consistent state.
-
-Examples:
-  formiga autoresearch loop --measure-only --max-iterations 10
-  formiga autoresearch loop --prompt --target-metric 0.5 --max-iterations 30
-  formiga autoresearch loop --prompt --max-consecutive-failures 5
-  formiga autoresearch loop --prompt --timeout 10m --max-iterations 10`;
-}
-
-function getAutoresearchRunLoopIterationHelp(): string {
-  return `formiga autoresearch run-loop-iteration — Run a transactional experiment iteration
-
-Usage: formiga autoresearch run-loop-iteration [options]
-
-Runs a single transactional AutoResearch experiment iteration. The iteration
-follows this lifecycle:
-
-  1. If --prompt is provided, invokes pi to make one candidate code change.
-  2. Runs the configured experiment command and measures the metric.
-  3. Logs the result to autoresearch.jsonl:
-     - keep/baseline results are committed (autoresearch* files excluded).
-     - discard results are reverted (candidate changes rolled back).
-     - crash/checks_failed results are reverted.
-  4. Ensures the working tree has no dirty non-autoresearch files.
-
-Options:
-  --cwd <dir>               Project directory (default: current directory)
-  --prompt <text>           pi agent prompt for code change (optional)
-  --command <cmd>           Override the configured experiment command
-  --timeout <duration>      Per-pi-action timeout (default: 5m). Format: <number><s|m|h>
-                            (e.g. 300s, 10m, 1h)
-  --iteration <n>           Iteration number (for logging)
-  --description <text>      Description of the experiment
-
-Output:
-  JSON object with run number, status, metric, agent success,
-  committed/reverted flags, and the full log entry.
-
-Examples:
-  formiga autoresearch run-loop-iteration --prompt "try smaller LR" --iteration 1
-  formiga autoresearch run-loop-iteration --command "uv run train.py" --iteration 5
-  formiga autoresearch run-loop-iteration --prompt test --iteration 1`;
-}
-
-function getAutoresearchPruneHelp(): string {
-  return `formiga autoresearch prune — Remove stale AutoResearch registry rows
-
-Usage: formiga autoresearch prune --older-than <duration> [--missing] [--dry-run]
-
-Prunes (removes) stale autoresearch_sessions registry rows from the SQLite DB.
-This never touches project-local autoresearch.jsonl or config files — those
-remain safe on disk.
-
-Options:
-  --older-than <d>   Prune sessions older than the given duration (required).
-  --missing          Only prune sessions whose cwd/config/log files no longer exist.
-  --dry-run          Print what would be pruned without actually deleting anything.
-
-Duration format:
-  Duration is specified as a number followed by a unit letter:
-    d — days   (e.g. 30d = 30 days)
-    h — hours  (e.g. 24h = 24 hours)
-    m — minutes(e.g. 30m = 30 minutes)
-
-Examples:
-  formiga autoresearch prune --older-than 30d
-  formiga autoresearch prune --older-than 7d --missing
-  formiga autoresearch prune --older-than 30d --dry-run`;
-}
-
-function getAutoresearchWizardHelp(): string {
-  return `formiga autoresearch wizard — Interactive AutoResearch setup wizard
-
-Usage: formiga autoresearch wizard [--cwd <dir>]
-
-Launches an interactive wizard that guides you through setting up an
-AutoResearch session. The wizard asks questions about what you want to
-improve and how to measure success, then generates the exact Formiga
-command sequence you need.
-
-The wizard does not directly create project files. If initialization is
-needed, it generates and optionally executes the correct formiga
-autoresearch init command. Then it generates the formiga autoresearch
-loop command to start the optimization loop.
-
-Options:
-  --cwd <dir>    Working directory (default: current directory)
-
-Examples:
-  formiga autoresearch wizard
-  formiga autoresearch wizard --cwd /path/to/project`;
-}
-
 function getUsageText(): string {
   return [
     "Run formiga <command> --help for detailed command help.",
@@ -1301,20 +894,6 @@ function getUsageText(): string {
     "                                      [--pi-as-harness | --hermes-as-harness]",
     "                                      [--no-relaunch-upon-rugpull]",
     "                                      Start a workflow run",
-    "", "formiga autoresearch [task]            Run ML AutoResearch arena workflow",
-    "             or legacy: init|run-experiment|log-experiment|status|next|loop|prune|wizard",
-    "formiga workflow autoresearch <run-id> Show run AutoResearch progress",
-    "", "Legacy autoresearch subcommands (deprecated, use workflow version above):",
-    "formiga autoresearch init            Create durable experiment-loop state",
-    "formiga autoresearch run-experiment  Run the configured experiment command",
-    "formiga autoresearch log-experiment   Log keep/discard learning for the loop",
-    "formiga autoresearch loop            Run a bounded experiment loop with live progress",
-    "formiga autoresearch run-loop-iteration Run a single transactional experiment iteration",
-    "formiga autoresearch status          Summarize AutoResearch state",
-    "formiga autoresearch next            Print the next experiment prompt",
-    "formiga autoresearch prune           Remove stale AutoResearch registry rows",
-    "           --older-than <duration>    (e.g. 30d, 7d, 24h)",
-    "formiga autoresearch wizard          Interactive AutoResearch setup wizard",
     "formiga workflow status <query>      Check run status",
     "formiga workflow runs                List all workflow runs",
     "formiga workflow pause <run-id>      Pause a running workflow",
@@ -1414,7 +993,6 @@ async function main() {
       if (action === "uninstall") { printHelp(getWorkflowUninstallHelp()); }
       if (action === "run") { printHelp(getWorkflowRunHelp()); }
       if (action === "status") { printHelp(getWorkflowStatusHelp()); }
-      if (action === "autoresearch") { printHelp(getWorkflowAutoresearchHelp()); }
       if (action === "delete") { printHelp(getWorkflowDeleteHelp()); }
       if (action === "stop") { printHelp(getWorkflowStopHelp()); }
       if (action === "pause") { printHelp(getWorkflowPauseHelp()); }
@@ -1422,18 +1000,6 @@ async function main() {
       if (action === "pause-all") { printHelp(getWorkflowPauseAllHelp()); }
       if (action === "resume-all") { printHelp(getWorkflowResumeAllHelp()); }
       printHelp(getWorkflowGroupHelp());
-    }
-    if (group === "autoresearch") {
-      if (action === "init") { printHelp(getAutoresearchInitHelp()); }
-      if (action === "run-experiment") { printHelp(getAutoresearchRunExperimentHelp()); }
-      if (action === "log-experiment") { printHelp(getAutoresearchLogExperimentHelp()); }
-      if (action === "status") { printHelp(getAutoresearchStatusHelp()); }
-      if (action === "next") { printHelp(getAutoresearchNextHelp()); }
-      if (action === "loop") { printHelp(getAutoresearchLoopHelp()); }
-      if (action === "run-loop-iteration") { printHelp(getAutoresearchRunLoopIterationHelp()); }
-      if (action === "prune") { printHelp(getAutoresearchPruneHelp()); }
-      if (action === "wizard") { printHelp(getAutoresearchWizardHelp()); }
-      printHelp(getAutoresearchHelp());
     }
     if (group === "runs") {
       printHelp(`formiga runs — Manage stale/stuck runs
@@ -1798,312 +1364,6 @@ Examples:
     return;
   }
 
-  if (group === "autoresearch") {
-    const cwd = readOption(args, "--cwd");
-
-    if (action && ["init", "run-experiment", "log-experiment", "status", "next", "loop", "prune", "wizard", "run-loop-iteration"].includes(action)) {
-      process.stderr.write(`[DEPRECATED] "formiga autoresearch ${action}" is deprecated. Use "formiga autoresearch <task>" instead.\n`);
-    }
-
-    const legacyAutoresearchCommands = new Set([
-      "init",
-      "run-experiment",
-      "log-experiment",
-      "status",
-      "next",
-      "loop",
-      "prune",
-      "wizard",
-      "run-loop-iteration",
-    ]);
-
-    // When autoresearch is called without a recognized legacy subcommand, route
-    // directly to the new ml-autoresearch workflow. Example:
-    //   formiga autoresearch "dataset_path=/path/train.csv target_column=price max_rounds=5"
-    if (!action || !legacyAutoresearchCommands.has(action)) {
-      let runArgs: ReturnType<typeof parseWorkflowRunArgs>;
-      try {
-        runArgs = parseWorkflowRunArgs(args.slice(1));
-      } catch (err) {
-        process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-        process.exit(1);
-      }
-
-      if (!runArgs.taskTitle) {
-        process.stderr.write(
-          `Missing task description.\nUsage: formiga autoresearch '<dataset_path=PATH target_column=COL [max_rounds=N]>' [options]\n`,
-        );
-        process.exit(1);
-      }
-
-      let harnessType: HarnessType | undefined;
-      if (runArgs.harnessAs !== undefined) {
-        harnessType = runArgs.harnessAs as HarnessType;
-      }
-
-      // Auto-install bundled ml-autoresearch workflow if not yet installed
-      if (!existsSync(resolveWorkflowDir("ml-autoresearch"))) {
-        const bundled = await listBundledWorkflows();
-        if (bundled.includes("ml-autoresearch")) {
-          console.log(`Installing bundled workflow "ml-autoresearch"...`);
-          try {
-            await installWorkflow({ workflowId: "ml-autoresearch" });
-          } catch (err) {
-            process.stderr.write(
-              `Failed to install "ml-autoresearch": ${err instanceof Error ? err.message : String(err)}\n`,
-            );
-            process.exit(1);
-          }
-        }
-      }
-
-      const result = await runWorkflow({
-        workflowId: "ml-autoresearch",
-        taskTitle: runArgs.taskTitle,
-        workingDirectoryForHarness: runArgs.workingDirectoryForHarness,
-        noHurrySaveTokensMode: runArgs.noHurrySaveTokensMode,
-        noRelaunchUponRugpull: runArgs.noRelaunchUponRugpull,
-        harnessType,
-      });
-      console.log(
-        `Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}\nHarness CWD: ${result.workingDirectoryForHarness}`,
-      );
-      return;
-    }
-
-    if (action === "init") {
-      const usage = "formiga autoresearch init --goal <text> --metric <name> --direction <lower|higher> --command <cmd>";
-      const entry = initExperiment({
-        cwd,
-        goal: requireOption(args, "--goal", usage),
-        metricName: requireOption(args, "--metric", usage),
-        metricUnit: readOption(args, "--unit"),
-        direction: parseDirection(requireOption(args, "--direction", usage)),
-        command: requireOption(args, "--command", usage),
-        metricRegex: readOption(args, "--metric-regex"),
-        checksCommand: readOption(args, "--checks-command"),
-        overwrite: args.includes("--overwrite"),
-      });
-      console.log(`Initialized AutoResearch session for metric ${entry.metric_name} (${entry.direction}).`);
-      console.log("Next: formiga autoresearch run-experiment");
-      upsertAutoresearchSession(cwd ?? process.cwd());
-      return;
-    }
-
-    if (action === "run-experiment") {
-      const timeoutSecondsRaw = readOption(args, "--timeout-seconds");
-      const timeoutMs = timeoutSecondsRaw ? Math.max(1, Number(timeoutSecondsRaw)) * 1000 : undefined;
-      if (timeoutSecondsRaw && !Number.isFinite(timeoutMs)) {
-        process.stderr.write(`Invalid --timeout-seconds "${timeoutSecondsRaw}".\n`);
-        process.exit(1);
-      }
-      const result = await runExperiment({
-        cwd,
-        command: readOption(args, "--command"),
-        metricRegex: readOption(args, "--metric-regex"),
-        checksCommand: readOption(args, "--checks-command"),
-        timeoutMs,
-      });
-      console.log(JSON.stringify(result, null, 2));
-      upsertAutoresearchSession(cwd ?? process.cwd());
-      return;
-    }
-
-    if (action === "log-experiment") {
-      const metricRaw = readOption(args, "--metric");
-      const metric = metricRaw === undefined ? undefined : Number(metricRaw);
-      if (metricRaw !== undefined && !Number.isFinite(metric)) {
-        process.stderr.write(`Invalid --metric "${metricRaw}".\n`);
-        process.exit(1);
-      }
-      const usage = "formiga autoresearch log-experiment --description <text>";
-      const entry = await logExperiment({
-        cwd,
-        metric,
-        status: parseAutoresearchDecision(readOption(args, "--status")) ?? "auto",
-        description: requireOption(args, "--description", usage),
-        hypothesis: readOption(args, "--hypothesis"),
-        learned: readOption(args, "--learned"),
-        nextFocus: readOption(args, "--next-focus"),
-        commit: args.includes("--commit"),
-        revertDiscard: args.includes("--revert-discard"),
-      });
-      console.log(`Logged run ${entry.run}: ${entry.status}${entry.metric === null ? "" : ` (${entry.metric})`}.`);
-      console.log(`Best: ${entry.best_metric ?? "(none)"}`);
-      console.log(`Confidence: ${formatAutoresearchConfidence(entry)}`);
-      upsertAutoresearchSession(cwd ?? process.cwd());
-      return;
-    }
-
-    if (action === "status") {
-      upsertAutoresearchSession(cwd ?? process.cwd());
-      printAutoresearchSummary(cwd);
-      return;
-    }
-
-    if (action === "next") {
-      upsertAutoresearchSession(cwd ?? process.cwd());
-      console.log(summarizeAutoresearch(cwd).nextPrompt);
-      return;
-    }
-
-    if (action === "loop") {
-      const targetMetricRaw = readOption(args, "--target-metric");
-      const targetMetric = targetMetricRaw !== undefined ? Number(targetMetricRaw) : undefined;
-      if (targetMetricRaw !== undefined && !Number.isFinite(targetMetric)) {
-        process.stderr.write(`Invalid --target-metric "${targetMetricRaw}".\n`);
-        process.exit(1);
-      }
-      const maxIterRaw = readOption(args, "--max-iterations");
-      const maxIterations = maxIterRaw !== undefined ? Math.max(1, parseInt(maxIterRaw, 10)) : undefined;
-      if (maxIterRaw !== undefined && !Number.isFinite(maxIterations)) {
-        process.stderr.write(`Invalid --max-iterations "${maxIterRaw}".\n`);
-        process.exit(1);
-      }
-      const maxFailRaw = readOption(args, "--max-consecutive-failures");
-      const maxConsecutiveFailures = maxFailRaw !== undefined ? Math.max(1, parseInt(maxFailRaw, 10)) : undefined;
-      if (maxFailRaw !== undefined && !Number.isFinite(maxConsecutiveFailures)) {
-        process.stderr.write(`Invalid --max-consecutive-failures "${maxFailRaw}".\n`);
-        process.exit(1);
-      }
-      const timeoutRaw = readOption(args, "--timeout");
-      let timeoutSeconds: number | undefined;
-      if (timeoutRaw !== undefined) {
-        try {
-          timeoutSeconds = Math.floor(parseDuration(timeoutRaw) / 1000);
-          if (timeoutSeconds <= 0) {
-            process.stderr.write(`Invalid --timeout "${timeoutRaw}": must be a positive number.\n`);
-            process.exit(1);
-          }
-        } catch (err) {
-          process.stderr.write(`Invalid --timeout "${timeoutRaw}": ${err instanceof Error ? err.message : String(err)}\n`);
-          process.exit(1);
-        }
-      }
-      const isMeasureOnly = args.includes("--measure-only");
-      const isPrompt = args.includes("--prompt");
-      if (!isMeasureOnly && !isPrompt) {
-        process.stderr.write(
-          "No action mode specified. Use --measure-only for repeated benchmarks (no optimization) or --prompt for pi-driven optimization.\n",
-        );
-        process.exit(1);
-      }
-      if (isMeasureOnly && isPrompt) {
-        process.stderr.write("Can only specify one action mode at a time (--measure-only or --prompt).\n");
-        process.exit(1);
-      }
-      const actionMode = isMeasureOnly ? "measure-only" : "prompt";
-      upsertAutoresearchSession(cwd ?? process.cwd());
-      await loopAutoresearch({ cwd, targetMetric, maxIterations, maxConsecutiveFailures, actionMode, timeoutSeconds });
-      return;
-    }
-
-    if (action === "prune") {
-      const olderThanIdx = args.indexOf("--older-than");
-      if (olderThanIdx === -1 || !args[olderThanIdx + 1]) {
-        process.stderr.write(
-          "Missing --older-than <duration>.\nUsage: formiga autoresearch prune --older-than <duration> [--missing] [--dry-run]\n",
-        );
-        process.exit(1);
-      }
-
-      let thresholdMs: number;
-      try {
-        thresholdMs = parseDuration(args[olderThanIdx + 1]);
-      } catch (err) {
-        process.stderr.write(
-          `${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        process.exit(1);
-      }
-
-      const dryRun = args.includes("--dry-run");
-      const missingOnly = args.includes("--missing");
-      const cutoff = new Date(Date.now() - thresholdMs).toISOString();
-
-      const { getAutoresearchSessions, deleteAutoresearchSession } = await import("../db.js");
-      const sessions = await getAutoresearchSessions({ includeMissing: true });
-
-      const candidates = sessions.filter((s) => {
-        // Check if session is older than threshold
-        const updatedAt = s.updated_at;
-        if (!updatedAt || updatedAt >= cutoff) return false;
-
-        // If --missing, only include sessions whose files are gone
-        if (missingOnly && !s.files_missing) return false;
-
-        return true;
-      });
-
-      if (candidates.length === 0) {
-        console.log("No sessions to prune.");
-        return;
-      }
-
-      for (const s of candidates) {
-        const reasonParts: string[] = [];
-        if (s.files_missing) reasonParts.push("missing files");
-        reasonParts.push(`last seen ${s.last_seen_at ?? "never"}`);
-        const reason = reasonParts.join(", ");
-
-        if (dryRun) {
-          console.log(
-            `[DRY RUN] Would prune: ${s.cwd} (${s.metric_name ?? "unknown metric"}) — ${reason}`,
-          );
-        } else {
-          deleteAutoresearchSession(s.id);
-          console.log(
-            `Pruned: ${s.cwd} (${s.metric_name ?? "unknown metric"}) — ${reason}`,
-          );
-        }
-      }
-
-      if (dryRun) {
-        console.log(`\nDry run: ${candidates.length} session(s) would be pruned.`);
-      } else {
-        console.log(`\nPruned ${candidates.length} session(s).`);
-      }
-      return;
-    }
-
-    if (action === "run-loop-iteration") {
-      const timeoutRaw = readOption(args, "--timeout");
-      let timeoutSeconds: number | undefined;
-      if (timeoutRaw !== undefined) {
-        try {
-          timeoutSeconds = Math.floor(parseDuration(timeoutRaw) / 1000);
-          if (timeoutSeconds <= 0) {
-            process.stderr.write(`Invalid --timeout "${timeoutRaw}": must be a positive number.\n`);
-            process.exit(1);
-          }
-        } catch (err) {
-          process.stderr.write(`Invalid --timeout "${timeoutRaw}": ${err instanceof Error ? err.message : String(err)}\n`);
-          process.exit(1);
-        }
-      }
-      const iterationRaw = readOption(args, "--iteration");
-      const iteration = iterationRaw !== undefined ? Math.max(1, parseInt(iterationRaw, 10)) : undefined;
-      if (iterationRaw !== undefined && !Number.isFinite(iteration)) {
-        process.stderr.write(`Invalid --iteration "${iterationRaw}".\n`);
-        process.exit(1);
-      }
-      upsertAutoresearchSession(cwd ?? process.cwd());
-      const result = await runLoopIteration({
-        cwd,
-        prompt: readOption(args, "--prompt"),
-        command: readOption(args, "--command"),
-        timeoutSeconds,
-        iteration,
-        description: readOption(args, "--description"),
-      });
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-
-    process.stderr.write(`Unknown autoresearch action: ${action}\nUsage: formiga autoresearch <init|run-experiment|log-experiment|status|next|loop|run-loop-iteration|prune>\n`);
-    process.exit(1);
-  }
-
   if (group === "runs") {
     if (action === "list-stale") {
       await listStaleRuns(args.slice(2));
@@ -2388,15 +1648,6 @@ Examples:
       const message = err instanceof Error ? err.message : `No run found matching "${target}".`;
       console.log(message.startsWith("No run found matching") ? `No run found matching "${target}".` : message);
     }
-    return;
-  }
-
-  if (action === "autoresearch") {
-    if (!target) {
-      process.stderr.write("Missing run-id.\nUsage: formiga workflow autoresearch <run-id>\n");
-      process.exit(1);
-    }
-    await printWorkflowAutoresearch(target);
     return;
   }
 

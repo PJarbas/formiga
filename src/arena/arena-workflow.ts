@@ -11,7 +11,8 @@ import path from "node:path";
 import fs from "node:fs";
 import { getPrisma } from "../database/prisma.js";
 import { logger } from "../lib/logger.js";
-import { runPi } from "../installer/scheduler/pi-runner.js";
+import { createHarnessRunner } from "../installer/scheduler/harness-runner.js";
+import type { HarnessRunner } from "../installer/scheduler/harness-runner.js";
 import { resolveFormigaAgentToolsExtension } from "../installer/paths.js";
 import { completeStep } from "../installer/steps/complete.js";
 import { emitEvent } from "../installer/events.js";
@@ -199,61 +200,95 @@ function parseArenaAgentOutput(
   };
 }
 
-// ── runAgentsParallel harness (backed by pi --print) ───────────────────
+// ── Tier-based agent timeouts ──────────────────────────────────────────────
+// Replaces the single AGENT_TIMEOUT_SECONDS (30 min) with per-tier limits so
+// a stuck agent on TINY datasets doesn't block the arena for 30 minutes.
 
-async function piRunAgentsParallel(
-  prompts: Record<string, string>,
-  config: ArenaConfig,
-): Promise<
-  Record<
-    string,
-    { script: string; hypothesis: string; learned?: string; nextFocus?: string } | null
-  >
-> {
-  const entries = Object.entries(prompts);
-  const extensionPath = resolveFormigaAgentToolsExtension();
-  const pending = entries.map(([agentId, prompt]) => {
-    const agentDef = ARENA_AGENTS.find((a) => a.id === agentId);
-    const timeout = agentDef?.timeout ?? AGENT_TIMEOUT_SECONDS;
+const AGENT_TIMEOUT_BY_TIER: Record<string, number> = {
+  TINY:  120,   // 2 min
+  SMALL: 180,   // 3 min
+  MEDIUM: 300,  // 5 min
+  LARGE: 600,   // 10 min
+};
 
-    const piArgs: string[] = [];
-    if (extensionPath) piArgs.push("--extension", extensionPath);
-    piArgs.push("--print", "--mode", "json", "--no-session", prompt);
+// ── runAgentsParallel factory (backed by HarnessRunner) ──────────────────
 
-    return runPi(piArgs, {
-      timeout,
-      workdir: config.workspacePath,
-    })
-      .then((piResult) => parseArenaAgentOutput(piResult.assistantText, config.workspacePath))
-      .then((parsed) => ({
-        agentId,
-        ok: true as const,
-        data: {
-          script: parsed.script,
-          hypothesis: parsed.hypothesis,
-          learned: parsed.learned || undefined,
-          nextFocus: parsed.nextFocus || undefined,
-        },
-      }))
-      .catch((err) => {
-        logger.error("Arena agent pi failure", { agentId, error: String(err) });
-        return {
+/**
+ * Create a runAgentsParallel function that delegates to a HarnessRunner
+ * for each arena agent prompt. Individual timeouts are derived from the
+ * complexity tier so slow agents don't block fast ones.
+ *
+ * Tier detection: reads dataset_context.json from workspace. Falls back
+ * to AGENT_TIMEOUT_BY_TIER default (5 min) when unavailable.
+ */
+function createRunAgentsParallel(runner: HarnessRunner) {
+  return async function runAgentsParallel(
+    prompts: Record<string, string>,
+    config: ArenaConfig,
+  ): Promise<
+    Record<
+      string,
+      { script: string; hypothesis: string; learned?: string; nextFocus?: string } | null
+    >
+  > {
+    // Derive tier for timeout selection (best-effort; defaults to MEDIUM).
+    let tier = "MEDIUM";
+    try {
+      const dsPath = path.join(config.workspacePath, "artifacts", "dataset_context.json");
+      if (fs.existsSync(dsPath)) {
+        const ds = JSON.parse(fs.readFileSync(dsPath, "utf-8")) as { complexityTier?: string };
+        if (ds.complexityTier) tier = ds.complexityTier;
+      }
+    } catch { /* keep default */ }
+
+    const entries = Object.entries(prompts);
+    const pending = entries.map(([agentId, prompt]) => {
+      const agentDef = ARENA_AGENTS.find((a) => a.id === agentId);
+      const timeout = agentDef?.timeout ?? AGENT_TIMEOUT_BY_TIER[tier] ?? AGENT_TIMEOUT_BY_TIER.MEDIUM;
+
+      return runner
+        .run(prompt, { timeout, workdir: config.workspacePath })
+        .then((result) => {
+          // Emit progress event
+          emitEvent({
+            ts: new Date().toISOString(),
+            event: "arena.agent_script_done",
+            runId: config.runId,
+            agentId,
+            detail: `Script generated in ${result.durationMs}ms`,
+          });
+          return parseArenaAgentOutput(result.assistantText, config.workspacePath);
+        })
+        .then((parsed) => ({
           agentId,
-          ok: false as const,
-          data: null,
-        };
-      });
-  });
+          ok: true as const,
+          data: {
+            script: parsed.script,
+            hypothesis: parsed.hypothesis,
+            learned: parsed.learned || undefined,
+            nextFocus: parsed.nextFocus || undefined,
+          },
+        }))
+        .catch((err) => {
+          logger.error("Arena agent runner failure", { agentId, error: String(err) });
+          return {
+            agentId,
+            ok: false as const,
+            data: null,
+          };
+        });
+    });
 
-  const settled = await Promise.all(pending);
-  const out: Record<
-    string,
-    { script: string; hypothesis: string; learned?: string; nextFocus?: string } | null
-  > = {};
-  for (const s of settled) {
-    out[s.agentId] = s.ok ? s.data : null;
-  }
-  return out;
+    const settled = await Promise.all(pending);
+    const out: Record<
+      string,
+      { script: string; hypothesis: string; learned?: string; nextFocus?: string } | null
+    > = {};
+    for (const s of settled) {
+      out[s.agentId] = s.ok ? s.data : null;
+    }
+    return out;
+  };
 }
 
 // ── Config builder ─────────────────────────────────────────────
@@ -374,11 +409,17 @@ export async function launchArenaFromStep(
     const repo = new ArenaRepositoryImpl();
     const leaderboardRepo = new LeaderboardRepositoryImpl();
 
+    // Resolve PI extension path for agent tools.
+    const extensionPath = resolveFormigaAgentToolsExtension();
+    const runner = createHarnessRunner("pi", {
+      ...(extensionPath ? { harnessSpecific: { extensionPath } } : {}),
+    });
+
     const result = await runArena(
       config,
       repo,
       leaderboardRepo,
-      piRunAgentsParallel,
+      createRunAgentsParallel(runner),
     );
 
     const output = formatArenaResultOutput(result);
@@ -406,7 +447,11 @@ export async function launchArenaFromStep(
     const msg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? err.stack : undefined;
     logger.error("Arena engine threw during run", { runId, stepId, error: msg, stack });
-    await markStepFailed(stepId, runId, `Arena engine error: ${msg}`);
+    // Call completeStep with error output so the retry mechanism works.
+    // The expects validation will fail (no "STATUS: done" match), and the
+    // step will be reset to pending with retry_count incremented.
+    const errorOutput = `STATUS: error\nERROR: ${msg}\nSTACK: ${stack ?? "N/A"}`;
+    await completeStep(stepId, errorOutput);
   }
 }
 

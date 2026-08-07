@@ -43,24 +43,6 @@ export {
   resolveSourcePath,
 } from "./installer/paths.js";
 
-export {
-  getAutoresearchPaths,
-  hasDirtyNonAutoresearchFiles,
-  isAutoresearchProtectedFile,
-  PROTECTED_AUTORESEARCH_FILE_NAMES,
-  initExperiment,
-  runExperiment,
-  logExperiment,
-  summarizeAutoresearch,
-  readAutoresearchLog,
-  readSessionConfig,
-  parseMetric,
-  decideStatus,
-  calculateAutoresearchConfidence,
-  commitAutoresearchResult,
-  runLoopIteration,
-} from "./autoresearch/autoresearch.js";
-
 // Database
 export { getDb, nextRunNumber, getDbPath } from "./db.js";
 
@@ -87,16 +69,3 @@ export type { RunWorkflowParams, RunWorkflowResult } from "./installer/run.js";
 export type { RunInfo, RunDetail, StepInfo, StoryInfo } from "./installer/status.js";
 export type { WriteFileStatus, WriteWorkflowFileParams, WriteWorkflowFileResult } from "./installer/workspace-files.js";
 export type { CronJobInfo, CreateCronJobParams } from "./installer/agent-scheduler.js";
-export type {
-  AutoresearchDecision,
-  AutoresearchConfidence,
-  AutoresearchConfidenceBand,
-  AutoresearchDirection,
-  AutoresearchLogEntry,
-  AutoresearchRunEntry,
-  AutoresearchRunResultEntry,
-  AutoresearchSessionConfig,
-  AutoresearchSummary,
-  RunLoopIterationOptions,
-  RunLoopIterationResult,
-} from "./autoresearch/autoresearch.js";
