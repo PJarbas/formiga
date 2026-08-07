@@ -447,7 +447,11 @@ export async function launchArenaFromStep(
     const msg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? err.stack : undefined;
     logger.error("Arena engine threw during run", { runId, stepId, error: msg, stack });
-    await markStepFailed(stepId, runId, `Arena engine error: ${msg}`);
+    // Call completeStep with error output so the retry mechanism works.
+    // The expects validation will fail (no "STATUS: done" match), and the
+    // step will be reset to pending with retry_count incremented.
+    const errorOutput = `STATUS: error\nERROR: ${msg}\nSTACK: ${stack ?? "N/A"}`;
+    await completeStep(stepId, errorOutput);
   }
 }
 

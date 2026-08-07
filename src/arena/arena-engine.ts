@@ -13,7 +13,7 @@ import type { ArenaExperiment } from "../leaderboard/repository.js";
 import { makeDecision, isImprovement } from "./arena-decision.js";
 import { extractMetric } from "./arena-benchmark.js";
 import { readDatasetContext, formatDatasetContextForPrompt, type DatasetContext, type ComputeBudget, deriveComputeBudget } from "./dataset-context.js";
-import { auditExperiment, dedupSignature, type ComplexityTier, type AuditInput } from "./audit.js";
+import { auditExperiment, dedupSignature, invariant, type ComplexityTier, type AuditInput } from "./audit.js";
 
 const SCRIPT_DIR = "artifacts/models";
 const BENCHMARK_TIMEOUT_MS = 120_000;
@@ -414,22 +414,27 @@ export async function runArena(
       // significant). REJECTED entries are still written to the ledger for
       // transparency, with a structured rejection_reason.
       const tier = mapTier(datasetCtx.complexityTier);
-      const isCrash = bench.exitCode !== 0 || bench.metric === null;
 
-      // Crashes skip the quality gates (nothing to audit) and are recorded
-      // directly as FAILED. A valid metric is run through the full auditor.
+      // ── Pre-write audit (narrowed) ───────────────────────────────────────
+      // The condition directly narrows bench.metric: inside the success branch
+      // TypeScript treats bench.metric as `number` (no `as number` cast needed).
+      // The crash branch never touches bench.metric for arithmetic, so the
+      // "null.toFixed()" class of bugs is structurally impossible.
+      //
+      // Crashes are still registered in the leaderboard for transparency but
+      // skip quality gates and dedup tracking (null metrics shouldn't dedup).
       let auditedDecision: ArenaDecision;
       let auditedStatus: string | undefined;
       let rejectionReason: string | null = null;
       let iterationTeam = (teamExperimentCount.get(agent.id) ?? 0) + 1;
       let isDuplicate = false;
 
-      if (isCrash) {
-        auditedDecision = "crash";
-        auditedStatus = "FAILED";
-      } else {
+      if (bench.metric !== null && bench.exitCode === 0) {
+        // ✅ bench.metric narrowed to `number` — safe for all arithmetic.
+        const metric: number = bench.metric;
+
         const audit = auditExperiment({
-          metric: bench.metric as number,
+          metric,
           trainScore: richMetrics.trainScore ?? null,
           foldScores: richMetrics.foldScores ?? null,
           bestFoldScores,
@@ -448,7 +453,7 @@ export async function runArena(
             agent.id,
             agent.modelType ?? agent.id,
             richMetrics.hyperparameters ?? {},
-            bench.metric,
+            metric,
           ),
           existingDedupSignatures,
         });
@@ -469,18 +474,68 @@ export async function runArena(
           auditedDecision = session.bestMetric === null ? "baseline" : "keep";
           auditedStatus = "AUDITED";
         }
-      }
 
-      // A crash or budget-exceeded experiment still consumes a team slot
-      // (transparency); dedup does NOT consume a slot and is not persisted.
-      if (!isDuplicate) {
+        // A non-dedup experiment counts toward the team budget.
+        if (!isDuplicate) {
+          teamExperimentCount.set(agent.id, (teamExperimentCount.get(agent.id) ?? 0) + 1);
+        }
+
+        // Register in leaderboard + track dedup signature ONLY for successes.
+        // Dedup is the ONLY place where metric enters the signature — crashes
+        // never produce dedup entries.
+        let experimentId: number | undefined;
+        if (!isDuplicate) {
+          experimentId = await leaderboardRepo.registerArena({
+            run_id: config.runId,
+            round_number: round,
+            agent_name: agent.id,
+            model_type: agent.modelType ?? agent.id,
+            model_algorithm: richMetrics.modelAlgorithm ?? agent.modelType ?? agent.id,
+            hyperparameters: richMetrics.hyperparameters ?? {},
+            hypothesis: output.hypothesis,
+            learned: output.learned,
+            next_focus: output.nextFocus,
+            measured_metric: metric,
+            benchmark_stdout: bench.stdout,
+            benchmark_stderr: bench.stderr,
+            benchmark_exit_code: bench.exitCode,
+            decision: auditedDecision,
+            duration_ms: bench.durationMs,
+            artifact_script: result.scriptPath,
+            metric_name: config.metricName,
+            artifact_path: result.scriptPath,
+            metric_bag: richMetrics.metricBag,
+            problem_type: datasetCtx.problemType,
+            status: auditedStatus,
+            fold_scores: richMetrics.foldScores,
+            train_score: richMetrics.trainScore ?? null,
+            content_hash: sessionContentHash,
+            oof_artifact_key: richMetrics.oofArtifactKey ?? null,
+            prod_artifact_key: richMetrics.prodArtifactKey ?? null,
+            brier_raw: richMetrics.brierRaw ?? null,
+            brier_calibrated: richMetrics.brierCalibrated ?? null,
+            ece_calibrated: richMetrics.eceCalibrated ?? null,
+            notes: richMetrics.notes ?? null,
+            category: richMetrics.category ?? null,
+            iteration_team: iterationTeam,
+          });
+          // Track dedup signature — metric is guaranteed non-null by the
+          // outer `if` condition that narrowed bench.metric to `number`.
+          existingDedupSignatures.add(
+            dedupSignature(agent.id, agent.modelType ?? agent.id, richMetrics.hyperparameters ?? {}, metric),
+          );
+        }
+        result.experimentId = experimentId;
+      } else {
+        // Crash path: metric is null or exitCode ≠ 0.
+        // No quality gates, no dedup tracking. Still register for transparency.
+        auditedDecision = "crash";
+        auditedStatus = "FAILED";
+
+        // Crashes still consume a team slot (transparency).
         teamExperimentCount.set(agent.id, (teamExperimentCount.get(agent.id) ?? 0) + 1);
-      }
 
-      // Register experiment in leaderboard (skip persist for pure duplicates).
-      let experimentId: number | undefined;
-      if (!isDuplicate) {
-        experimentId = await leaderboardRepo.registerArena({
+        const experimentId = await leaderboardRepo.registerArena({
           run_id: config.runId,
           round_number: round,
           agent_name: agent.id,
@@ -490,7 +545,7 @@ export async function runArena(
           hypothesis: output.hypothesis,
           learned: output.learned,
           next_focus: output.nextFocus,
-          measured_metric: bench.metric,
+          measured_metric: null, // explicit — crash has no metric
           benchmark_stdout: bench.stdout,
           benchmark_stderr: bench.stderr,
           benchmark_exit_code: bench.exitCode,
@@ -514,12 +569,9 @@ export async function runArena(
           category: richMetrics.category ?? null,
           iteration_team: iterationTeam,
         });
-        // Track dedup signature for future iterations.
-        existingDedupSignatures.add(
-          dedupSignature(agent.id, agent.modelType ?? agent.id, richMetrics.hyperparameters ?? {}, bench.metric),
-        );
+        result.experimentId = experimentId;
+        // No dedup tracking — null metrics are never duplicates.
       }
-      result.experimentId = experimentId;
       result.decision = auditedDecision;
 
       // Update session state — only a genuine `keep`/`baseline` (statistically

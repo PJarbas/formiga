@@ -10,7 +10,8 @@
 //
 // Existing low-level functions (runPi, runHermes) are NOT modified —
 // PiRunner and HermesRunner are thin wrappers implemented in separate
-// files that use lazy require() to avoid circular imports.
+// files. Static imports are safe because the runner classes only import
+// TypeScript types from this module (erased at compile time).
 //
 // HarnessResult reuses ExtractedMetadata from streaming-metadata-extractor.ts
 // directly — no new types, no translation layer. Each runner populates what
@@ -76,6 +77,9 @@ export interface HarnessRunnerConfig {
 
 // ── Factory ───────────────────────────────────────────────────────────
 
+import { PiRunner } from "./harness-pi-runner.js";
+import { HermesRunner } from "./harness-hermes-runner.js";
+
 /**
  * Create a HarnessRunner for the given harness type.
  *
@@ -83,24 +87,19 @@ export interface HarnessRunnerConfig {
  *   "pi"     → PiRunner     (wraps runPi from pi-runner.ts)
  *   "hermes" → HermesRunner (wraps runHermes from hermes-runner.ts)
  *
- * Lazy requires avoid circular imports — the runner modules are only loaded
- * when createHarnessRunner is called, not when this module is imported.
+ * Static imports are safe because PiRunner and HermesRunner only import
+ * TypeScript types from this module — those are erased at compile time,
+ * so there is no runtime circular dependency.
  */
 export function createHarnessRunner(
   type: string,
   config?: HarnessRunnerConfig,
 ): HarnessRunner {
   switch (type) {
-    case "pi": {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { PiRunner } = require("./harness-pi-runner.js") as typeof import("./harness-pi-runner.js");
+    case "pi":
       return new PiRunner(config);
-    }
-    case "hermes": {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { HermesRunner } = require("./harness-hermes-runner.js") as typeof import("./harness-hermes-runner.js");
+    case "hermes":
       return new HermesRunner(config);
-    }
     default:
       throw new Error(
         `Unknown harness type: "${type}". Supported: pi, hermes.`,
