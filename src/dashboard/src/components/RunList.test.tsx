@@ -56,6 +56,7 @@ describe("RunList", () => {
             makeRun({ shortHash: "fail1111", status: "failed" }),
             makeRun({ shortHash: "run2222", status: "running" }),
             makeRun({ shortHash: "paus3333", status: "paused" }),
+            makeRun({ shortHash: "canc4444", status: "canceled" }),
           ]}
         />,
       ),
@@ -64,6 +65,7 @@ describe("RunList", () => {
     expect(screen.getByLabelText("Status: failed")).toBeTruthy();
     expect(screen.getByLabelText("Status: running")).toBeTruthy();
     expect(screen.getByLabelText("Status: paused")).toBeTruthy();
+    expect(screen.getByLabelText("Status: canceled")).toBeTruthy();
   });
 
   it("shows workflow and arena tags next to the run id", () => {

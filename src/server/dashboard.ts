@@ -147,69 +147,6 @@ function resolveRunHarnessCwd(run: { context?: string | null }): string | undefi
 
 // ── API Handlers ─────────────────────────────────────────────────────
 
-function handleListRuns(_req: http.IncomingMessage, res: http.ServerResponse): void {
-  (async () => {
-    const prisma = getPrisma();
-
-    const allRuns = await prisma.run.findMany({
-      orderBy: { created_at: "desc" },
-      take: 100,
-      include: { steps: true },
-    });
-
-    const rawRuns = allRuns.map((run) => {
-      const total_steps = run.steps.length;
-      const completed_steps = run.steps.filter((s) => s.status === "done").length;
-      const failed_steps = run.steps.filter((s) => s.status === "failed").length;
-      const running_steps = run.steps.filter((s) => s.status === "running").length;
-      const waiting_steps = run.steps.filter((s) => s.status === "waiting").length;
-
-      return {
-        id: run.id,
-        workflow_id: run.workflow_id,
-        task: run.task,
-        status: run.status,
-        context: run.context,
-        created_at: run.created_at,
-        updated_at: run.updated_at,
-        run_number: run.run_number,
-        tokens_spent: run.tokens_spent,
-        total_steps,
-        completed_steps,
-        failed_steps,
-        running_steps,
-        waiting_steps,
-      };
-    });
-
-    const STALE_THRESHOLD_MIN = parseInt(process.env.FORMIGA_RUN_MAX_DURATION_MINUTES ?? "120", 10) || 120;
-
-    const runs = rawRuns.map((row) => {
-      let no_hurry = false;
-      try {
-        const ctx = JSON.parse(String(row.context ?? "{}"));
-        no_hurry = ctx.no_hurry_save_tokens_mode === "true";
-      } catch (err) {
-        logger.warn("handleListRuns: malformed run context", { runId: row.id, error: (err as Error).message });
-      }
-
-      const idleMinutes = Math.floor((Date.now() - new Date(row.updated_at).getTime()) / 60_000);
-      const isStale = row.status === "running" && idleMinutes > STALE_THRESHOLD_MIN;
-      const staleness = row.status === "running"
-        ? {
-            isStale,
-            idleMinutes,
-            recommendation: isStale ? "cancel" as const : idleMinutes > STALE_THRESHOLD_MIN / 2 ? "monitor" as const : "ok" as const,
-          }
-        : undefined;
-
-      return { ...row, no_hurry, staleness };
-    });
-
-    jsonResponse(res, { runs });
-  })().catch((err) => errorResponse(res, `Failed to list runs: ${(err as Error).message}`));
-}
-
 function handleRunDetail(
   _req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -2430,20 +2367,14 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
   (async () => {
     const prisma = getPrisma();
 
-    const activeRuns = await prisma.run.findMany({
-      where: { status: { in: ["running", "paused"] } },
+    // Single source of truth for GET /api/runs: every run (legacy contract),
+    // with the rich shape the RunList needs plus the legacy fields that older
+    // consumers (/api/runs tests, the autoresearch mirror) still rely on.
+    const allRuns = await prisma.run.findMany({
       orderBy: { created_at: "desc" },
-      select: { id: true, workflow_id: true, task: true, status: true, created_at: true, updated_at: true },
+      take: 100,
+      include: { steps: true },
     });
-
-    const recentDone = await prisma.run.findMany({
-      where: { status: { in: ["completed", "failed"] } },
-      orderBy: { created_at: "desc" },
-      take: 10,
-      select: { id: true, workflow_id: true, task: true, status: true, created_at: true, updated_at: true },
-    });
-
-    const allRuns = [...activeRuns, ...recentDone];
 
     if (allRuns.length === 0) {
       jsonResponse(res, { runs: [] });
@@ -2466,6 +2397,8 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
     });
     const arenaMap = new Map(arenaSessions.map((s) => [s.run_id, s]));
 
+    const STALE_THRESHOLD_MIN = parseInt(process.env.FORMIGA_RUN_MAX_DURATION_MINUTES ?? "120", 10) || 120;
+
     const runs = await Promise.all(
       allRuns.map(async (run) => {
         const currentPhase = await getCurrentPhase(run.id);
@@ -2477,7 +2410,33 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
         const arena = arenaMap.get(run.id);
         const workflowType = run.workflow_id.includes("autoresearch") ? "ml-autoresearch" : "ml-pipeline";
 
+        // Legacy fields — step counts come from the included steps relation.
+        const total_steps = run.steps.length;
+        const completed_steps = run.steps.filter((s) => s.status === "done").length;
+        const failed_steps = run.steps.filter((s) => s.status === "failed").length;
+        const running_steps = run.steps.filter((s) => s.status === "running").length;
+        const waiting_steps = run.steps.filter((s) => s.status === "waiting").length;
+
+        let no_hurry = false;
+        try {
+          const ctx = JSON.parse(String(run.context ?? "{}"));
+          no_hurry = ctx.no_hurry_save_tokens_mode === "true";
+        } catch (err) {
+          logger.warn("handleRuns: malformed run context", { runId: run.id, error: (err as Error).message });
+        }
+
+        const idleMinutes = Math.floor((Date.now() - new Date(run.updated_at).getTime()) / 60_000);
+        const isStale = run.status === "running" && idleMinutes > STALE_THRESHOLD_MIN;
+        const staleness = run.status === "running"
+          ? {
+              isStale,
+              idleMinutes,
+              recommendation: isStale ? "cancel" as const : idleMinutes > STALE_THRESHOLD_MIN / 2 ? "monitor" as const : "ok" as const,
+            }
+          : undefined;
+
         return {
+          // Rich fields consumed by RunList (the reason this endpoint moved to /api/runs).
           runId: run.id,
           shortHash: run.id.slice(0, 8),
           workflowId: run.workflow_id,
@@ -2498,6 +2457,19 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
               status: arena.status,
             },
           }),
+          // Legacy contract fields preserved for older consumers and tests.
+          id: run.id,
+          workflow_id: run.workflow_id,
+          context: run.context,
+          run_number: run.run_number,
+          tokens_spent: run.tokens_spent,
+          total_steps,
+          completed_steps,
+          failed_steps,
+          running_steps,
+          waiting_steps,
+          no_hurry,
+          staleness,
         };
       }),
     );
@@ -2803,12 +2775,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // React SPA default
   if (method === "GET" && pathname === "/") {
     serveStaticFile(res, path.join(DASHBOARD_DIST, "index.html"));
-    return;
-  }
-
-  // GET /api/runs
-  if (method === "GET" && pathname === "/api/runs") {
-    handleListRuns(req, res);
     return;
   }
 

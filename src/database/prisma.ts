@@ -29,18 +29,29 @@ function createPrismaClient(): PrismaClient {
 
 // Module-scoped singleton
 let _prisma: PrismaClient | null = null;
+let _prismaPath: string | null = null;
 
 /**
  * Get the PrismaClient singleton.
  * Safe to call from any module; lazily-created on first use.
  *
- * NOTE: In test scenarios that swap the DB path via FORMIGA_DB_PATH,
- * call `resetPrisma()` *before* to force a re-bind to the new database.
+ * Re-binds automatically when the resolved DB path changes (e.g. tests
+ * swapping FORMIGA_DB_PATH per test, or a long-lived process pointing at
+ * a new database) — same path-aware behavior as connection.ts getDb().
  */
 export function getPrisma(): PrismaClient {
-  if (!_prisma) {
-    _prisma = createPrismaClient();
+  const dbPath = resolveDbPath();
+  if (_prisma && _prismaPath === dbPath) return _prisma;
+
+  if (_prisma) {
+    // Sync getter can't await — fire-and-forget the old pool teardown;
+    // the new client opens immediately on the current path.
+    void _prisma.$disconnect().catch(() => {});
+    _prisma = null;
   }
+
+  _prisma = createPrismaClient();
+  _prismaPath = dbPath;
   return _prisma;
 }
 

@@ -113,7 +113,7 @@ const RULES: Array<{
     match: (i) => i.status === "failed",
     resolve: (i) => ({
       label: "failed",
-      description: `Failed at ${i.currentPhase.replace(/_/g, " ")}, round ${i.currentRound}`,
+      description: `Failed at ${i.currentPhase?.replace(/_/g, " ") ?? "unknown phase"}, round ${i.currentRound}`,
       isUrgent: true,
       activePhase: i.currentPhase,
     }),
