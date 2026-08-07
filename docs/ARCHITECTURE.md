@@ -146,7 +146,7 @@ The claim is atomic via `updateMany WHERE status='pending'` — concurrent worke
 | **`AgentEvent`** | Activity log: tool calls, thinking, step events, round summaries. |
 | **`DatasetSignature`** | Hash of columns+rows for cross-run warm-start. |
 
-Others: `AutoresearchSession`, `RunWorktree` (git isolation), `SpecApproval`/`ChecklistState` (UX), `JobRegistry` (polling jobs for crash recovery), `FormigaStat` (global tokens), `MedicCheck` (health checks).
+Others: `RunWorktree` (git isolation), `SpecApproval`/`ChecklistState` (UX), `JobRegistry` (polling jobs for crash recovery), `FormigaStat` (global tokens), `MedicCheck` (health checks).
 
 ### Migrations — two idempotent layers
 
@@ -285,11 +285,11 @@ Each team has a budget of up to 5 iterations and an early-stop rule: if iteratio
 | **G1** overfit | `overfit` | `|train - val| > threshold(tier)` (TINY=0.06, SMALL=0.05, MEDIUM/LARGE=0.03). |
 | **G4** cal_leak | `cal_leak` | OOF with <50 unique probs (saturation) OR ECE <1e-6 (suspiciously perfect — calibrator fit on OOF). |
 | **G5** too_good | warning | Univariate AUC ≥0.99 (likely a target proxy). Does not reject. |
-| **G8** significance | warning | Nadeau-Bengio p≥0.05 OR delta<0.5pp → downgrade to `warn` (stays in the ledger, not promoted). |
+| **G8** significance | warning | Nadeau-Bengio tier-specific thresholds: TINY (`p<0.20 ∧ delta≥0.1pp`), SMALL (`p<0.10 ∧ delta≥0.3pp`), MEDIUM+ (`p<0.05 ∧ delta≥0.5pp`). Falls below → downgrade to `warn` (stays in the ledger, not promoted). |
 
 ### Nadeau-Bengio (significance)
 
-A fold-overlap-corrected t-test (Nadeau & Bengio 2003): `correction = 1/n + (n-1)/n`. "Statistically just" criterion: `keep` only if `p < 0.05` **AND** `delta ≥ 0.5pp`. Custom t-Student implementation (regularized incomplete beta via continued-fraction) — no external stats dependency.
+A fold-overlap-corrected t-test (Nadeau & Bengio 2003): `correction = 1/n + (n-1)/n`. Thresholds are **tier-specific**: TINY datasets (≤30 samples/fold) use relaxed criteria because CV noise dominates — `p < 0.20` and `delta ≥ 0.1pp`. SMALL uses `p < 0.10` and `delta ≥ 0.3pp`. MEDIUM and above use the standard `p < 0.05` and `delta ≥ 0.5pp`. Custom t-Student implementation (regularized incomplete beta via continued-fraction) — no external stats dependency.
 
 ### Append-only ledger
 
