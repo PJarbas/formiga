@@ -16,10 +16,11 @@ function formatRelativeTime(iso: string): string {
 }
 
 /** Normalize a run status to the visual states the list understands. */
-function normalizeStatus(status: string): "running" | "passed" | "failed" | "paused" {
+function normalizeStatus(status: string): "running" | "passed" | "failed" | "paused" | "canceled" {
   if (status === "completed") return "passed";
   if (status === "failed") return "failed";
   if (status === "paused") return "paused";
+  if (status === "canceled") return "canceled";
   return "running";
 }
 
@@ -73,6 +74,19 @@ function StatusIcon({ status }: { status: string }) {
           </svg>
         </div>
       );
+    case "canceled":
+      return (
+        <div
+          className={`${container} bg-gray-500/10`}
+          aria-label="Status: canceled"
+          title="Canceled"
+        >
+          <svg className="h-4 w-4 text-gray-500" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="3.5" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M6.2 8h3.6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </div>
+      );
     default:
       return (
         <div
@@ -97,9 +111,9 @@ function RunTag({ children }: { children: string }) {
   );
 }
 
-/** Parse a `key=value ...` task string into chips with the key muted and value bright. */
-function ParamChips({ task }: { task: string }) {
-  const tokens = task.split(/\s+/).filter(Boolean);
+/** Parse a `key=value ...` task string into inline key-value pills with the key muted and value bright. */
+function ParamChips({ task }: { task?: string }) {
+  const tokens = (task ?? "").split(/\s+/).filter(Boolean);
 
   return (
     <div
@@ -112,7 +126,7 @@ function ParamChips({ task }: { task: string }) {
           return (
             <span
               key={token}
-              className="bg-white/[0.04] rounded px-1.5 py-0.5 font-mono text-[11px] text-gray-400 whitespace-nowrap shrink-0"
+              className="rounded-md border border-gray-700 px-1.5 py-0.5 font-mono text-[11px] text-gray-500 whitespace-nowrap shrink-0"
             >
               {token}
             </span>
@@ -123,10 +137,10 @@ function ParamChips({ task }: { task: string }) {
         return (
           <span
             key={token}
-            className="bg-white/[0.04] rounded px-1.5 py-0.5 font-mono text-[11px] whitespace-nowrap shrink-0"
+            className="rounded-md border border-gray-700 px-1.5 py-0.5 font-mono text-[11px] whitespace-nowrap shrink-0"
           >
-            <span className="text-gray-400">{key}=</span>
-            <span className="text-white">{value}</span>
+            <span className="text-gray-500">{key}=</span>
+            <span className="text-gray-300">{value}</span>
           </span>
         );
       })}
@@ -161,7 +175,7 @@ function StepTracker({
                 ? "bg-blue-500 animate-pulse"
                 : phase.status === "failed"
                   ? "bg-red-500"
-                  : "bg-gray-800";
+                  : "bg-gray-600";
           return (
             <span
               key={phase.id}
@@ -274,7 +288,7 @@ function RunRow({
           <RunTag>{workflowLabel}</RunTag>
           {run.arenaProgress && <RunTag>arena</RunTag>}
         </div>
-        {isActive && run.currentPhase !== "idle" && (
+        {isActive && run.currentPhase && run.currentPhase !== "idle" && (
           <p className="text-[10px] text-gray-500 mt-0.5">
             {run.currentPhase.replace(/_/g, " ")}
           </p>

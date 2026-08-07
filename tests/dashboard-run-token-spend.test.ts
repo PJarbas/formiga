@@ -64,7 +64,7 @@ describe("dashboard run token spend surfaces", () => {
             "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES ('step_token_api_001', ?, 'implement', 'dev', 1, 'input', 'expects', 'done', ?, ?)"
           ).run(runId, now, now);
 
-          const server = createDashboardServer(0);
+          const server = await createDashboardServer(0);
           if (!server.listening) {
             await once(server, "listening");
           }
