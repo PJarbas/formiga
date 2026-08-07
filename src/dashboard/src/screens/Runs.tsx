@@ -1,11 +1,11 @@
-import { useCommandCenter, usePipelineControl, useDeleteRun } from "../api/api";
-import { PipelineTable } from "../components/PipelineTable";
-import type { RunActionId } from "../components/PipelineTable";
+import { useRuns, usePipelineControl, useDeleteRun } from "../api/api";
+import { RunList } from "../components/RunList";
+import type { RunActionId } from "../components/RunList";
 import { EmptyState } from "../components/EmptyState";
 import { addToast } from "../components/Toast";
 
-export default function CommandCenter() {
-  const { data, isLoading, error } = useCommandCenter();
+export default function Runs() {
+  const { data, isLoading, error } = useRuns();
   const { pause, resume, cancel } = usePipelineControl();
   const deleteRun = useDeleteRun();
 
@@ -30,7 +30,7 @@ export default function CommandCenter() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64 text-[var(--text-muted)]">
-        Loading command center...
+        Loading runs...
       </div>
     );
   }
@@ -38,7 +38,7 @@ export default function CommandCenter() {
   if (error) {
     return (
       <div className="rounded-lg border border-[var(--accent-red)] bg-[var(--bg-secondary)] p-6 text-center">
-        <p className="text-[var(--accent-red)] font-medium">Failed to load command center</p>
+        <p className="text-[var(--accent-red)] font-medium">Failed to load runs</p>
         <p className="text-[var(--text-muted)] text-sm mt-1">{(error as Error).message}</p>
       </div>
     );
@@ -47,12 +47,12 @@ export default function CommandCenter() {
   if (!data || data.runs.length === 0) {
     return (
       <div
-        data-testid="cc-idle"
+        data-testid="runs-idle"
         className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-8 text-center"
       >
         <EmptyState
           icon="⚙️"
-          message="No active pipeline"
+          message="No active runs"
           detail="Start a pipeline from the CLI to see runs here."
         />
         <code className="inline-block text-xs font-mono text-[var(--accent-blue)] bg-[var(--bg-tertiary)] px-3 py-1.5 rounded mt-3">
@@ -63,8 +63,8 @@ export default function CommandCenter() {
   }
 
   return (
-    <div data-testid="command-center">
-      <PipelineTable runs={data.runs} onRunAction={handleRunAction} />
+    <div data-testid="runs-list">
+      <RunList runs={data.runs} onRunAction={handleRunAction} />
     </div>
   );
 }

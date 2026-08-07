@@ -10,7 +10,7 @@ import { StatusBadge } from "./components/StatusBadge";
 import { Breadcrumb } from "./components/Breadcrumb";
 
 const NAV_ITEMS = [
-  { to: "/", label: "Command Center", end: true },
+  { to: "/", label: "Runs", end: true },
   { to: "/pipeline", label: "Pipeline Flow" },
   { to: "/leaderboard", label: "Leaderboard" },
 ];

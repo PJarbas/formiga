@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════════════
-// StatusCard.tsx — Hero status card for CommandCenter
+// StatusCard.tsx — Hero status card for Runs
 // ══════════════════════════════════════════════════════════════════════
 // Pure presentational — all data from props. Derivation happens in
 // useHumanStatus() hook. No logic, no side effects.

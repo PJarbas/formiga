@@ -2426,7 +2426,7 @@ function handlePendingDecisions(req: http.IncomingMessage, res: http.ServerRespo
   })().catch((err) => errorResponse(res, `Failed to derive pending decisions: ${(err as Error).message}`));
 }
 
-function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerResponse): void {
+function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void {
   (async () => {
     const prisma = getPrisma();
 
@@ -2503,7 +2503,7 @@ function handleCommandCenter(_req: http.IncomingMessage, res: http.ServerRespons
     );
 
     jsonResponse(res, { runs });
-  })().catch((err) => errorResponse(res, `Failed to build command-center snapshot: ${(err as Error).message}`));
+  })().catch((err) => errorResponse(res, `Failed to build runs snapshot: ${(err as Error).message}`));
 }
 
 // ── Arena API Handlers ─────────────────────────────────────────────────
@@ -3181,9 +3181,9 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
-  // GET /api/command-center
-  if (method === "GET" && pathname === "/api/command-center") {
-    handleCommandCenter(req, res);
+  // GET /api/runs
+  if (method === "GET" && pathname === "/api/runs") {
+    handleRuns(req, res);
     return;
   }
 

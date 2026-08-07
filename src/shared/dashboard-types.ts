@@ -694,7 +694,7 @@ export interface SpecApproval {
   updatedAt: string;
 }
 
-// ── Command Center aggregate (front-specs §3.1) ──────────────────────
+// ── Runs aggregate (front-specs §3.1) ────────────────────────────────
 
 export interface AgentStripItem {
   name: string;
@@ -727,7 +727,7 @@ export interface PipelineRunRow {
   arenaProgress?: ArenaProgress;
 }
 
-export interface CommandCenterSnapshot {
+export interface RunsSnapshot {
   runs: PipelineRunRow[];
 }
 
