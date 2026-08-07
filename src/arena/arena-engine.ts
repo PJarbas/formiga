@@ -303,6 +303,7 @@ export async function runArena(
 
   let consecutiveNoImprove = 0;
   let stopReason = "max_rounds";
+  let roundImproved = false;
 
   // History tracking for prompts
   const allResults: AgentRoundResult[] = [];
@@ -359,6 +360,7 @@ export async function runArena(
 
     // Measure sequentially (resource contention)
     const roundResults: AgentRoundResult[] = [];
+    roundImproved = false;
     for (const agent of activeAgents) {
       const output = agentOutputs[agent.id];
       if (!output) {
@@ -460,9 +462,11 @@ export async function runArena(
         iterationTeam = audit.iterationTeam;
 
         if (audit.verdict === "rejected") {
-          // REJECTED is recorded as discard + FAILED/OVERFITTED with a reason.
-          auditedDecision = audit.rejectionTag === "overfit" ? "checks_failed" : "discard";
-          auditedStatus = audit.rejectionTag === "overfit" ? "OVERFITTED" : "FAILED";
+          // All gate rejections (overfit, no_folds, cal_leak, budget, stale)
+          // are recorded as checks_failed + OVERFITTED — distinguishable
+          // from genuine crashes (decision=crash + status=FAILED).
+          auditedDecision = "checks_failed";
+          auditedStatus = "OVERFITTED";
           rejectionReason = audit.rejectionReason;
           isDuplicate = audit.rejectionReason?.startsWith("[dedup]") ?? false;
         } else if (audit.verdict === "warn") {
@@ -575,7 +579,9 @@ export async function runArena(
       result.decision = auditedDecision;
 
       // Update session state — only a genuine `keep`/`baseline` (statistically
-      // significant) promotes the best and resets the no-improve counter.
+      // significant) promotes the best. No-improve is tracked per-round below
+      // so that multiple agents competing in the same round each get a fair
+      // chance before the arena converges.
       const improved = result.decision === "keep" || result.decision === "baseline";
       if (improved && result.metric !== null) {
         session.bestMetric = result.metric;
@@ -583,15 +589,23 @@ export async function runArena(
         session.bestExperimentId = result.experimentId ?? null;
         // Capture fold scores of the new best for the next Nadeau-Bengio test.
         bestFoldScores = richMetrics.foldScores ?? null;
-        consecutiveNoImprove = 0;
-      } else {
-        consecutiveNoImprove++;
+        roundImproved = true;
       }
       session.consecutiveNoImprove = consecutiveNoImprove;
 
       // Update repo stats
       await repo.updateStats(session.id, result.decision);
     }
+
+    // Per-round no-improve accounting: a round counts as "improved" if
+    // at least one agent produced a keep/baseline. This gives every
+    // competing agent a fair number of attempts before convergence.
+    if (roundImproved) {
+      consecutiveNoImprove = 0;
+    } else {
+      consecutiveNoImprove++;
+    }
+    session.consecutiveNoImprove = consecutiveNoImprove;
 
     // Persist round result
     allResults.push(...roundResults);

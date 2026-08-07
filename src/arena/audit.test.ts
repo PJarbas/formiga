@@ -9,6 +9,7 @@ import {
   nadeauBengio,
   twoSidedTsf,
   overfitGapThreshold,
+  significanceThresholds,
   classifyAdversarialAuc,
   nelderMeadEnsembleWeights,
   dedupSignature,
@@ -255,6 +256,56 @@ describe("auditExperiment — G8 significance", () => {
     assert.equal(result.verdict, "keep");
     assert.equal(result.significance, null);
   });
+
+  it("keeps modest improvement on TINY tier that MEDIUM would reject", () => {
+    // Fold differences give p ≈ 0.10 — fails standard p<0.05 but passes TINY p<0.20.
+    // deltaPp ≈ 3.0pp passes both thresholds.
+    // On MEDIUM tier this same data should be "warn".
+    const tinyInput = baseInput({
+      metric: 0.826,
+      trainScore: 0.83,
+      bestMetric: 0.796,
+      foldScores: [0.82, 0.84, 0.79, 0.85, 0.83],
+      bestFoldScores: [0.79, 0.81, 0.78, 0.80, 0.80],
+      tier: "TINY",
+    });
+    const tinyResult = auditExperiment(tinyInput);
+    assert.equal(tinyResult.verdict, "keep",
+      `TINY tier should keep modest improvement, got verdict=${tinyResult.verdict} p=${tinyResult.significance?.pValue?.toFixed(4)}`);
+
+    // Same data under MEDIUM tier → should downgrade to "warn"
+    const mediumResult = auditExperiment(baseInput({
+      ...tinyInput,
+      tier: "MEDIUM",
+    }));
+    assert.equal(mediumResult.verdict, "warn",
+      `MEDIUM tier should warn on same data, got verdict=${mediumResult.verdict}`);
+    assert.ok(mediumResult.warnings.some((w) => w.tag === "significance"));
+  });
+});
+
+// ── significanceThresholds ─────────────────────────────────────────────
+
+describe("significanceThresholds", () => {
+  it("returns relaxed thresholds for TINY tier", () => {
+    const t = significanceThresholds("TINY");
+    assert.equal(t.pMax, 0.20);
+    assert.equal(t.deltaPpMin, 0.1);
+  });
+
+  it("returns moderately relaxed thresholds for SMALL tier", () => {
+    const t = significanceThresholds("SMALL");
+    assert.equal(t.pMax, 0.10);
+    assert.equal(t.deltaPpMin, 0.3);
+  });
+
+  it("returns standard thresholds for MEDIUM and above", () => {
+    for (const tier of ["MEDIUM", "LARGE", "UNKNOWN"] as ComplexityTier[]) {
+      const t = significanceThresholds(tier);
+      assert.equal(t.pMax, 0.05, `pMax for ${tier}`);
+      assert.equal(t.deltaPpMin, 0.5, `deltaPpMin for ${tier}`);
+    }
+  });
 });
 
 // ── dedupSignature determinism ───────────────────────────────────────────
@@ -274,7 +325,7 @@ describe("dedupSignature", () => {
 
   it("handles null metric without throwing", () => {
     const a = dedupSignature("x", "lgbm", { lr: 0.01 }, null);
-    assert.ok(a.includes("null"), "null metric should produce 'null' in signature");
+    assert.ok(a.includes("N/A"), "null metric should produce 'N/A' in signature");
   });
 
   it("null metric produces different signature than zero", () => {

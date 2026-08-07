@@ -67,7 +67,8 @@ import {
 import { handleMcpRequest, handleMcpDiscovery } from "../mcp/http-handler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
+// Always serve the built dashboard (vite output), regardless of source or dist runtime.
+const DASHBOARD_DIST = path.resolve(__dirname, "..", "..", "dist", "dashboard");
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -750,19 +751,56 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
         };
     const relevantAgents = Object.entries(agentRegistry).filter(([, info]) => info !== undefined);
 
+    // Fetch experiment counters for arena modeler agents
+    const arenaAgentIds = relevantAgents
+      .map(([name]) => name)
+      .filter((name) => name.includes("modeler"));
+    let experimentCounters: Record<string, { kept: number; rejected: number; crashed: number; total: number; bestModel?: string; bestMetric?: number }> = {};
+    if (runId && arenaAgentIds.length > 0) {
+      const arenaExperiments = await getPrisma().experiment.findMany({
+        where: { run_id: runId, agent_name: { in: arenaAgentIds } },
+        orderBy: { created_at: "asc" },
+      });
+      for (const agentId of arenaAgentIds) {
+        const agentExps = arenaExperiments.filter((e) => e.agent_name === agentId);
+        // Kept: passed all gates and was statistically significant (AUDITED + keep/baseline).
+        const kept = agentExps.filter((e) => e.status === "AUDITED" && (e.decision === "keep" || e.decision === "baseline")).length;
+        // Rejected: any gate rejection (OVERFITTED + checks_failed).
+        const rejected = agentExps.filter((e) => e.status === "OVERFITTED" && e.decision === "checks_failed").length;
+        // Crashed: genuine execution failure, not a gate rejection.
+        const crashed = agentExps.filter((e) => e.status === "FAILED" && e.decision === "crash").length;
+        // Find best kept experiment (AUDITED status, keep/baseline decision)
+        const best = agentExps
+          .filter((e) => (e.decision === "keep" || e.decision === "baseline") && e.val_metric != null)
+          .sort((a, b) => (b.val_metric ?? 0) - (a.val_metric ?? 0))[0];
+        experimentCounters[agentId] = {
+          kept,
+          rejected,
+          crashed,
+          total: agentExps.length,
+          bestModel: best?.model_type ?? undefined,
+          bestMetric: best?.val_metric ?? undefined,
+        };
+      }
+    }
+
     const nodes: PipelineFlowNode[] = await Promise.all(
       relevantAgents.map(async ([name, info]) => {
         const status = runId
           ? (await getAgentUnifiedStatus(runId, name, currentRound)).status
           : "idle" as const;
+        const counters = experimentCounters[name];
         return {
           agentId: name,
           label: info.label,
           status,
-          harness: runHarnessType, // Use actual harness from run context
+          harness: runHarnessType,
           phase: info.phase,
           artifactsOut: info.artifactsOut,
           messagesCount: info.messagesCount,
+          experiments: counters ? { kept: counters.kept, rejected: counters.rejected, crashed: counters.crashed, total: counters.total } : undefined,
+          bestModel: counters?.bestModel,
+          bestMetric: counters?.bestMetric,
         };
       }),
     );
