@@ -82,6 +82,11 @@ export default function Leaderboard() {
     return firstWithProblemType?.problemType ?? "classification";
   }, [sortedEntries]);
 
+  // Entry shown in the detail drawer, resolved once from the sorted list.
+  const detailEntry = detailEntryId
+    ? sortedEntries.find((e) => e.id === detailEntryId) ?? null
+    : null;
+
   const columns = useMemo(() => {
     const base = [
       { key: "modelId", label: "Experiment", sortable: true },
@@ -141,7 +146,7 @@ export default function Leaderboard() {
 
       {/* Metric bar chart */}
       {sortedEntries.length > 0 && (
-        <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] p-4">
+        <div className="rounded-xl border border-white/[0.06] bg-gray-900/50 p-4">
           <h3 className="text-xs uppercase tracking-wider text-[var(--text-muted)] font-medium mb-3">
             {metricName.toUpperCase()} by experiment · validation · cross-validation
           </h3>
@@ -150,16 +155,16 @@ export default function Leaderboard() {
       )}
 
       {/* Experiments table */}
-      <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] overflow-hidden">
+      <div className="rounded-xl border border-white/[0.06] bg-[var(--bg-secondary)] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-[var(--border-default)] text-left">
-                <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide">#</th>
+              <tr className="border-b border-white/[0.06] text-left">
+                <th className="px-4 py-3 text-[11px] font-medium text-gray-500 tracking-wide">#</th>
                 {columns.map((col) => (
                   <th
                     key={col.key}
-                    className={`px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide select-none ${
+                    className={`px-4 py-3 text-[11px] font-medium text-gray-500 tracking-wide select-none ${
                       col.sortable ? "cursor-pointer" : ""
                     } ${col.align === "right" ? "text-right" : ""}`}
                     onClick={() => {
@@ -175,8 +180,8 @@ export default function Leaderboard() {
                     )}
                   </th>
                 ))}
-                <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide">Folds</th>
-                <th className="px-4 py-2.5 text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide">Notes</th>
+                <th className="px-4 py-3 text-[11px] font-medium text-gray-500 tracking-wide">Folds</th>
+                <th className="px-4 py-3 text-[11px] font-medium text-gray-500 tracking-wide">Notes</th>
               </tr>
             </thead>
             <tbody>
@@ -189,7 +194,6 @@ export default function Leaderboard() {
               ) : (
                 sortedEntries.map((entry, idx) => {
                   const isBest = entry.id === bestId;
-                  const isDetail = entry.id === detailEntryId;
                   const algorithm = entry.modelAlgorithm ?? entry.modelType;
                   const { color: dotColor } = familyDot(algorithm);
 
@@ -197,27 +201,27 @@ export default function Leaderboard() {
                     <tr
                       key={entry.id}
                       data-testid={`leaderboard-row-${entry.id}`}
-                      onClick={() => setDetailEntryId(isDetail ? null : entry.id)}
-                      className={`border-b border-[var(--border-default)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer ${
-                        isDetail ? "border-l-2 border-l-[var(--accent-blue)] bg-[var(--bg-tertiary)]" : ""
-                      } ${isBest ? "bg-blue-500/10" : ""}`}
+                      onClick={() => setDetailEntryId(entry.id)}
+                      className={`border-b border-white/[0.06] hover:bg-white/[0.02] transition-colors cursor-pointer ${
+                        isBest ? "bg-yellow-500/[0.04] border-l-2 border-l-yellow-500/70" : ""
+                      }`}
                     >
-                      <td className="px-4 py-2.5 text-xs text-[var(--text-muted)]">
+                      <td className="px-4 py-3 text-xs text-[var(--text-muted)]">
                         {isBest ? <span className="text-[var(--accent-orange)]">🏆</span> : idx + 1}
                       </td>
                       {columns.map((col) => {
                         if (col.key === "modelId") {
                           return (
-                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-[var(--text-primary)]">
+                            <td key={col.key} className="px-4 py-3 font-mono text-xs text-[var(--text-primary)]">
                               {entry.modelId}
-                              {isBest && <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded bg-[var(--accent-green)]/10 text-[var(--accent-green)]">champion</span>}
+                              {isBest && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 font-medium">champion</span>}
                             </td>
                           );
                         }
 
                         if (col.key === "modelAlgorithm") {
                           return (
-                            <td key={col.key} className="px-4 py-2.5 text-xs">
+                            <td key={col.key} className="px-4 py-3 text-xs">
                               <span className="inline-flex items-center gap-1.5">
                                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: dotColor }} />
                                 {algorithm}
@@ -241,8 +245,8 @@ export default function Leaderboard() {
                             unknown: "bg-gray-500/10 text-gray-400 border-gray-500/20",
                           };
                           return (
-                            <td key={col.key} className="px-4 py-2.5 text-xs">
-                              <span className={`px-1.5 py-0.5 text-[10px] font-semibold border rounded ${colors[type] ?? colors.unknown}`}>
+                            <td key={col.key} className="px-4 py-3 text-xs">
+                              <span className={`px-1.5 py-0.5 text-[10px] font-semibold border rounded-md ${colors[type] ?? colors.unknown}`}>
                                 {labels[type] ?? "Unknown"}
                               </span>
                             </td>
@@ -251,7 +255,7 @@ export default function Leaderboard() {
 
                         if (col.key === "cvMean") {
                           return (
-                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-right tabular-nums" style={{ color: isBest ? "var(--accent-green)" : "var(--accent-blue)" }}>
+                            <td key={col.key} className="px-4 py-3 font-mono text-xs text-right tabular-nums" style={{ color: isBest ? "var(--accent-green)" : "var(--accent-blue)" }}>
                               {entry.cvMean.toFixed(4)}
                             </td>
                           );
@@ -259,7 +263,7 @@ export default function Leaderboard() {
 
                         if (col.key === "cvStd") {
                           return (
-                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-right tabular-nums text-[var(--text-muted)]">
+                            <td key={col.key} className="px-4 py-3 font-mono text-xs text-right tabular-nums text-[var(--text-muted)]">
                               {entry.cvStd.toFixed(4)}
                             </td>
                           );
@@ -267,7 +271,7 @@ export default function Leaderboard() {
 
                         if (col.key === "trainValGap") {
                           return (
-                            <td key={col.key} className="px-4 py-2.5">
+                            <td key={col.key} className="px-4 py-3">
                               <GapPill gap={entry.trainValGap} />
                             </td>
                           );
@@ -283,7 +287,7 @@ export default function Leaderboard() {
                           else if (col.key === "roc_auc") val = metrics?.rocAuc;
 
                           return (
-                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-right tabular-nums text-[var(--text-secondary)]">
+                            <td key={col.key} className="px-4 py-3 font-mono text-xs text-right tabular-nums text-[var(--text-secondary)]">
                               {val != null ? val.toFixed(4) : "—"}
                             </td>
                           );
@@ -298,18 +302,18 @@ export default function Leaderboard() {
                           else if (col.key === "r2Score") val = metrics?.r2Score;
 
                           return (
-                            <td key={col.key} className="px-4 py-2.5 font-mono text-xs text-right tabular-nums text-[var(--text-secondary)]">
+                            <td key={col.key} className="px-4 py-3 font-mono text-xs text-right tabular-nums text-[var(--text-secondary)]">
                               {val != null ? val.toFixed(4) : "—"}
                             </td>
                           );
                         }
 
-                        return <td key={col.key} className="px-4 py-2.5 text-right">—</td>;
+                        return <td key={col.key} className="px-4 py-3 text-right">—</td>;
                       })}
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-3">
                         <FoldSparkline scores={[]} />
                       </td>
-                      <td className="px-4 py-2.5 text-xs text-[var(--text-muted)] max-w-[120px] truncate" title={entry.hypothesis ?? ""}>
+                      <td className="px-4 py-3 text-xs text-[var(--text-muted)] max-w-[120px] truncate" title={entry.hypothesis ?? ""}>
                         {entry.hypothesis ?? "·"}
                       </td>
                     </tr>
@@ -321,12 +325,8 @@ export default function Leaderboard() {
         </div>
       </div>
 
-      {/* Model Detail Panel */}
-      {detailEntryId && (() => {
-        const detailEntry = sortedEntries.find((e) => e.id === detailEntryId);
-        if (!detailEntry) return null;
-        return <ModelDetailPanel entry={detailEntry} onClose={() => setDetailEntryId(null)} />;
-      })()}
+      {/* Model detail drawer */}
+      {detailEntry && <ModelDetailPanel entry={detailEntry} onClose={() => setDetailEntryId(null)} />}
 
     </div>
   );
