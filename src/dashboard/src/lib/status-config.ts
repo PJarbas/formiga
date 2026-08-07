@@ -171,6 +171,18 @@ export const STATUS_CONFIG: Record<UIStatus, StatusConfig> = {
     priority: 0,
     isUrgent: false,
   },
+  checks_failed: {
+    key: "checks_failed",
+    label: "REJECTED",
+    emoji: "⚠️",
+    colorVar: "--accent-amber",
+    hex: "#f59e0b",
+    dotClass: "bg-[var(--accent-amber)]",
+    borderClass: "border-[var(--accent-amber)]",
+    bgClass: "bg-[var(--accent-amber)]/10",
+    priority: 3,
+    isUrgent: true,
+  },
   crash: {
     key: "crash",
     label: "CRASHED",

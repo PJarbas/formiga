@@ -28,6 +28,7 @@ const STATUS_STYLES: Record<string, { border: string; bg: string; dot: string; l
   completed: { border: "var(--accent-green)", bg: "var(--bg-secondary)", dot: "var(--accent-green)", label: "done ✓" },
   failed: { border: "var(--accent-red)", bg: "var(--bg-secondary)", dot: "var(--accent-red)", label: "failed ✗" },
   timed_out: { border: "var(--accent-orange)", bg: "var(--bg-secondary)", dot: "var(--accent-orange)", label: "timed out" },
+  checks_failed: { border: "var(--accent-amber)", bg: "var(--bg-secondary)", dot: "var(--accent-amber)", label: "rejected ⚠" },
 };
 
 const HARNESS_LABELS: Record<string, { text: string; color: string }> = {
@@ -93,6 +94,25 @@ export function AgentNode({ node, isSelected, onClick }: AgentNodeProps) {
       {node.artifactsOut.length > 0 && (
         <div className="mt-2 text-[10px] text-[var(--text-muted)] truncate" title={node.artifactsOut.join(", ")}>
           → {node.artifactsOut.join(", ")}
+        </div>
+      )}
+
+      {/* Arena experiment counters */}
+      {node.experiments && node.experiments.total > 0 && (
+        <div className="mt-2 flex items-center gap-2 text-[10px] font-mono">
+          <span className="text-[var(--accent-green)]">✓{node.experiments.kept}</span>
+          <span className="text-[var(--accent-amber)]">⚠{node.experiments.rejected}</span>
+          <span className="text-[var(--accent-red)]">✗{node.experiments.crashed}</span>
+        </div>
+      )}
+
+      {/* Best model + metric (arena-only) */}
+      {node.bestModel && (
+        <div className="mt-1.5 text-[10px] text-[var(--text-secondary)] truncate">
+          best: {node.bestModel}{" "}
+          {node.bestMetric != null && (
+            <span className="text-[var(--accent-green)] font-mono">{node.bestMetric.toFixed(4)}</span>
+          )}
         </div>
       )}
     </div>

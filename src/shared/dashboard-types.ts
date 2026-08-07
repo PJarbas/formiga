@@ -299,6 +299,17 @@ export interface PipelineFlowNode {
   elapsedSeconds?: number;
   timeoutSeconds?: number;
   lastOutputAt?: string;
+  /** Arena-only: experiment outcome counters */
+  experiments?: {
+    kept: number;
+    rejected: number;
+    crashed: number;
+    total: number;
+  };
+  /** Arena-only: best model achieved across all rounds */
+  bestModel?: string;
+  /** Arena-only: best metric value across all rounds */
+  bestMetric?: number;
 }
 
 export interface PipelineFlowEdge {
