@@ -55,9 +55,32 @@ formiga workflow resume <run-id>
 formiga workflow resume-all
 formiga workflow stop <run-id>
 formiga workflow autoresearch <run-id>
+formiga autoresearch "<dataset_path=... target_column=...>"
 formiga workflow delete <run-id> [--force]
 formiga nudge
 ```
+
+`formiga autoresearch "<...>"` is an alias for `formiga workflow run ml-autoresearch "<...>"`.
+It starts an automated ML competition with the given key=value parameters:
+`dataset_path`, `target_column`, plus optional `max_rounds`, `metric`, and `direction`.
+Examples:
+
+```bash
+formiga autoresearch "dataset_path=data/classification.csv target_column=species"
+formiga autoresearch "dataset_path=data.csv target_column=price max_rounds=8 metric=rmse direction=lower"
+```
+
+Formiga ships with **two bundled workflows:**
+
+- `ml-autoresearch` — Competitive arena: Data Analyst → Feature Engineer →
+  Arena (classic vs advanced modelers + creative on MEDIUM/LARGE datasets) →
+  Reporter. Use `formiga autoresearch "..."` as a shortcut.
+- `ml-pipeline` — Parallel pipeline: Data Analyst → Feature Engineer →
+  Modeler Classic ∥ Modeler Advanced (parallel group) → ML Critic (audit).
+  Run with `formiga workflow run ml-pipeline "..."`.
+
+Both workflows use the same agent tools (`save_artifact`, `read_artifact`,
+`query_leaderboard`) and the `STATUS: done` completion contract.
 
 `formiga nudge` wakes all scheduled agents for all currently running runs,
 causing them to poll once immediately without waiting for their normal
@@ -76,14 +99,6 @@ agents in `~/.formiga/agents.json`. Use `--all` (or `all`) to install every
 bundled workflow in one command. `uninstall` removes the workflow and its
 agent configuration. Use `--force` to skip the active-runs safety check.
 `uninstall --all` removes every installed workflow.
-
-Use `formiga update [--force]` only for local Formiga maintenance. Without
-`--force`, update blocks after rebuilding if active runs are present — it
-leaves services and installed workflows unchanged. Use `--force` to proceed
-despite active runs (services are stopped and restarted, workflows reinstalled).
-Remote MCP clients can discover the same maintenance command via
-`formiga.update.command`; run the actual update through the local CLI because
-it may restart dashboard, MCP, and the control plane.
 
 Harness working directory guidance:
 
@@ -129,32 +144,7 @@ formiga status
 - **Workflow Runs** — Summary of all runs (running, paused, done, failed)
 - **Running Processes** — Active pi/hermes harness processes spawned by Formiga
 
-### 2.7) Worktree management
-
-Worktree commands manage the git worktrees Formiga creates for isolated
-workflow runs.
-
-```bash
-formiga worktree list
-formiga worktree status <run-id>
-formiga worktree remove <run-id> [--force]
-formiga worktree prune --completed --older-than <duration>
-```
-
-`list` shows all managed worktrees with run ID, status, cleanup policy, and
-filesystem path.
-
-`status` shows detailed worktree info for a run: origin repo, ref, SHA,
-original branch, worktree path, and cleanup policy.
-
-`remove` deletes a worktree and its tracking entry. By default, only
-non-ready worktrees can be removed. Use `--force` to remove any status.
-
-`prune` cleans up old worktrees for completed or canceled runs older than a
-duration (e.g. `7d`, `24h`, `30m`). Requires both `--completed` and
-`--older-than` flags.
-
-### 2.8) Control plane management
+### 2.7) Control plane management
 
 The control plane provides run-scoped scheduling that the dashboard daemon
 uses to manage agent polling and work dispatch.
@@ -172,6 +162,20 @@ Default port: 3339.
 Start will refuse if the control plane is already running, printing its
 current status instead. Stop is safe to run even when no control plane
 is active.
+
+### 2.8) Daemon management
+
+List and clean up daemon processes:
+
+```bash
+formiga daemon list                  # List all daemon processes (active + orphans)
+formiga daemon cleanup               # Kill orphan daemons to free memory
+```
+
+`list` shows all daemon processes, marking which are active and which are
+orphaned (no longer running but still holding a PID file). `cleanup` kills
+all orphan daemons — useful when a daemon was terminated without proper
+shutdown.
 
 ### 2.9) Full uninstall with formiga uninstall
 
@@ -229,6 +233,49 @@ classified by exact markers: `STATUS: done` (success) or `STATUS: failed` /
 On failure, end output with `STATUS: failed` and a `REASON:` line. If neither
 marker is present, the scheduler treats the step as lost/abandoned and retries
 it — wasting a retry slot even when the work was completed.
+
+### 4.1) Arena modeler output contract
+
+Arena modelers (classic, advanced, creative) have a **workflow-specific**
+contract that extends the generic completion contract above:
+
+**Final response must end with these five lines:**
+```
+HIPOTESE: <one-line summary of approach>
+SCRIPT_PATH: artifacts/models/<agent>_round{N}.py
+APRENDIZADO: <what was learned this round>
+PROXIMO_FOCO: <focus for next round>
+STATUS: done
+```
+
+**Benchmark stdout:** The training script must print exactly `{metric}: {value}`
+(e.g. `roc_auc: 0.9563`) to stdout. This is parsed by the arena engine.
+
+**Results file:** Every round must produce an `_results.json` containing:
+- `fold_scores` — per-fold CV scores (list, not mean; used for Nadeau-Bengio)
+- `train_score` — training score (used for overfit gate G1)
+- `oof_path` — path to calibrated OOF predictions (`.npy`)
+- `prod_path` — path to production model (`.pkl`; `null` for blends)
+- `brier_score`, `ece_calibrated` — calibration metrics
+- `category` — model category tag
+
+Missing `fold_scores` triggers `[no_folds]` rejection (G3). Large train/val
+gap triggers `[overfit]` rejection (G1).
+
+### 4.2) Arena agent tools
+
+All ml-autoresearch and ml-pipeline agents have access to these
+**formiga-agent-tools** MCP extension tools:
+
+```bash
+save_artifact <key>    # Persist artifact to database (NEVER use curl)
+read_artifact <key>    # Read artifact from database
+query_leaderboard       # Query arena leaderboard (current standings)
+```
+
+`save_artifact` is the **only supported way** to persist artifacts. Do not
+use curl, write files without tracking, or call HTTP endpoints directly.
+The database is the source of truth for all pipeline artifacts.
 
 ### 2.1) MCP run start (remote)
 
@@ -300,9 +347,7 @@ formiga dashboard status              # Check dashboard + MCP status
 ```
 
 `dashboard status` reports both dashboard and MCP server status in a single
-output. The remote MCP server can be managed independently with
-`formiga mcp start [--port N]`, `formiga mcp stop`, and `formiga mcp status`
-(standalone on port 3338 by default).
+output.
 
 `formiga source-path` prints the source checkout path that `formiga update`
 uses to pull, rebuild, and reinstall.
@@ -371,7 +416,7 @@ If `FORMIGA_HERMES_BINARY` is not set, Formiga searches for `hermes` on
 `PATH`. The binary is validated at scheduling time — if it is not found or
 not executable, the run fails at startup.
 
-### 4) Inter-agent messaging
+### 5) Inter-agent messaging
 
 Agents can send structured messages to each other during a run. Messages are
 stored in SQLite and can be read by the recipient agent.
@@ -398,7 +443,7 @@ formiga message list --run-id abc123
 formiga message read eda_complete --run-id abc123
 ```
 
-### 4.1) Stale run management
+### 5.1) Stale run management
 
 Identify and clean up runs that have been idle for too long.
 
@@ -420,14 +465,14 @@ formiga runs list-stale --min-minutes 120
 formiga runs cancel-stale --min-minutes 180 --force
 ```
 
-### 5) Review artifacts on changes
+### 6) Review artifacts on changes
 
 When making code changes, review whether these artifacts need updating:
 
-- `docs/creating-workflows.md` — user-facing workflow documentation
-- `src/server/mcp-server.ts` — MCP tools registered for agent use
+- `docs/ARCHITECTURE.md` — architecture and workflow documentation
+- `src/mcp/server.ts` — MCP tools registered for agent use
 - `src/cli/cli.ts` — CLI commands that agents invoke
-- `src/server/index.html` — dashboard UI
+- `src/dashboard/` — dashboard UI (React app)
 - `README.md` — project overview
 
 Changes that typically cascade to multiple artifacts:
