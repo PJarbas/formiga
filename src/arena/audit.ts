@@ -122,6 +122,36 @@ export interface SignificanceResult {
 
 export type ComplexityTier = "TINY" | "SMALL" | "MEDIUM" | "LARGE" | "UNKNOWN";
 
+// ── Significance thresholds (by complexity tier) ─────────────────────────
+
+/**
+ * Per-tier Nadeau-Bengio significance thresholds.
+ *
+ * TINY datasets (≤200 rows) have inherently low statistical power — 5-fold CV
+ * with ~30 samples/fold produces enormous CV variance. Requiring p < 0.05 would
+ * reject virtually every real improvement (type-II error near 100%). We relax
+ * both the p-value ceiling and the minimum practical effect size (deltaPp) so
+ * the arena can still identify better models on small data.
+ *
+ * SMALL datasets get a moderate relaxation; MEDIUM+ uses the standard
+ * p < 0.05 ∧ deltaPp ≥ 0.5pp criterion from Nadeau & Bengio (2003).
+ */
+export interface TierSignificanceThreshold {
+  pMax: number;       // maximum p-value to consider "significant"
+  deltaPpMin: number; // minimum percentage-point improvement (0.5 = 0.5pp)
+}
+
+export function significanceThresholds(tier: ComplexityTier): TierSignificanceThreshold {
+  switch (tier) {
+    case "TINY":
+      return { pMax: 0.20, deltaPpMin: 0.1 };   // ~30 samples/fold → CV noise dominates
+    case "SMALL":
+      return { pMax: 0.10, deltaPpMin: 0.3 };   // moderate relaxation
+    default:
+      return { pMax: 0.05, deltaPpMin: 0.5 };   // standard Nadeau-Bengio
+  }
+}
+
 // ── Overfit gate thresholds (by complexity tier) ─────────────────────────
 
 /** Max allowed relative |train − val| / |val| gap before the overfit gate rejects.
@@ -334,14 +364,20 @@ export function auditExperiment(input: AuditInput): AuditResult {
 
   if (input.bestMetric !== null && input.bestFoldScores && input.bestFoldScores.length >= 2) {
     significance = nadeauBengio(input.foldScores, input.bestFoldScores, input.direction);
-    if (significance && !significance.significant) {
-      // Not a statistically significant win — keep on the ledger but flag as
-      // a non-improvement (warn) so the arena does not treat it as a new best.
-      verdict = "warn";
-      warnings.push({
-        tag: "significance",
-        message: `[significance] p=${significance.pValue.toFixed(4)} delta=${significance.deltaPp.toFixed(3)}pp — not a significant improvement`,
-      });
+    if (significance) {
+      const thresh = significanceThresholds(input.tier);
+      const tierSignificant = significance.pValue < thresh.pMax && significance.deltaPp >= thresh.deltaPpMin;
+      if (!tierSignificant) {
+        // Not a statistically significant win at this tier — keep on the ledger
+        // but flag as a non-improvement (warn) so the arena does not treat it
+        // as a new best. TINY/SMALL tiers use relaxed thresholds to avoid
+        // rejecting all improvements when CV variance is enormous.
+        verdict = "warn";
+        warnings.push({
+          tag: "significance",
+          message: `[significance] p=${significance.pValue.toFixed(4)} delta=${significance.deltaPp.toFixed(3)}pp — not a significant improvement (tier ${input.tier}: p<${thresh.pMax} ∧ delta≥${thresh.deltaPpMin}pp)`,
+        });
+      }
     }
   }
 
