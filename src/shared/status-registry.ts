@@ -69,8 +69,8 @@ export type ArenaDecisionValue = (typeof ENTITY_STATUSES.ArenaDecision)[number];
 /** Kanban board collapsed 4-state model. */
 export type VisualStatus = "todo" | "running" | "done" | "failed";
 
-/** Dashboard pipeline agent 5-state model (includes timed_out). */
-export type DashboardAgentStatus = "idle" | "running" | "completed" | "failed" | "timed_out";
+/** Dashboard pipeline agent 6-state model (includes timed_out and checks_failed). */
+export type DashboardAgentStatus = "idle" | "running" | "completed" | "failed" | "timed_out" | "checks_failed";
 
 /** Pipeline run status (idle + terminal states). */
 export type PipelineRunStatus = "idle" | "running" | "paused" | "completed" | "failed";
@@ -104,7 +104,7 @@ export const EXPERIMENT_TO_DASHBOARD: Record<ExperimentStatus, DashboardAgentSta
   SUCCESS: "completed",
   FAILED: "failed",
   AUDITED: "completed",
-  OVERFITTED: "failed",
+  OVERFITTED: "checks_failed",
 };
 
 export const STEP_TO_VISUAL: Record<StepStatus, VisualStatus> = {

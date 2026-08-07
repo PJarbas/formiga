@@ -67,7 +67,8 @@ import {
 import { handleMcpRequest, handleMcpDiscovery } from "../mcp/http-handler.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DASHBOARD_DIST = path.join(__dirname, "..", "dashboard");
+// Always serve the built dashboard (vite output), regardless of source or dist runtime.
+const DASHBOARD_DIST = path.resolve(__dirname, "..", "..", "dist", "dashboard");
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -762,12 +763,15 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
       });
       for (const agentId of arenaAgentIds) {
         const agentExps = arenaExperiments.filter((e) => e.agent_name === agentId);
-        const kept = agentExps.filter((e) => e.status === "SUCCESS" && e.decision === "keep").length;
-        const rejected = agentExps.filter((e) => e.status === "SUCCESS" && e.decision !== "keep").length;
-        const crashed = agentExps.filter((e) => e.status === "FAILED").length;
-        // Find best kept experiment
+        // Kept: passed all gates and was statistically significant (AUDITED + keep/baseline).
+        const kept = agentExps.filter((e) => e.status === "AUDITED" && (e.decision === "keep" || e.decision === "baseline")).length;
+        // Rejected: any gate rejection (OVERFITTED + checks_failed).
+        const rejected = agentExps.filter((e) => e.status === "OVERFITTED" && e.decision === "checks_failed").length;
+        // Crashed: genuine execution failure, not a gate rejection.
+        const crashed = agentExps.filter((e) => e.status === "FAILED" && e.decision === "crash").length;
+        // Find best kept experiment (AUDITED status, keep/baseline decision)
         const best = agentExps
-          .filter((e) => e.decision === "keep" && e.val_metric != null)
+          .filter((e) => (e.decision === "keep" || e.decision === "baseline") && e.val_metric != null)
           .sort((a, b) => (b.val_metric ?? 0) - (a.val_metric ?? 0))[0];
         experimentCounters[agentId] = {
           kept,
