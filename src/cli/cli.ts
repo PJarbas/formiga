@@ -884,6 +884,8 @@ function getUsageText(): string {
   return [
     "Run formiga <command> --help for detailed command help.",
     "",
+    "formiga autoresearch \"<dataset_path=... target_column=...>\"",
+    "                                      Start ML AutoResearch (alias for workflow run ml-autoresearch)",
     "formiga get-ready                    Install bundled workflows and start dashboard/control plane",
     "formiga uninstall [--force]          Full uninstall",
     "formiga status                       Show detailed system status (services, paths, runs, processes)",
@@ -1394,6 +1396,36 @@ Examples:
     console.log("---");
     console.log();
     console.log(formatProcessList());
+    return;
+  }
+
+  if (group === "autoresearch") {
+    const task = args.slice(1).join(" ");
+    if (!task) {
+      process.stderr.write("Usage: formiga autoresearch \"dataset_path=... target_column=...\"\n");
+      process.stderr.write("Alias for: formiga workflow run ml-autoresearch \"...\"\n");
+      process.exit(1);
+    }
+
+    const workflowName = "ml-autoresearch";
+    if (!existsSync(resolveWorkflowDir(workflowName))) {
+      const bundled = await listBundledWorkflows();
+      if (bundled.includes(workflowName)) {
+        console.log(`Installing bundled workflow "${workflowName}"...`);
+        try {
+          await installWorkflow({ workflowId: workflowName });
+        } catch (err) {
+          process.stderr.write(`Failed to install "${workflowName}": ${err instanceof Error ? err.message : String(err)}\n`);
+          process.exit(1);
+        }
+      }
+    }
+
+    const result = await runWorkflow({
+      workflowId: workflowName,
+      taskTitle: task,
+    });
+    console.log(`Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}`);
     return;
   }
 

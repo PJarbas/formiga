@@ -20,31 +20,33 @@ Data scientists spend up to 80% of their time on repetitive tasks: exploring dat
 **Key Features:**
 - **Parallel Experimentation:** Classic ML and Deep Learning agents compete simultaneously.
 - **Iterative Improvement (Arena):** The modeling loop runs for multiple rounds, adapting based on prior rounds' learnings.
-- **Full Auditability:** Every feature transformation decision, model architecture, and hyperparameter set is logged.
+- **Competitive Arena:** Modelers compete across multiple rounds. An 8-gate pre-write audit system (overfit, significance, dedup, calibration, budget) ensures only statistically sound improvements survive. Tier-specific Nadeau-Bengio corrected t-test thresholds adapt significance criteria to dataset size (TINY → LARGE).
 - **Live Dashboard:** Watch the execution DAG, engineered features, and leaderboard rankings in real-time.
 
 ---
 
 ## How It Works
 
-Formiga structures agent execution in a Directed Acyclic Graph (DAG) of specialized roles:
+Formiga structures agent execution in a 4-stage pipeline with a competitive Arena loop at its core:
 
 ```
-[ Data Analyst ] (Analyzes raw data and proposes recommendations)
+[ Data Analyst ]         Exploratory Data Analysis, data quality, recommendations
        │
        ▼
-[ Feature Engineer ] (Transforms features and trains baseline model)
-       │
- ┌─────┴──────────────┬──────────────────┐
- ▼                    ▼                  ▼
-[ Modeler Classic ] [ Modeler Advanced ] [ Modeler Creative ]  (Compete in multiple rounds in the Arena)
- └─────┬──────────────┴──────────────────┘
-       │ (Pre-write audit gates; best model converges or max rounds reached)
+[ Feature Engineer ]     Feature transformations, train/test split, baseline model,
+       │                 benchmark scripts, canonical cross-validation setup
        ▼
-[ Arena Reporter ] (Consolidates the competition and writes final report)
+[ ⚔️  Arena  ]            Competitive loop — modelers compete across rounds
+  ┌────┴────┐            Pre-write audit gates (G1–G8) validate every experiment
+  ▼         ▼            Tier-specific Nadeau-Bengio significance thresholds
+  Classic   Advanced     Converges when no improvement or max rounds reached
+  (+ Creative if MEDIUM+)
+       │
+       ▼
+[ Arena Reporter ]       Consolidates leaderboard, crowns the winner, writes final report
 ```
 
-### The Agents and Their Roles
+### The Pipeline Stages
 
 1. **Data Analyst:**
    * **What it does:** Performs autonomous Exploratory Data Analysis (EDA).
@@ -52,19 +54,34 @@ Formiga structures agent execution in a Directed Acyclic Graph (DAG) of speciali
 
 2. **Feature Engineer:**
    * **What it does:** Implements the EDA recommendations into executable Python code.
-   * **How it works:** Applies feature transformations (polynomial features, ratio creation, target encoding), sets up the cross-validation strategy (e.g., *Stratified K-Fold* for classification), and trains a simple **baseline model** (like a Logistic or Linear Regression) to establish the benchmark score.
+   * **How it works:** Applies feature transformations (polynomial features, ratio creation, target encoding), sets up the cross-validation strategy (e.g., *Stratified K-Fold* for classification), trains a simple **baseline model** (like Logistic or Linear Regression) to establish the benchmark score, and produces the benchmark runner scripts consumed by the Arena.
 
-3. **Modeler (Classic):**
-   * **What it does:** Explores established, lightweight Machine Learning algorithms.
-   * **How it works:** Tests hypotheses using classic algorithms like *Random Forest*, *Support Vector Machines (SVM)*, or simple linear models with lightweight hyperparameter tuning for speed and stability.
+### The Arena Competitors
 
-4. **Modeler (Advanced):**
-   * **What it does:** Experiments with high-performance algorithms and complex hyperparameter search spaces.
-   * **How it works:** Utilizes state-of-the-art algorithms such as *XGBoost* or *LightGBM*, applying advanced polynomial feature scaling, regularizations, and aggressive tuning to beat the baseline.
+The Arena step runs a competitive loop where modelers submit experiments each round. Every experiment passes through **8 pre-write audit gates** before being accepted into the leaderboard:
 
-5. **Modeler (Creative):**
-   * **What it does:** Produces **decorrelated** models that the other two teams would not, so the final ensemble dominates.
-   * **How it works:** Explores diversity-seeking approaches — denoising autoencoders, aggressive mRMR, target permutation, monotonic constraints, Bayesian blending. Targets Spearman OOF correlation < 0.85 vs the top-1. Only runs on medium/large datasets.
+| Gate | Name | What it checks |
+|------|------|----------------|
+| G1 | Overfit | Relative train/val gap within tier-specific threshold (200% TINY → 20% MEDIUM+) |
+| G2 | Stale | Dataset content hash matches session (intra-run consistency) |
+| G3 | Folds | Cross-validation fold scores present (≥2 folds for Nadeau-Bengio) |
+| G4 | Calibration | OOF probabilities not saturated (<50 unique probs) or suspiciously perfect ECE |
+| G5 | Too Good | Warning: univariate AUC ≥ 0.99 (likely target leakage) |
+| G6 | Budget | Team iteration cap not exceeded (default: 5 experiments per team) |
+| G7 | Dedup | Experiment signature not already in the ledger |
+| G8 | Significance | Nadeau-Bengio corrected t-test: `p < threshold` AND `Δ ≥ minimum effect` — tiers: TINY `p<0.20,Δ≥0.1pp`, SMALL `p<0.10,Δ≥0.3pp`, MEDIUM+ `p<0.05,Δ≥0.5pp` |
+
+3. **Arena Modeler Classic:**
+   * **What it does:** Competes with gradient boosting and traditional ML algorithms.
+   * **How it works:** Primary toolkit is XGBoost, LightGBM, and CatBoost, backed by Random Forest, SVM, linear models (Ridge/Lasso/ElasticNet), KNN, and L1 stacking. Applies complexity-aware tier selection: TINY → Ridge/Lasso, SMALL → LightGBM with heavy regularization, MEDIUM+ → full toolkit. Explicitly does **not** use neural networks — that is the Advanced modeler's territory.
+
+4. **Arena Modeler Advanced:**
+   * **What it does:** Competes with neural networks and AutoML frameworks.
+   * **How it works:** Uses MLP, TabNet, FT-Transformer, TabPFN, SAINT, KAN, AutoGluon, FLAML, H2O AutoML, multi-level stacking, and entity embeddings. Tier selection: TINY → TabPFN/KAN/light AutoML, SMALL → TabPFN/light MLP, MEDIUM+ → full neural toolkit + deep stacking. Explicitly does **not** tune standard GBM — that is the Classic modeler's territory.
+
+5. **Arena Modeler Creative:**
+   * **What it does:** Produces **decorrelated** models that the other teams would not, so the final ensemble dominates.
+   * **How it works:** Success metric is diversity (target Spearman OOF correlation < 0.85 vs top-1), not just AUC. Explores Denoising Autoencoders, aggressive mRMR, target permutation, monotonic constraints, Bayesian/Dirichlet blending, and SHAP-interaction materialization. **Only activated on MEDIUM/LARGE datasets** — the engine automatically filters it out on TINY/SMALL.
 
 6. **Arena Reporter:**
    * **What it does:** Consolidates all modeling history from the competition.
@@ -219,13 +236,13 @@ CLI (Commands) ──┐
                  ▼
           SQLite Database (stored at ~/.formiga/formiga.db)
                  ▲
-                 ├─ Daemon (Orchestrates the agent DAG and handles chron schedule)
+                 ├─ Dashboard Daemon (API :3334 + Control Plane :3339 + Reconciler + Cron)
                  │     │
                  │     ▼
                  │   Agent Harness (pi or hermes)
                  │     │
                  │     ▼
-                 │   AI Agents (Data Analyst, Feature Engineer, Modelers)
+                 │   AI Agents (Data Analyst, Feature Engineer, Arena Modelers, Reporter)
                  ▲     │
                  │     ▼
 Dashboard API (:3334) ◄─ Publishes rich metrics and artifacts
