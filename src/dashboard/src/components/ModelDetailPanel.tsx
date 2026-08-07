@@ -1,4 +1,9 @@
-import { useState } from "react";
+// ══════════════════════════════════════════════════════════════════════
+// ModelDetailPanel.tsx — slide-over drawer for a single leaderboard entry
+// Opens from the right, keeps the table visible, closes on Esc / ✕ / backdrop
+// ══════════════════════════════════════════════════════════════════════
+
+import { useEffect, useState } from "react";
 import { useModelReport, useReproductionScript } from "../api/api";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
 import { StructuredReportTab } from "./report";
@@ -28,56 +33,88 @@ export function ModelDetailPanel({ entry, onClose }: Props) {
     activeTab === "script" ? entry.id : undefined,
   );
 
+  // Close on Escape and lock body scroll while the drawer is open.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+
   return (
-    <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] overflow-hidden">
-      {/* Header */}
-      <div className="px-5 py-4 border-b border-[var(--border-default)] flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <StatusBadge status={entry.status} />
-          <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-            {entry.modelId}
-          </h3>
-          <span className="text-xs text-[var(--text-muted)]">
-            {entry.modelType} · Round {entry.roundNumber}
-          </span>
-        </div>
-        <button
-          onClick={onClose}
-          className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors text-lg leading-none px-1"
-          aria-label="Close panel"
-        >
-          &times;
-        </button>
-      </div>
+    <>
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+        onClick={onClose}
+        aria-hidden="true"
+      />
 
-      {/* Tab bar */}
-      <div className="px-5 border-b border-[var(--border-default)] flex gap-1">
-        {TABS.map((tab) => (
+      {/* Drawer */}
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Detalhes do modelo ${entry.modelId}`}
+        data-testid="model-detail-drawer"
+        className="fixed top-0 right-0 z-50 h-full w-full max-w-[480px] bg-[var(--bg-primary)] border-l border-white/10 shadow-2xl flex flex-col animate-slide-in"
+      >
+        {/* Header */}
+        <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <StatusBadge status={entry.status} />
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-[var(--text-primary)] truncate">
+                {entry.modelId}
+              </h3>
+              <p className="text-[11px] text-[var(--text-muted)]">
+                {entry.modelType} · Round {entry.roundNumber}
+              </p>
+            </div>
+          </div>
           <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-2.5 text-xs font-medium border-b-2 transition-colors ${
-              activeTab === tab.id
-                ? "border-[var(--accent-blue)] text-[var(--accent-blue)] opacity-100"
-                : "border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] opacity-50 hover:opacity-80"
-            }`}
+            onClick={onClose}
+            className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors text-lg leading-none px-1 shrink-0"
+            aria-label="Close panel"
           >
-            {tab.label}
+            &times;
           </button>
-        ))}
-      </div>
+        </div>
 
-      {/* Content */}
-      <div className="p-5">
-        {activeTab === "overview" && <OverviewTab entry={entry} />}
-        {activeTab === "report" && (
-          <StructuredReportTab content={report?.content} loading={reportLoading} />
-        )}
-        {activeTab === "script" && (
-          <ScriptTab script={scriptData?.script} filename={scriptData?.filename} loading={scriptLoading} />
-        )}
+        {/* Tab bar — pill style */}
+        <div className="px-5 py-3 border-b border-white/[0.06] flex gap-1 shrink-0">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                activeTab === tab.id
+                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                  : "text-gray-500 hover:text-gray-300"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {activeTab === "overview" && <OverviewTab entry={entry} />}
+          {activeTab === "report" && (
+            <StructuredReportTab content={report?.content} loading={reportLoading} />
+          )}
+          {activeTab === "script" && (
+            <ScriptTab script={scriptData?.script} filename={scriptData?.filename} loading={scriptLoading} />
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -85,15 +122,15 @@ export function ModelDetailPanel({ entry, onClose }: Props) {
 
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string; text: string }> = {
-    AUDITED: { bg: "bg-[var(--accent-green)]/20", text: "text-[var(--accent-green)]" },
-    SUCCESS: { bg: "bg-[var(--accent-blue)]/20", text: "text-[var(--accent-blue)]" },
-    FAILED: { bg: "bg-[var(--accent-red)]/20", text: "text-[var(--accent-red)]" },
-    OVERFITTED: { bg: "bg-[var(--accent-orange)]/20", text: "text-[var(--accent-orange)]" },
+    AUDITED: { bg: "bg-[var(--accent-blue)]/10", text: "text-[var(--accent-blue)]" },
+    SUCCESS: { bg: "bg-emerald-500/10", text: "text-emerald-400" },
+    FAILED: { bg: "bg-[var(--accent-red)]/10", text: "text-[var(--accent-red)]" },
+    OVERFITTED: { bg: "bg-[var(--accent-orange)]/10", text: "text-[var(--accent-orange)]" },
     PENDING: { bg: "bg-[var(--bg-tertiary)]", text: "text-[var(--text-muted)]" },
   };
   const c = config[status] ?? config.PENDING;
   return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${c.bg} ${c.text}`}>
+    <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium ${c.bg} ${c.text}`}>
       {status}
     </span>
   );
@@ -105,13 +142,13 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
   const type = entry.problemType ?? "classification";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Metrics grid */}
-      <div>
-        <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
+      <section>
+        <h4 className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">
           Métricas
         </h4>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <MetricCard label="Média CV" value={entry.cvMean?.toFixed(4)} />
           <MetricCard label="Desvio CV" value={entry.cvStd?.toFixed(4)} />
           <MetricCard label="Média Treino" value={entry.trainMean?.toFixed(4)} />
@@ -135,47 +172,39 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
             </>
           )}
         </div>
-      </div>
+      </section>
 
-      {/* Hyperparameters */}
+      {/* Hyperparameters — env-panel style key/value rows */}
       {hpEntries.length > 0 && (
-        <div>
-          <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
+        <section>
+          <h4 className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">
             Hiperparâmetros
           </h4>
-          <div className="rounded border border-[var(--border-default)] overflow-hidden">
-            <table className="w-full text-xs">
-              <tbody>
-                {hpEntries.map(([key, val]) => (
-                  <tr key={key} className="border-b border-[var(--border-default)] last:border-0">
-                    <td className="px-3 py-3 font-mono text-gray-400 bg-[var(--bg-tertiary)] w-1/3">
-                      {key}
-                    </td>
-                    <td className="px-3 py-3 font-mono text-white">
-                      {formatValue(val)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="divide-y divide-white/[0.05]">
+            {hpEntries.map(([key, val]) => (
+              <div key={key} className="flex items-center justify-between gap-4 py-2">
+                <span className="font-mono text-xs text-gray-400 shrink-0">{key}</span>
+                <span className="font-mono text-xs text-gray-100 text-right truncate">{formatValue(val)}</span>
+              </div>
+            ))}
           </div>
-        </div>
+        </section>
       )}
 
       {/* Feature Importances */}
       {entry.featureImportancesTop10 && entry.featureImportancesTop10.length > 0 && (
-        <div>
-          <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
+        <section>
+          <h4 className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">
             Top Features
           </h4>
           <FeatureBars features={entry.featureImportancesTop10} />
-        </div>
+        </section>
       )}
 
       {/* Arena insights */}
       {(entry.hypothesis || entry.learned) && (
-        <div>
-          <h4 className="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-2">
+        <section>
+          <h4 className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">
             Insights da Arena
           </h4>
           {entry.hypothesis && (
@@ -190,7 +219,7 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
               <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{cleanInsightText(entry.learned)}</p>
             </div>
           )}
-        </div>
+        </section>
       )}
 
       {/* Artifact path */}
@@ -206,9 +235,11 @@ function OverviewTab({ entry }: { entry: LeaderboardEntry }) {
 
 function MetricCard({ label, value, highlight }: { label: string; value?: string; highlight?: boolean }) {
   return (
-    <div className="px-3 py-2">
-      <div className="text-[10px] text-gray-400 uppercase tracking-wide">{label}</div>
-      <div className={`text-xl font-mono font-bold mt-1 ${highlight ? "text-[var(--accent-orange)]" : "text-white"}`}>
+    <div className="rounded-lg border border-white/5 bg-gray-900/50 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-gray-400">{label}</div>
+      <div className={`text-lg font-mono font-semibold mt-1 tabular-nums ${
+        highlight ? "text-[var(--accent-orange)]" : "text-gray-100"
+      }`}>
         {value ?? "—"}
       </div>
     </div>
@@ -224,7 +255,7 @@ function FeatureBars({ features }: { features: Array<[string, number]> }) {
           <span className="text-xs font-mono text-[var(--text-secondary)] w-32 truncate" title={name}>
             {name}
           </span>
-          <div className="flex-1 h-3 bg-[var(--bg-tertiary)] rounded overflow-hidden">
+          <div className="flex-1 h-3 bg-white/[0.06] rounded overflow-hidden">
             <div
               className="h-full bg-[var(--accent-blue)] rounded"
               style={{ width: `${(Math.abs(importance) / maxVal) * 100}%` }}
@@ -238,7 +269,6 @@ function FeatureBars({ features }: { features: Array<[string, number]> }) {
     </div>
   );
 }
-
 
 function ScriptTab({ script, filename, loading }: { script?: string; filename?: string; loading: boolean }) {
   const [isCopied, setIsCopied] = useState(false);
@@ -267,7 +297,7 @@ function ScriptTab({ script, filename, loading }: { script?: string; filename?: 
       <div className="flex items-center gap-2">
         <button
           onClick={handleDownload}
-          className="text-xs px-3 py-1.5 rounded border border-[var(--accent-blue)] text-[var(--accent-blue)] hover:bg-[var(--accent-blue)]/10 transition-colors"
+          className="text-xs px-3 py-1.5 rounded-md border border-[var(--accent-blue)] text-[var(--accent-blue)] hover:bg-[var(--accent-blue)]/10 transition-colors"
         >
           Baixar .py
         </button>

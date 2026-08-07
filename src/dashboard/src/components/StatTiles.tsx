@@ -104,6 +104,22 @@ function computeTiles(entries: LeaderboardEntry[], bestCvMean: number | null, me
   }
 }
 
+/** Maps the semantic accent CSS var to a Tailwind text color class. */
+function accentToClass(accent: string): string {
+  switch (accent) {
+    case "var(--accent-green)":
+      return "text-emerald-400";
+    case "var(--accent-blue)":
+      return "text-[var(--accent-blue)]";
+    case "var(--accent-orange)":
+      return "text-[var(--accent-orange)]";
+    case "var(--accent-red)":
+      return "text-[var(--accent-red)]";
+    default:
+      return "text-[var(--text-primary)]";
+  }
+}
+
 export function StatTiles({ entries, bestCvMean, metricName = "AUC" }: StatTilesProps) {
   const tiles = computeTiles(entries, bestCvMean, metricName);
 
@@ -112,15 +128,15 @@ export function StatTiles({ entries, bestCvMean, metricName = "AUC" }: StatTiles
       {tiles.map((t) => (
         <div
           key={t.label}
-          className="rounded-lg bg-[var(--bg-secondary)] p-4 flex flex-col"
+          className="rounded-xl border border-white/5 bg-gray-900/50 backdrop-blur-sm px-5 py-4 flex flex-col"
         >
-          <span className="text-[10px] uppercase tracking-wider text-gray-400 font-medium">
+          <span className="text-xs font-medium uppercase tracking-wider text-gray-400">
             {t.label}
           </span>
-          <span className="text-2xl font-mono font-bold mt-1 tabular-nums" style={{ color: t.accent }}>
+          <span className={`text-2xl font-mono font-semibold mt-1 tabular-nums ${accentToClass(t.accent)}`}>
             {t.value}
           </span>
-          <span className="text-xs text-[var(--text-muted)] mt-0.5 truncate">
+          <span className="text-xs text-gray-500 mt-0.5 truncate">
             {t.sub}
           </span>
         </div>
