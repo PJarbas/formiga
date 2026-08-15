@@ -7,86 +7,23 @@ import { once } from "node:events";
 import http from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { createDashboardServer } from "../../dist/server/dashboard.js";
+import { daemonAuthHeaders } from "../../dist/server/test-auth.js";
+import { migrate } from "../../dist/database/migrations.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function initDb(dbPath: string, runs: Array<{ id: string; status: string; workflow_id: string; task: string }>): void {
   const db = new DatabaseSync(dbPath);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS runs (
-      id TEXT PRIMARY KEY,
-      workflow_id TEXT NOT NULL DEFAULT '',
-      task TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'running',
-      context TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      run_number INTEGER NOT NULL DEFAULT 0,
-      tokens_spent INTEGER NOT NULL DEFAULT 0,
-      scheduling_status TEXT
-    )
-  `);
+  // Create the full production schema so Prisma-based handlers
+  // (e.g. getWorkflowStatus in DELETE /api/runs/:id) can read all
+  // Run columns the generated client selects.
+  migrate(db);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS steps (
-      id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL,
-      step_id TEXT NOT NULL,
-      agent_id TEXT NOT NULL,
-      step_index INTEGER NOT NULL DEFAULT 0,
-      input_template TEXT NOT NULL DEFAULT '',
-      expects TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'waiting',
-      output TEXT,
-      retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 4,
-      type TEXT NOT NULL DEFAULT 'single',
-      loop_config TEXT,
-      current_story_id TEXT,
-      abandoned_count INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS stories (
-      id TEXT PRIMARY KEY,
-      run_id TEXT NOT NULL,
-      story_index INTEGER NOT NULL,
-      story_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      acceptance_criteria TEXT NOT NULL DEFAULT '[]',
-      status TEXT NOT NULL DEFAULT 'pending',
-      output TEXT,
-      retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 4,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS run_worktrees (
-      run_id TEXT PRIMARY KEY,
-      worktree_origin_repository TEXT NOT NULL,
-      worktree_origin_git_common_dir TEXT NOT NULL,
-      worktree_path TEXT NOT NULL,
-      worktree_origin_ref TEXT,
-      worktree_origin_sha TEXT,
-      original_branch TEXT,
-      status TEXT NOT NULL DEFAULT 'creating',
-      cleanup_policy TEXT NOT NULL DEFAULT 'remove_on_success',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      removed_at TEXT,
-      error TEXT
-    )
-  `);
-
+  // migrate() creates created_at/updated_at as NOT NULL (no default), so the
+  // insert must provide them explicitly.
   const insert = db.prepare(
-    "INSERT OR REPLACE INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)",
+    "INSERT OR REPLACE INTO runs (id, workflow_id, task, status, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))",
   );
 
   for (const r of runs) {
@@ -201,6 +138,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-001/pause`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 200);
       const body = await response.json() as { paused: boolean; runId: string };
@@ -232,6 +170,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-002/pause`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 409);
       const body = await response.json() as { error: string };
@@ -251,6 +190,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/nonexistent/pause`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 404);
     } finally {
@@ -273,6 +213,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-003/pause?drain=true`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 200);
       assert.equal(mock.pauseRequests.length, 1);
@@ -303,6 +244,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-004/resume`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 200);
       const body = await response.json() as { resumed: boolean; runId: string };
@@ -352,6 +294,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-resume-202/resume`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 200);
       const body = await response.json() as { resumed: boolean; runId: string };
@@ -381,6 +324,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-005/resume`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 409);
       const body = await response.json() as { error: string };
@@ -402,6 +346,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-006/resume`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 409);
     } finally {
@@ -419,6 +364,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/nonexistent/resume`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 404);
     } finally {
@@ -438,6 +384,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-delete-done`, {
         method: "DELETE",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 200);
       const body = await response.json() as { ok: boolean; runId: string; status: string };
@@ -467,6 +414,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-delete-active`, {
         method: "DELETE",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 409);
       const body = await response.json() as { error: string };
@@ -490,6 +438,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-007/pause`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 502);
       const body = await response.json() as { error: string };
@@ -513,6 +462,7 @@ describe("dashboard pause/resume API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/run-008/resume`, {
         method: "POST",
+        headers: daemonAuthHeaders(),
       });
       assert.equal(response.status, 502);
       const body = await response.json() as { error: string };
