@@ -140,10 +140,10 @@ export async function checkOrphanedCrons(): Promise<OrphanedCron[]> {
  * Check SQLite database integrity.
  * Runs PRAGMA integrity_check and returns the result.
  */
-export function checkDatabaseIntegrity(): IntegrityResult {
+export async function checkDatabaseIntegrity(): Promise<IntegrityResult> {
   try {
     const prisma = getPrisma();
-    const rows = (prisma as any).$queryRawUnsafe("PRAGMA integrity_check") as Array<{ integrity_check: string }>;
+    const rows = (await prisma.$queryRawUnsafe("PRAGMA integrity_check")) as Array<{ integrity_check: string }>;
     const ok = rows.length === 1 && rows[0].integrity_check === "ok";
     const failures = !ok ? rows.map((r) => r.integrity_check).join("; ") : undefined;
     return { ok, message: ok ? "Database integrity check passed" : `Database integrity issues found: ${failures}` };
