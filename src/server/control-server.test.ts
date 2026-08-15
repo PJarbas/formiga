@@ -19,7 +19,7 @@ import crypto from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_CONTROL_PORT } from "../../dist/server/control-server.js";
+import { DEFAULT_CONTROL_PORT, timingSafeSecretEquals } from "../../dist/server/control-server.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DAEMON_SCRIPT = path.resolve(__dirname, "..", "..", "dist", "server", "daemon.js");
@@ -574,7 +574,8 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     // Import finalizeDrainingPause from dist. getDb() and emitEvent() will
     // now resolve to the daemon's state because of the env vars.
     const { finalizeDrainingPause } = await import("../../dist/installer/step-ops.js");
-    finalizeDrainingPause(runId);
+    // Async — must await so the DB assertions below see the finalized state.
+    await finalizeDrainingPause(runId);
 
     // Verify the run is now paused.
     const db2 = new DatabaseSync(dbPath);
@@ -680,7 +681,8 @@ describe("daemon control plane", { concurrency: 1 }, () => {
     db.close();
 
     const { finalizeDrainingPause } = await import("../../dist/installer/step-ops.js");
-    finalizeDrainingPause(runId);
+    // Async — must await so the DB assertions below see the finalized state.
+    await finalizeDrainingPause(runId);
 
     const db2 = new DatabaseSync(dbPath);
     const row = db2.prepare("SELECT status, scheduling_status FROM runs WHERE id = ?").get(runId) as { status: string; scheduling_status: string } | undefined;
@@ -1131,10 +1133,15 @@ describe("control-server save-tokens context wiring", () => {
       "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, scheduling_requested_at, created_at, updated_at) VALUES (?, ?, 'save-tokens-test', 'running', ?, 0, 'pending_register', ?, ?, ?)",
     ).run(runId, workflowId, contextJson, now, now, now);
 
-    // Insert a step so requiredTimersForRun returns 1
+    // Seed a completed step so the run isn't empty. Status must NOT be
+    // 'pending'/'waiting': requiredTimersForRun counts only 'pending' steps
+    // (admission then schedules the first agent via the fallback path), and
+    // the immediate polling round skips its harness spawn when no pending
+    // work exists — otherwise the fire-and-forget spawn would leak a pi
+    // child process and hang the test file at exit.
     const stepId = crypto.randomUUID();
     db.prepare(
-      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'impl', ?, 0, 'implement', 'implementation', 'waiting', 0, 3, 'single', NULL, ?, ?)",
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, retry_count, max_retries, type, loop_config, created_at, updated_at) VALUES (?, ?, 'impl', ?, 0, 'implement', 'implementation', 'done', 0, 3, 'single', NULL, ?, ?)",
     ).run(stepId, runId, `${workflowId}_developer`, now, now);
   }
 
@@ -1162,8 +1169,8 @@ describe("control-server save-tokens context wiring", () => {
     const intervals = _getJobIntervalsForRun(runId);
     assert.ok(intervals.length > 0, "should have at least one scheduled job");
     for (const job of intervals) {
-      assert.equal(job.intervalMinutes, 15,
-        `save-tokens mode should use 15-min interval, got ${job.intervalMinutes}`);
+      assert.equal(job.intervalMinutes, 5,
+        `save-tokens mode should use 5-min interval (fast polling), got ${job.intervalMinutes}`);
     }
   });
 
@@ -1191,8 +1198,8 @@ describe("control-server save-tokens context wiring", () => {
     const intervals = _getJobIntervalsForRun(runId);
     assert.ok(intervals.length > 0, "should have at least one scheduled job");
     for (const job of intervals) {
-      assert.equal(job.intervalMinutes, 5,
-        `non-save-tokens mode should use 5-min interval, got ${job.intervalMinutes}`);
+      assert.equal(job.intervalMinutes, 2,
+        `non-save-tokens mode should use 2-min interval (fast polling), got ${job.intervalMinutes}`);
     }
   });
 
@@ -1219,8 +1226,23 @@ describe("control-server save-tokens context wiring", () => {
     const intervals = _getJobIntervalsForRun(runId);
     assert.ok(intervals.length > 0, "should have at least one scheduled job");
     for (const job of intervals) {
-      assert.equal(job.intervalMinutes, 5,
-        `missing flag should default to 5-min interval, got ${job.intervalMinutes}`);
+      assert.equal(job.intervalMinutes, 2,
+        `missing flag should default to 2-min interval (fast polling), got ${job.intervalMinutes}`);
     }
+  });
+});
+
+describe("timingSafeSecretEquals (B-2)", () => {
+  it("accepts an identical secret", () => {
+    const secret = "abc-123";
+    assert.equal(timingSafeSecretEquals(secret, secret), true);
+  });
+
+  it("rejects a different secret", () => {
+    assert.equal(timingSafeSecretEquals("correct", "wrong"), false);
+  });
+
+  it("rejects different-length secrets without throwing", () => {
+    assert.equal(timingSafeSecretEquals("short", "a-much-longer-secret-value"), false);
   });
 });

@@ -91,6 +91,18 @@ export function readDaemonSecret(secretPath: string = defaultDaemonSecretFile())
   }
 }
 
+/**
+ * Constant-time comparison of two secret strings (B-2).
+ * Both sides are SHA-256 hashed first so the buffers passed to
+ * `timingSafeEqual` are always the same length and no length information
+ * about the secrets leaks over the timing side channel.
+ */
+export function timingSafeSecretEquals(provided: string, expected: string): boolean {
+  const a = crypto.createHash("sha256").update(provided, "utf-8").digest();
+  const b = crypto.createHash("sha256").update(expected, "utf-8").digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 interface JsonResponse {
   status: number;
   body: Record<string, unknown>;
@@ -416,7 +428,9 @@ async function handlePauseRun(runId: string, drain = false): Promise<JsonRespons
     }
     try {
       const { finalizeDrainingPause } = await import("../installer/step-ops.js");
-      finalizeDrainingPause(runId);
+      // finalizeDrainingPause is async and mutates the run row (paused) —
+      // must be awaited so the response below reflects the finalized state.
+      await finalizeDrainingPause(runId);
     } catch (err) {
       logger.warn("control-server: drain pause finalization check failed", { runId, error: String(err) });
     }
@@ -723,7 +737,7 @@ export function createControlServer(options: ControlServerOptions = {}): http.Se
     if (expectedSecret) {
       const provided = req.headers["x-formiga-secret"];
       const got = Array.isArray(provided) ? provided[0] : provided;
-      if (got !== expectedSecret) {
+      if (got === undefined || !timingSafeSecretEquals(got, expectedSecret)) {
         respond(401, { error: "Unauthorized" });
         return;
       }
