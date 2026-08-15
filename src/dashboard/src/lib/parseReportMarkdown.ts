@@ -355,9 +355,12 @@ function extractBaseline(content: string): BaselineMetrics | null {
   const cvR2Match = section.match(/CV R²[^:]*?[:\s]*\*?\*?(\d+\.?\d*)\s*±\s*(\d+\.?\d*)/i)
     ?? section.match(/CV.*?(\d+\.?\d*)\s*±\s*(\d+\.?\d*)/i);
 
-  const trainR2Match = section.match(/Train R²[^:]*?[:\s]*(\d+\.?\d*)/i);
-  const valR2Match = section.match(/Val R²[^:]*?[:\s]*(\d+\.?\d*)/i);
-  const testR2Match = section.match(/Test R²[^:]*?[:\s]*(\d+\.?\d*)/i);
+  // Metric-agnostic: the report builder emits `Train Mean (rmse): 0.42` (and
+  // legacy reports `Train R²: 0.95`) — match the Train/Val/Test label regardless
+  // of the metric name that follows it, so the summary cards are never empty.
+  const trainR2Match = section.match(/Train[^:\n]*[:\s]\*?\*?\s*(\d+\.?\d*)/i);
+  const valR2Match = section.match(/Val[^:\n]*[:\s]\*?\*?\s*(\d+\.?\d*)/i);
+  const testR2Match = section.match(/Test[^:\n]*[:\s]\*?\*?\s*(\d+\.?\d*)/i);
 
   return {
     model: modelMatch?.[1]?.trim() ?? "Unknown",

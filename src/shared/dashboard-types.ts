@@ -85,6 +85,10 @@ export interface LeaderboardEntry {
   hypothesis?: string | null;
   /** Agent's learned text for this experiment. */
   learned?: string | null;
+  /** Arena failure reason (`[script_missing]`, `[agent_no_response]`, `[metrics_missing]`, ...). */
+  errorMessage?: string | null;
+  /** Arena benchmark machine exit code (-2 = contract break / no script produced). */
+  benchmarkExitCode?: number | null;
   /** Rich metrics by problem type */
   metrics?: {
     primary?: { name: string; value: number };

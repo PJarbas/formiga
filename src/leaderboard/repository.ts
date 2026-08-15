@@ -104,9 +104,9 @@ export interface ArenaExperiment {
   model_type: string;
   model_algorithm?: string | null;
   hyperparameters?: Record<string, unknown>;
-  hypothesis?: string;
-  learned?: string;
-  next_focus?: string;
+  hypothesis?: string | null;
+  learned?: string | null;
+  next_focus?: string | null;
   measured_metric: number | null;
   train_metric?: number | null;
   benchmark_stdout?: string;
@@ -116,12 +116,16 @@ export interface ArenaExperiment {
   confidence_band?: ConfidenceBand;
   decision?: ArenaDecision;
   duration_ms?: number;
-  artifact_script?: string;
+  artifact_script?: string | null;
   metric_name: string;
   artifact_path: string;
   metric_bag?: MetricBag;
   problem_type?: string | null;
   status?: string;
+  /** Human-readable failure reason (e.g. `[script_missing] ...`). Null on success. */
+  error_message?: string | null;
+  /** Optional per-feature importances (contract C1 — report top features). */
+  feature_importances?: number[] | null;
   // ── Journal/ledger fields ──
   fold_scores?: number[];
   train_score?: number | null;
@@ -196,6 +200,17 @@ function fromNewExperiment(entry: NewExperiment) {
 }
 
 function fromArenaExperiment(entry: ArenaExperiment) {
+  // Contract C1 — persist the rich metrics bag + fold scores + top features
+  // into metrics_json so the report builder can reconstruct the report from
+  // the DB alone (deterministic), without reading _results.json off disk.
+  const metricsPayload: Record<string, unknown> = {
+    ...(entry.metric_bag ?? {}),
+  };
+  if (entry.fold_scores) metricsPayload.fold_scores = entry.fold_scores;
+  if (entry.train_score !== null && entry.train_score !== undefined) metricsPayload.train_score = entry.train_score;
+  if (entry.feature_importances) metricsPayload.feature_importances = entry.feature_importances;
+  if (entry.notes) metricsPayload.notes = entry.notes;
+
   return {
     run_id: entry.run_id,
     round_number: entry.round_number,
@@ -209,6 +224,7 @@ function fromArenaExperiment(entry: ArenaExperiment) {
     benchmark_stdout: entry.benchmark_stdout ?? null,
     benchmark_stderr: entry.benchmark_stderr ?? null,
     benchmark_exit_code: entry.benchmark_exit_code ?? null,
+    error_message: entry.error_message ?? null,
     confidence_score: entry.confidence_score ?? null,
     confidence_band: entry.confidence_band ?? null,
     decision: entry.decision ?? null,
@@ -228,7 +244,7 @@ function fromArenaExperiment(entry: ArenaExperiment) {
     mae: entry.metric_bag?.mae ?? null,
     rmse: entry.metric_bag?.rmse ?? null,
     r2_score: entry.metric_bag?.r2_score ?? null,
-    metrics_json: JSON.stringify({}),
+    metrics_json: JSON.stringify(metricsPayload),
     problem_type: entry.problem_type ?? null,
     status: entry.status ?? (entry.benchmark_exit_code === 0 ? "SUCCESS" : (entry.benchmark_exit_code != null ? "FAILED" : "PENDING")),
     // ── Journal/ledger fields ──

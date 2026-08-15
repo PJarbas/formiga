@@ -378,6 +378,41 @@ describe("classifyAdversarialAuc", () => {
   });
 });
 
+describe("auditExperiment — G9 metric×problemType mismatch (warn only)", () => {
+  it("warns when a regression metric is configured on a classification problem", () => {
+    const result = auditExperiment(baseInput({
+      metricName: "rmse",
+    }));
+    assert.notEqual(result.verdict, "rejected", "G9 must never reject");
+    assert.ok(result.warnings.some((w) => w.tag === "metric_mismatch"));
+  });
+
+  it("warns when a classification metric is configured on a regression problem", () => {
+    const result = auditExperiment(baseInput({
+      problemType: "regression",
+      metricName: "roc_auc",
+      metric: 0.42,
+      trainScore: 0.40,
+    }));
+    assert.ok(result.warnings.some((w) => w.tag === "metric_mismatch"));
+  });
+
+  it("does not warn on a known-good pairing", () => {
+    const result = auditExperiment(baseInput({ metricName: "roc_auc" }));
+    assert.ok(!result.warnings.some((w) => w.tag === "metric_mismatch"));
+  });
+
+  it("does not warn when metricName is absent", () => {
+    const result = auditExperiment(baseInput({ metricName: undefined }));
+    assert.ok(!result.warnings.some((w) => w.tag === "metric_mismatch"));
+  });
+
+  it("does not warn on an unrecognized metric", () => {
+    const result = auditExperiment(baseInput({ metricName: "custom_score" }));
+    assert.ok(!result.warnings.some((w) => w.tag === "metric_mismatch"));
+  });
+});
+
 describe("nelderMeadEnsembleWeights", () => {
   it("returns [1] for a single model", () => {
     assert.deepEqual(nelderMeadEnsembleWeights(1, () => 0.5), [1]);

@@ -11,6 +11,7 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import type { MetricDirection } from "./arena-types.js";
+import { assertMetricProblemType } from "./benchmark-config.js";
 
 // ── Runtime assertion ────────────────────────────────────────────────────────
 
@@ -49,8 +50,12 @@ export type RejectionTag =
   | "too_good"
   | "significance";
 
+export type AuditWarningTag =
+  | Exclude<RejectionTag, "budget" | "cal_leak" | "no_folds" | "stale" | "overfit">
+  | "metric_mismatch";
+
 export interface AuditWarning {
-  tag: Exclude<RejectionTag, "budget" | "cal_leak" | "no_folds" | "stale" | "overfit">;
+  tag: AuditWarningTag;
   message: string;
 }
 
@@ -81,6 +86,8 @@ export interface AuditInput {
   maxIterationsPerTeam: number;
   /** Problem type: "classification" | "regression" | other. */
   problemType: string | null;
+  /** Metric name from the benchmark config (for the metric×problemType G9 gate). */
+  metricName?: string | null;
   /** Complexity tier (drives overfit threshold). */
   tier: ComplexityTier;
   /** Metric direction. */
@@ -378,6 +385,16 @@ export function auditExperiment(input: AuditInput): AuditResult {
           message: `[significance] p=${significance.pValue.toFixed(4)} delta=${significance.deltaPp.toFixed(3)}pp — not a significant improvement (tier ${input.tier}: p<${thresh.pMax} ∧ delta≥${thresh.deltaPpMin}pp)`,
         });
       }
+    }
+  }
+
+  // G9 — metric × problemType pairing (warn only, never reject). A regression
+  // config scored with accuracy (or vice versa) is a config smell worth
+  // surfacing in the ledger, not a reason to drop the experiment.
+  if (input.metricName) {
+    const mismatch = assertMetricProblemType(input.problemType, input.metricName);
+    if (mismatch) {
+      warnings.push({ tag: "metric_mismatch", message: mismatch });
     }
   }
 

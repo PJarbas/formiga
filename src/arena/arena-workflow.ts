@@ -26,6 +26,7 @@ import { runArena, type ArenaResult } from "./arena-engine.js";
 import { ArenaRepositoryImpl } from "./arena-repository.js";
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { runBenchmark, extractMetric } from "./arena-benchmark.js";
+import { parseBenchmarkConfig } from "./benchmark-config.js";
 
 const AGENT_TIMEOUT_SECONDS = parseInt(
   process.env.FORMIGA_ARENA_AGENT_TIMEOUT ?? "1800",
@@ -136,16 +137,25 @@ function readBenchmarkConfig(workspace: string): BenchmarkConfigJson | null {
   if (!p) return null;
   try {
     const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
-    // Normalize: metric can be a string ("rmse") or object ({ name, direction })
-    let metric: BenchmarkConfigJson["metric"] | undefined;
-    if (typeof raw.metric === "string") {
-      metric = { name: raw.metric, direction: normalizeDirection(raw.direction ?? raw.metric_direction) };
-    } else if (raw.metric && typeof raw.metric === "object") {
-      metric = { name: raw.metric.name, direction: normalizeDirection(raw.metric.direction) };
+    // Contract A5: structured parse — an invalid config is warned, never a
+    // silent null. buildArenaConfig falls back to run-context defaults.
+    const parsed = parseBenchmarkConfig(raw);
+    if (!parsed.ok) {
+      logger.warn(`[benchmark_config_invalid] ${parsed.error}`, { workspace });
+      return {
+        problemType: undefined,
+        metric: undefined,
+        targetMetric: undefined,
+        maxRounds: undefined,
+        maxNoImprove: undefined,
+      };
     }
+    const { problemType, metricName, metricDirection } = parsed.value;
     return {
-      problemType: raw.type ?? raw.problemType,
-      metric,
+      problemType: problemType ?? undefined,
+      metric: metricName
+        ? { name: metricName, direction: metricDirection ?? undefined }
+        : undefined,
       targetMetric: raw.targetMetric,
       maxRounds: raw.maxRounds ?? raw.max_rounds,
       maxNoImprove: raw.maxNoImprove ?? raw.max_no_improve,
@@ -157,7 +167,24 @@ function readBenchmarkConfig(workspace: string): BenchmarkConfigJson | null {
 
 // ── Prompt parsing helpers ─────────────────────────────────────────────
 
-function parseArenaAgentOutput(
+/**
+ * Parse an arena agent's assistant text into the runnable contract.
+ *
+ * v2 — JSON-envelope FIRST, with the legacy marker/path format preserved as
+ * a backward-compatible fallback (already-trained agents keep working).
+ *
+ * Precedence:
+ *   1. Every ```` ```json ```` fence (and bare fences that parse as an object
+ *      with a `script: string`), scanned LAST → FIRST; the first one that
+ *      JSON.parse's and carries a non-empty `script` string wins.
+ *   2. A bare JSON object containing `{"script":` (no fence).
+ *   3. Legacy fallback (unchanged): HIPOTESE/HYPOTHESIS, SCRIPT_PATH + file
+ *      read, APRENDIZADO/LEARNED, PROXIMO_FOCO/NEXT_FOCUS, ```` ```python ````.
+ *
+ * Missing JSON keys fall back to `""`. The JSON envelope is the new contract:
+ * `script` is inline Python code (never a path).
+ */
+export function parseArenaAgentOutput(
   stdout: string,
   workspacePath: string,
 ): {
@@ -166,7 +193,21 @@ function parseArenaAgentOutput(
   learned: string;
   nextFocus: string;
 } {
-  // Extract metadata markers (support both English and Portuguese keys)
+  // 1. JSON fences, scanned last → first.
+  const fences = [...stdout.matchAll(/```(?:json)?\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+  for (let i = fences.length - 1; i >= 0; i--) {
+    const parsed = parseJsonEnvelope(fences[i]);
+    if (parsed) return parsed;
+  }
+
+  // 2. Bare JSON object (no fence) — slice from the opening brace.
+  const bareJson = stdout.match(/\{\s*"script"\s*:/);
+  if (bareJson && bareJson.index !== undefined) {
+    const parsed = parseJsonEnvelope(stdout.slice(bareJson.index));
+    if (parsed) return parsed;
+  }
+
+  // 3. Legacy fallback: markers + script path + python block.
   const hypothesisMatch = stdout.match(/(?:HYPOTHESIS|HIPOTESE):\s*(.+?)(?:\n|$)/i);
   const scriptPathMatch = stdout.match(/SCRIPT_PATH:\s*(.+?)(?:\n|$)/i);
   const learnedMatch = stdout.match(/(?:LEARNED|APRENDIZADO):\s*(.+?)(?:\n|$)/i);
@@ -197,6 +238,31 @@ function parseArenaAgentOutput(
     hypothesis: hypothesisMatch ? hypothesisMatch[1].trim() : "",
     learned: learnedMatch ? learnedMatch[1].trim() : "",
     nextFocus: nextFocusMatch ? nextFocusMatch[1].trim() : "",
+  };
+}
+
+/**
+ * Attempt to parse a JSON response envelope. Returns the extracted contract
+ * when the text parses as an object with a non-empty `script` string; else
+ * null (caller falls through to the next precedence tier).
+ */
+function parseJsonEnvelope(
+  raw: string,
+): { script: string; hypothesis: string; learned: string; nextFocus: string } | null {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof obj !== "object" || obj === null) return null;
+  const o = obj as Record<string, unknown>;
+  if (typeof o.script !== "string") return null;
+  return {
+    script: o.script,
+    hypothesis: typeof o.hypothesis === "string" ? o.hypothesis : "",
+    learned: typeof o.learned === "string" ? o.learned : "",
+    nextFocus: typeof o.nextFocus === "string" ? o.nextFocus : "",
   };
 }
 
@@ -297,7 +363,7 @@ async function buildArenaConfig(runId: string): Promise<ArenaConfig | null> {
   const prisma = getPrisma();
   const run = await prisma.run.findUnique({
     where: { id: runId },
-    select: { context: true },
+    select: { context: true, workflow_id: true },
   });
   if (!run?.context) {
     logger.error("Arena buildArenaConfig: run has no context", { runId });
@@ -346,6 +412,7 @@ async function buildArenaConfig(runId: string): Promise<ArenaConfig | null> {
 
   return {
     runId,
+    workflowId: run.workflow_id ?? undefined,
     workspacePath: workspace,
     benchmarkScript,
     metricName,

@@ -14,10 +14,44 @@ import { makeDecision, isImprovement } from "./arena-decision.js";
 import { extractMetric } from "./arena-benchmark.js";
 import { readDatasetContext, formatDatasetContextForPrompt, type DatasetContext, type ComputeBudget, deriveComputeBudget } from "./dataset-context.js";
 import { auditExperiment, dedupSignature, invariant, type ComplexityTier, type AuditInput } from "./audit.js";
+import { buildAgentPersonaInstructions } from "../installer/scheduler/prompts.js";
 
 const SCRIPT_DIR = "artifacts/models";
-const BENCHMARK_TIMEOUT_MS = 120_000;
-const TRAIN_TIMEOUT_MS = 180_000;
+/**
+ * Wall-clock caps for script execution, with a hard floor (A6). User directive:
+ * no train or benchmark script may be killed in under 5 minutes of execution,
+ * in any tier. Both the budget and no-budget paths respect the floor via
+ * `effectiveScriptTimeoutMs`.
+ */
+export const SCRIPT_TIMEOUT_FLOOR_MS = 300_000;
+export const BENCHMARK_TIMEOUT_MS = 300_000;
+export const TRAIN_TIMEOUT_MS = 300_000;
+
+/**
+ * Effective wall-clock timeout for a script execution (A6).
+ *
+ * `globalMs` is the tier-agnostic cap (TRAIN/BENCHMARK_TIMEOUT_MS). When a
+ * compute budget is present, the tighter budget-derived cap
+ * (`maxFitSeconds * 1000`) still applies — but never below the 5-minute floor.
+ *
+ * This governs the Python script running on the box. It is DISTINCT from the
+ * LLM agent response timeout (`ArenaAgentConfig.timeout`, 1800s default) which
+ * measures how long the agent may take to *write* the script.
+ */
+export function effectiveScriptTimeoutMs(
+  budget: ComputeBudget | undefined,
+  globalMs: number,
+): number {
+  if (!budget) return globalMs;
+  return Math.max(SCRIPT_TIMEOUT_FLOOR_MS, Math.min(globalMs, budget.maxFitSeconds * 1000));
+}
+/**
+ * Exit code recorded when the agent contract is broken — either the LLM
+ * never responded (`[agent_no_response]`) or it returned no runnable script
+ * (`[script_missing]`). Negative so it can never collide with a real process
+ * exit code, keeping the ledger entry unambiguous.
+ */
+export const SCRIPT_MISSING_EXIT_CODE = -2;
 
 /**
  * Kill an entire process tree (the spawned child + all its descendants).
@@ -106,14 +140,18 @@ function buildBudgetEnv(base: NodeJS.ProcessEnv, budget: ComputeBudget | undefin
  * the CPU cap raises SIGXCPU, killing a runaway grid even if the wall-clock
  * timeout (#89) is slow. Returns null on non-POSIX platforms.
  */
-function buildRlimitPrelude(budget: ComputeBudget | undefined): string | null {
+export function buildRlimitPrelude(budget: ComputeBudget | undefined): string | null {
   if (!budget || process.platform === "win32") return null;
-  const cpuHard = budget.maxFitSeconds + 2; // grace beyond the wall-clock timeout
+  // A6 floor: CPU-time cap never below the 5-minute wall-clock floor — the
+  // tier tiny budget (maxFitSeconds=30) would otherwise SIGXCPU the process
+  // at ~32s of CPU despite the 300s wall-clock window.
+  const cpuSoft = Math.max(SCRIPT_TIMEOUT_FLOOR_MS / 1000, budget.maxFitSeconds);
+  const cpuHard = cpuSoft + 2; // grace beyond the wall-clock timeout
   // Setrlimit caps CPU seconds; on exceed the process gets SIGXCPU.
   // The modeler script path is argv[1] (passed separately by the caller).
   return [
     "import resource as _r, sys as _s",
-    `_r.setrlimit(_r.RLIMIT_CPU, (${budget.maxFitSeconds}, ${cpuHard}))`,
+    `_r.setrlimit(_r.RLIMIT_CPU, (${cpuSoft}, ${cpuHard}))`,
     "_path = _s.argv[1]",
     "exec(compile(open(_path, encoding='utf-8').read(), _path, 'exec'))",
   ].join("\n");
@@ -125,10 +163,9 @@ async function trainScript(
   budget?: ComputeBudget,
 ): Promise<{ modelPath: string | null; stdout: string; stderr: string; exitCode: number | null; budgetExceeded: boolean }> {
   const expectedPkl = scriptPath.replace(/\.py$/, ".pkl");
-  // Effective timeout: the tighter of the global TRAIN_TIMEOUT and the
-  // budget's per-fit cap. For tiny datasets this kills a runaway grid in
-  // ~30s instead of 180s.
-  const timeoutMs = budget ? Math.min(TRAIN_TIMEOUT_MS, budget.maxFitSeconds * 1000) : TRAIN_TIMEOUT_MS;
+  // Effective timeout (A6): the tighter of the global TRAIN_TIMEOUT and the
+  // budget's per-fit cap, floored at 5 minutes in every tier.
+  const timeoutMs = effectiveScriptTimeoutMs(budget, TRAIN_TIMEOUT_MS);
   return new Promise((resolve) => {
     // Wrap the modeler's script with a RLIMIT_CPU prelude when a budget is
     // set, so CPU-time is capped independently of the wall-clock timer.
@@ -182,9 +219,9 @@ async function benchmarkOne(
   budget?: ComputeBudget,
 ): Promise<BenchmarkResult> {
   const start = Date.now();
-  // Tighter timeout when a budget is set (RF-#90): tiny datasets shouldn't
-  // spend BENCHMARK_TIMEOUT_MS (120s) on a single benchmark run.
-  const timeoutMs = budget ? Math.min(BENCHMARK_TIMEOUT_MS, budget.maxFitSeconds * 1000) : BENCHMARK_TIMEOUT_MS;
+  // Effective timeout (A6): tighter budget cap when a budget is set, floored
+  // at 5 minutes in every tier.
+  const timeoutMs = effectiveScriptTimeoutMs(budget, BENCHMARK_TIMEOUT_MS);
   return new Promise((resolve) => {
     const command = `bash ${config.benchmarkScript} "${scriptPath}"`;
     const child = spawn(command, {
@@ -318,6 +355,24 @@ export async function runArena(
     ? config.agents
     : config.agents.filter((a) => a.id !== "modeler-creative");
 
+  // ── Provisioned personas (contract A1) ──
+  // Load each active agent's persona once, before the round loop. Persona
+  // files live under ~/.formiga/workspaces/workflows/<workflowId>_<persona>/
+  // and are injected into the prompt as authority — but the JSON output
+  // contract below always overrides any output format the persona mentions.
+  // buildAgentPersonaInstructions returns "" when no files are provisioned,
+  // so agents still run with the built-in strategy hints (graceful fallback).
+  const agentPersonas: Record<string, string> = {};
+  for (const agent of activeAgents) {
+    const formigaAgentId = `${config.workflowId ?? "ml-autoresearch"}_${agent.agentPersona}`;
+    try {
+      agentPersonas[agent.id] = await buildAgentPersonaInstructions(formigaAgentId);
+    } catch (err) {
+      agentPersonas[agent.id] = "";
+      console.error("[arena-engine] persona load failed", { agentId: agent.id, error: String(err) });
+    }
+  }
+
   // Warm-start: inject past best results for this dataset signature
   let warmStartHints: string[] = [];
   if (config.datasetSignature) {
@@ -348,12 +403,59 @@ export async function runArena(
   // ArenaAgentConfig in a future iteration; today uniform.
   const maxIterationsPerTeam = 5;
 
+  // ── Failed-attempt ledger helper (contract A4) ──
+  // One uniform FAILED registration for every failure mode (agent_no_response,
+  // script_missing, strict-metrics fail-fast, runtime crash, timeout kill).
+  // `rich` is best-effort — a partially written _results.json can still carry
+  // useful fields (hyperparameters, fold_scores, …).
+  async function registerFailedArena(p: RegisterFailedArenaParams): Promise<void> {
+    const { agent, round, config, datasetCtx, result, bench, rich, errorMessage, sessionContentHash } = p;
+    const experimentId = await leaderboardRepo.registerArena({
+      run_id: config.runId,
+      round_number: round,
+      agent_name: agent.id,
+      model_type: agent.modelType ?? agent.id,
+      model_algorithm: rich?.modelAlgorithm ?? agent.modelType ?? agent.id,
+      hyperparameters: rich?.hyperparameters ?? {},
+      hypothesis: result.hypothesis || null,
+      learned: result.learned || null,
+      next_focus: result.nextFocus || null,
+      measured_metric: null, // explicit — a failure has no metric
+      benchmark_stdout: bench?.stdout ?? result.benchmarkStdout,
+      benchmark_stderr: errorMessage
+        ? (bench ? `${bench.stderr}\n${errorMessage}` : errorMessage).trim()
+        : bench?.stderr ?? result.benchmarkStderr,
+      benchmark_exit_code: bench?.exitCode ?? result.benchmarkExitCode ?? null,
+      error_message: errorMessage ?? null,
+      decision: "crash",
+      duration_ms: bench?.durationMs ?? result.durationMs,
+      artifact_script: result.scriptPath || null,
+      metric_name: config.metricName,
+      artifact_path: result.scriptPath,
+      metric_bag: rich?.metricBag,
+      problem_type: datasetCtx.problemType,
+      status: "FAILED",
+      fold_scores: rich?.foldScores,
+      train_score: rich?.trainScore ?? null,
+      content_hash: sessionContentHash,
+      oof_artifact_key: rich?.oofArtifactKey ?? null,
+      prod_artifact_key: rich?.prodArtifactKey ?? null,
+      brier_raw: rich?.brierRaw ?? null,
+      brier_calibrated: rich?.brierCalibrated ?? null,
+      ece_calibrated: rich?.eceCalibrated ?? null,
+      notes: rich?.notes ?? null,
+      category: rich?.category ?? null,
+      feature_importances: rich?.featureImportances ?? null,
+    });
+    result.experimentId = experimentId;
+  }
+
   // 3. Round loop
   for (let round = 1; round <= config.maxRounds; round++) {
     session.currentRound = round;
 
     // Build prompts with dataset context for complexity-aware generation
-    const prompts = buildPromptsForRound(config, session, allResults, datasetCtx, warmStartHints, activeAgents);
+    const prompts = buildPromptsForRound(config, session, allResults, datasetCtx, warmStartHints, activeAgents, agentPersonas);
 
     // Fan-out: run all agents in parallel
     const agentOutputs = await runAgentsParallel(prompts, config);
@@ -363,8 +465,44 @@ export async function runArena(
     roundImproved = false;
     for (const agent of activeAgents) {
       const output = agentOutputs[agent.id];
+      // Guard 1 — agent never responded (LLM timeout / runner failure).
       if (!output) {
-        roundResults.push(createCrashResult(agent.id, "Agent returned no output"));
+        const reason = "[agent_no_response] agente não respondeu dentro do timeout";
+        const r = createCrashResult(agent.id, reason, SCRIPT_MISSING_EXIT_CODE);
+        r.benchmarkStderr = reason;
+        // Registered as FAILED with benchmark_exit_code = -2 so the
+        // leaderboard distinguishes a dead agent from a real runtime crash.
+        await registerFailedArena({
+          agent,
+          round,
+          config,
+          datasetCtx,
+          result: r,
+          errorMessage: reason,
+          sessionContentHash,
+        });
+        roundResults.push(r);
+        await repo.updateStats(session.id, "crash");
+        continue;
+      }
+      // Guard 2 — contract broken: agent returned no runnable script.
+      // Prevents the misleading 0-byte-file → benchmark_exit_code=0 FAILED
+      // signature that previously flooded the leaderboard for dead agents.
+      if (!output.script || output.script.trim().length === 0) {
+        const reason = "[script_missing] agente não retornou script executável no JSON de resposta";
+        const r = createCrashResult(agent.id, reason, SCRIPT_MISSING_EXIT_CODE);
+        r.benchmarkStderr = reason;
+        await registerFailedArena({
+          agent,
+          round,
+          config,
+          datasetCtx,
+          result: r,
+          errorMessage: reason,
+          sessionContentHash,
+        });
+        roundResults.push(r);
+        await repo.updateStats(session.id, "crash");
         continue;
       }
 
@@ -403,10 +541,43 @@ export async function runArena(
 
       roundResults.push(result);
 
-      const richMetrics = tryLoadRichMetrics(config.workspacePath, agent.id, round, datasetCtx.problemType);
+      const richLoad = tryLoadRichMetrics(config.workspacePath, agent.id, round, datasetCtx.problemType);
+      const richMetrics = richLoad.rich;
       // Surface the cross-pollination note on the in-memory result so the
       // next round's prompt can inject it for the other team(s).
       result.notes = richMetrics.notes ?? undefined;
+
+      // ── Fail-fast on strict metrics (contract A4) ──
+      // A benchmark that EXITED 0 and produced a parsable metric MUST also
+      // produce a valid _results.json — otherwise the leaderboard renders
+      // empty metrics for a "successful" run (the user-visible bug). Legit
+      // crashes never reach this branch: timeout kill → exitCode null,
+      // runtime failure → exitCode ≠ 0, both skip fail-fast (a missing
+      // _results.json is expected there, not a contract violation).
+      if (richLoad.error !== null && bench.exitCode === 0 && bench.metric !== null) {
+        const reason = richLoad.error;
+        result.decision = "crash";
+        result.metric = null; // drop the scalar — no rich metrics back it up
+        result.benchmarkStderr = (bench.stderr + "\n" + reason).trim();
+        result.benchmarkStdout = bench.stdout;
+        result.benchmarkExitCode = bench.exitCode;
+        // Fail-fast still consumes a team slot (it ran, just broke the
+        // metrics contract) but never triggers dedup tracking.
+        teamExperimentCount.set(agent.id, (teamExperimentCount.get(agent.id) ?? 0) + 1);
+        await registerFailedArena({
+          agent,
+          round,
+          config,
+          datasetCtx,
+          result,
+          bench,
+          rich: richMetrics,
+          errorMessage: reason,
+          sessionContentHash,
+        });
+        await repo.updateStats(session.id, "crash");
+        continue;
+      }
 
       // ── Pre-write audit ───────────────────────────────────────────────
       // Run the blocking quality gates BEFORE persisting. The audit may
@@ -449,6 +620,7 @@ export async function runArena(
           teamExperimentCount: teamExperimentCount.get(agent.id) ?? 0,
           maxIterationsPerTeam,
           problemType: datasetCtx.problemType,
+          metricName: config.metricName,
           tier,
           direction: config.metricDirection,
           dedupSignature: dedupSignature(
@@ -521,6 +693,7 @@ export async function runArena(
             ece_calibrated: richMetrics.eceCalibrated ?? null,
             notes: richMetrics.notes ?? null,
             category: richMetrics.category ?? null,
+            feature_importances: richMetrics.featureImportances ?? null,
             iteration_team: iterationTeam,
           });
           // Track dedup signature — metric is guaranteed non-null by the
@@ -539,41 +712,25 @@ export async function runArena(
         // Crashes still consume a team slot (transparency).
         teamExperimentCount.set(agent.id, (teamExperimentCount.get(agent.id) ?? 0) + 1);
 
-        const experimentId = await leaderboardRepo.registerArena({
-          run_id: config.runId,
-          round_number: round,
-          agent_name: agent.id,
-          model_type: agent.modelType ?? agent.id,
-          model_algorithm: richMetrics.modelAlgorithm ?? agent.modelType ?? agent.id,
-          hyperparameters: richMetrics.hyperparameters ?? {},
-          hypothesis: output.hypothesis,
-          learned: output.learned,
-          next_focus: output.nextFocus,
-          measured_metric: null, // explicit — crash has no metric
-          benchmark_stdout: bench.stdout,
-          benchmark_stderr: bench.stderr,
-          benchmark_exit_code: bench.exitCode,
-          decision: auditedDecision,
-          duration_ms: bench.durationMs,
-          artifact_script: result.scriptPath,
-          metric_name: config.metricName,
-          artifact_path: result.scriptPath,
-          metric_bag: richMetrics.metricBag,
-          problem_type: datasetCtx.problemType,
-          status: auditedStatus,
-          fold_scores: richMetrics.foldScores,
-          train_score: richMetrics.trainScore ?? null,
-          content_hash: sessionContentHash,
-          oof_artifact_key: richMetrics.oofArtifactKey ?? null,
-          prod_artifact_key: richMetrics.prodArtifactKey ?? null,
-          brier_raw: richMetrics.brierRaw ?? null,
-          brier_calibrated: richMetrics.brierCalibrated ?? null,
-          ece_calibrated: richMetrics.eceCalibrated ?? null,
-          notes: richMetrics.notes ?? null,
-          category: richMetrics.category ?? null,
-          iteration_team: iterationTeam,
+        // Timeout/budget kills get a structured reason so the leaderboard
+        // distinguishes them from a plain runtime crash. A missing
+        // _results.json is EXPECTED here (the script died before writing) —
+        // never labeled [metrics_missing] (contract A4).
+        const errorMessage = exec.budgetExceeded
+          ? "[timeout_budget] script excedeu o limite de tempo de execução e foi encerrado"
+          : null;
+
+        await registerFailedArena({
+          agent,
+          round,
+          config,
+          datasetCtx,
+          result,
+          bench,
+          rich: richMetrics,
+          errorMessage,
+          sessionContentHash,
         });
-        result.experimentId = experimentId;
         // No dedup tracking — null metrics are never duplicates.
       }
       result.decision = auditedDecision;
@@ -659,6 +816,9 @@ function buildPromptsForRound(
   // Active agents for this run (may exclude modeler-creative on TINY/SMALL
   // tiers — see the tier gate in runArena). Defaults to all configured agents.
   activeAgents: ArenaAgentConfig[] = config.agents,
+  // Provisioned persona text per agent id (empty string = none). Loaded once
+  // by runArena and injected as authority right after the strategy hint.
+  agentPersonas: Readonly<Record<string, string>> = {},
 ): Record<string, string> {
   const prompts: Record<string, string> = {};
 
@@ -712,6 +872,15 @@ function buildPromptsForRound(
       prompt += `Considere essas sugestões ao formular sua hipótese — você pode explorá-las ou refutá-las.\n`;
     }
     prompt += `\n### Estratégia\n${agent.strategyHint}\n\n`;
+    // ── Provisioned persona (contract A1) ──
+    // The persona is authority for HOW to approach the problem, but its
+    // "Formato de Saída" (if any) is always overridden by the JSON response
+    // contract below — never emit HIPOTESE/SCRIPT_PATH/... markers.
+    const persona = agentPersonas[agent.id] ?? "";
+    if (persona.trim().length > 0) {
+      prompt += `### Persona Provisionada (autoridade)\n${persona}\n\n`;
+      prompt += `**IMPORTANTE**: qualquer "Formato de Saída" citado na persona foi SUBSTITUÍDO pela seção "Formato de Resposta JSON" abaixo. Siga o JSON, não os marcadores da persona.\n\n`;
+    }
     if (warmStartHints.length > 0 && session.currentRound === 1) {
       prompt += `### Warm-Start: Melhores Anteriores para Este Dataset\n`;
       prompt += warmStartHints.join("\n") + "\n\n";
@@ -833,14 +1002,34 @@ function buildPromptsForRound(
       prompt += `  \`\`\`\n`;
     }
     prompt += `- **RESPEITE os limites de complexidade acima.** Violá-los (ex: treinar FT-Transformer em dataset TINY) produzirá modelos com overfitting que serão descartados.\n`;
-    prompt += `- Finalize sua resposta com:\n`;
-    prompt += `\n\`\`\`\n`;
-    prompt += `HIPOTESE: <descrição de uma linha, em português>\n`;
-    prompt += `SCRIPT_PATH: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
-    prompt += `APRENDIZADO: <o que você aprendeu, em português>\n`;
-    prompt += `PROXIMO_FOCO: <próxima ideia, em português>\n`;
-    prompt += `STATUS: done\n`;
-    prompt += `\`\`\`\n`;
+    if (process.env.FORMIGA_ARENA_LEGACY_OUTPUT === "1") {
+      // ── Legacy output contract (rollback path) ──
+      // Markers + script path. Only emitted when the operator opts back in
+      // via FORMIGA_ARENA_LEGACY_OUTPUT=1; the JSON contract is the default.
+      prompt += `- Finalize sua resposta com:\n`;
+      prompt += `\n\`\`\`\n`;
+      prompt += `HIPOTESE: <descrição de uma linha, em português>\n`;
+      prompt += `SCRIPT_PATH: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
+      prompt += `APRENDIZADO: <o que você aprendeu, em português>\n`;
+      prompt += `PROXIMO_FOCO: <próxima ideia, em português>\n`;
+      prompt += `STATUS: done\n`;
+      prompt += `\`\`\`\n`;
+    } else {
+      // ── JSON envelope contract (default) ──
+      prompt += `- Finalize sua resposta com UM ÚNICO bloco de código JSON (fence \`\`\`json) — SEM os marcadores legados HIPOTESE/SCRIPT_PATH/APRENDIZADO/PROXIMO_FOCO/STATUS. O script Python vai INLINE na chave "script" (cada quebra de linha do código vira um \\n dentro da string JSON), NUNCA como caminho de arquivo.\n`;
+      prompt += `- O script DEVE: ler benchmark_config.json, treinar com CV na mesma configuração, imprimir EXATAMENTE ${config.metricName}: <valor_numerico> no stdout ANTES de encerrar, salvar o .pkl em artifacts/models/${agent.id}_round${session.currentRound}.pkl, e gravar o _results.json conforme a estrutura acima.\n`;
+      prompt += `- **Disciplina de orçamento**: o script deve respeitar a variável de ambiente FORMIGA_MAX_FIT_SECONDS (limite por fit) e evitar combinações que estourem o tempo de execução — grids gigantes em datasets pequenos são descartados por overfitting.\n`;
+      prompt += `- **Escreva o _results.json CEDO**: grave o JSON imediatamente APÓS computar fold_scores e train_score, e ANTES do retrain completo + inferência prod. Assim, mesmo se o script for morto por timeout no tail, o ledger já existe em disco.\n`;
+      prompt += `- O JSON final deve ter EXATAMENTE esta forma:\n`;
+      prompt += `\`\`\`json\n`;
+      prompt += `{\n`;
+      prompt += `  "script": "import pandas as pd\\nimport numpy as np\\n# ... código Python completo, com \\n em cada quebra de linha\\n",\n`;
+      prompt += `  "hypothesis": "<hipótese de uma linha, em português>",\n`;
+      prompt += `  "learned": "<o que você aprendeu, em português>",\n`;
+      prompt += `  "nextFocus": "<próxima ideia, em português>"\n`;
+      prompt += `}\n`;
+      prompt += `\`\`\`\n`;
+    }
 
     prompts[agent.id] = prompt;
   }
@@ -848,7 +1037,7 @@ function buildPromptsForRound(
   return prompts;
 }
 
-function createCrashResult(agentId: string, reason: string): AgentRoundResult {
+function createCrashResult(agentId: string, reason: string, exitCode = 1): AgentRoundResult {
   return {
     agentId,
     hypothesis: "",
@@ -859,7 +1048,7 @@ function createCrashResult(agentId: string, reason: string): AgentRoundResult {
     durationMs: 0,
     benchmarkStdout: "",
     benchmarkStderr: reason,
-    benchmarkExitCode: 1,
+    benchmarkExitCode: exitCode,
     scriptPath: "",
   };
 }
@@ -906,22 +1095,136 @@ interface RichMetricsResult {
   oofUniqueProbs?: number | null;
   notes?: string | null;
   category?: string | null;
+  /** Optional per-feature importances (contract C1 — report top features). */
+  featureImportances?: number[] | null;
 }
 
-function tryLoadRichMetrics(
+/** Result of loading + validating an agent's `_results.json`. */
+interface RichMetricsLoad {
+  /** Extracted fields (empty on missing/corrupt file). */
+  rich: RichMetricsResult;
+  /** Structured failure reason (`[metrics_missing]`/`[metrics_invalid]`) or null when valid. */
+  error: string | null;
+}
+
+/** Inputs for the shared failed-attempt ledger helper (contract A4). */
+interface RegisterFailedArenaParams {
+  agent: ArenaAgentConfig;
+  round: number;
+  config: ArenaConfig;
+  datasetCtx: DatasetContext;
+  result: AgentRoundResult;
+  /** Benchmark execution result — undefined when the script never ran. */
+  bench?: BenchmarkResult;
+  /** Best-effort extras from a (possibly partial) _results.json. */
+  rich?: RichMetricsResult;
+  errorMessage: string | null;
+  sessionContentHash: string | null;
+}
+
+/**
+ * Validate a parsed `_results.json` against the strict arena contract.
+ * Returns an error string prefixed with `[metrics_invalid]` when required
+ * fields are missing; null when the payload satisfies the contract.
+ *
+ * Required by the contract:
+ *   - fold_scores (or legacy `folds`): array of ≥2 finite numbers
+ *   - train_score: finite number (overfit gate input)
+ *   - classification: roc_auc, f1_score, precision, recall (finite numbers);
+ *     log_loss must be present as a number or explicit null
+ *   - regression: rmse, mae, r2_score (finite numbers)
+ */
+export function validateRichMetrics(
+  json: Record<string, unknown>,
+  problemType: string | null,
+): string | null {
+  const num = (keys: string[]): number | undefined => {
+    for (const k of keys) {
+      const v = json[k];
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "string") {
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+    return undefined;
+  };
+
+  const foldSrc = json.fold_scores ?? json.folds;
+  const validFolds = (Array.isArray(foldSrc) ? foldSrc : []).filter((v) =>
+    (typeof v === "number" && Number.isFinite(v)) ||
+    (typeof v === "string" && Number.isFinite(Number(v))),
+  );
+  if (validFolds.length < 2) {
+    return "[metrics_invalid] fold_scores deve ser um array com pelo menos 2 folds válidos";
+  }
+
+  if (num(["train_score", "train_mean", "cv_train_mean"]) === undefined) {
+    return "[metrics_invalid] train_score é obrigatório (número finito)";
+  }
+
+  if (problemType === "classification") {
+    const required: Record<string, string[]> = {
+      roc_auc: ["roc_auc", "auc", "cv_auc", "val_auc"],
+      f1_score: ["f1_score", "f1", "cv_f1", "val_f1"],
+      precision: ["precision", "cv_precision", "val_precision"],
+      recall: ["recall", "cv_recall", "val_recall"],
+    };
+    for (const [key, aliases] of Object.entries(required)) {
+      if (num(aliases) === undefined) {
+        return `[metrics_invalid] classificação exige ${key} (número finito)`;
+      }
+    }
+    // log_loss must be present — as a number or an explicit null.
+    if (!("log_loss" in json) && !("cv_log_loss" in json) && !("val_log_loss" in json)) {
+      return "[metrics_invalid] classificação exige log_loss (número ou null)";
+    }
+  } else if (problemType === "regression") {
+    const required: Record<string, string[]> = {
+      rmse: ["rmse", "root_mean_squared_error", "cv_rmse", "val_rmse"],
+      mae: ["mae", "mean_absolute_error", "cv_mae", "val_mae"],
+      r2_score: ["r2_score", "r2", "cv_r2", "val_r2"],
+    };
+    for (const [key, aliases] of Object.entries(required)) {
+      if (num(aliases) === undefined) {
+        return `[metrics_invalid] regressão exige ${key} (número finito)`;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Load an agent's `_results.json` and validate it against the contract.
+ * Never throws — missing/corrupt files degrade to `{ rich: {}, error }` so
+ * the caller can decide whether to fail-fast (only on a successful benchmark).
+ */
+export function tryLoadRichMetrics(
   workspacePath: string,
   agentId: string,
   round: number,
   problemType: string | null
-): RichMetricsResult {
+): RichMetricsLoad {
   const resultsPath = path.join(workspacePath, SCRIPT_DIR, `${agentId}_round${round}_results.json`);
   if (!fs.existsSync(resultsPath)) {
-    return {};
+    return {
+      rich: {},
+      error: `[metrics_missing] _results.json não encontrado em ${resultsPath}`,
+    };
   }
 
   try {
     const raw = fs.readFileSync(resultsPath, "utf-8");
-    const json = JSON.parse(raw) as Record<string, unknown>;
+    let json: Record<string, unknown>;
+    try {
+      json = JSON.parse(raw) as Record<string, unknown>;
+    } catch (err) {
+      return {
+        rich: {},
+        error: `[metrics_invalid] _results.json corrompido: ${(err as Error).message}`,
+      };
+    }
 
     const modelAlgorithm = typeof json.model === "string" ? json.model :
                            typeof json.model_name === "string" ? json.model_name :
@@ -995,7 +1298,15 @@ function tryLoadRichMetrics(
     const notes = typeof json.notes === "string" && json.notes.length > 0 ? json.notes : null;
     const category = typeof json.category === "string" && json.category.length > 0 ? json.category : null;
 
-    return {
+    // ── Optional top-feature importances (contract C1) ──
+    const fiSrc = json.feature_importances ?? json.feature_importance;
+    const featureImportances = Array.isArray(fiSrc)
+      ? fiSrc
+          .map((v) => getNum(v))
+          .filter((v): v is number => v !== undefined && Number.isFinite(v))
+      : null;
+
+    const rich: RichMetricsResult = {
       modelAlgorithm,
       hyperparameters,
       metricBag,
@@ -1009,11 +1320,20 @@ function tryLoadRichMetrics(
       oofUniqueProbs,
       notes,
       category,
+      featureImportances,
     };
+
+    // Strict validation — the caller decides whether an error should fail-fast
+    // (only when the benchmark itself "succeeded": exit 0 + parsed metric).
+    const error = validateRichMetrics(json, problemType);
+    return { rich, error };
   } catch (err) {
-    // Silently degrade if file is corrupt or unreadable
+    // Unreadable file (permissions, IO error, …) — degrade with a reason.
     console.error(`[arena-engine] failed to read rich metrics from benchmark output:`, (err as Error).stack ?? String(err));
-    return {};
+    return {
+      rich: {},
+      error: `[metrics_invalid] falha ao ler _results.json: ${(err as Error).message}`,
+    };
   }
 }
 

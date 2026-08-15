@@ -47,7 +47,8 @@ import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
 import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse, LeaderboardEntry } from "../shared/dashboard-types.js";
-import { generateReproductionScript } from "./script-templates.js";
+import { generateReproductionScript, buildReproductionPreamble } from "./script-templates.js";
+import { buildExperimentReportMarkdown } from "./report-builder.js";
 import {
   findActivePipelineRunId,
   getAgentUnifiedStatus,
@@ -1260,6 +1261,10 @@ function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
     rejectedAt: (r.rejected_at as string | null) ?? null,
     rejectReason: (r.reject_reason as string | null) ?? null,
     artifactPath: (r.artifact_path as string | null) ?? null,
+    // Arena failure reason + machine exit code so a contract break
+    // (`[script_missing]`/`-2`) is distinguishable from a runtime crash (`1`).
+    errorMessage: (r.error_message as string | null) ?? null,
+    benchmarkExitCode: (r.benchmark_exit_code as number | null) ?? null,
     decision: (r.decision as string | null) ?? null,
     confidenceScore: (r.confidence_score as number | null) ?? null,
     confidenceBand: (r.confidence_band as string | null) ?? null,
@@ -1376,9 +1381,10 @@ function handleLeaderboardReport(
       return;
     }
 
+    // C2 — fetch the full row so the deterministic builder can reconstruct
+    // the report from the DB alone.
     const experiment = await prisma.experiment.findUnique({
       where: { experiment_id: experimentId },
-      select: { agent_name: true, run_id: true },
     });
     if (!experiment) {
       errorResponse(res, "Experiment not found", 404);
@@ -1400,25 +1406,57 @@ function handleLeaderboardReport(
       return;
     }
 
+    // Precedence: ml-pipeline agents with a real report file keep serving the
+    // file; arena agents (not in AGENT_REPORT_MAP) and missing files fall
+    // through to the DB builder — the 404 is gone.
     const agent = bareAgentName(experiment.agent_name);
     const reportFile = AGENT_REPORT_MAP[agent];
-    if (!reportFile) {
-      errorResponse(res, `No report mapping for agent: ${agent}`, 404);
-      return;
+    if (reportFile) {
+      const reportPath = path.join(workspace, "reports", reportFile);
+      if (isPathSafe(workspace, path.join("reports", reportFile))) {
+        try {
+          const content = await fs.promises.readFile(reportPath, "utf-8");
+          jsonResponse(res, { content, filename: reportFile });
+          return;
+        } catch { /* file missing → builder fallback */ }
+      }
     }
 
-    const reportPath = path.join(workspace, "reports", reportFile);
-    if (!isPathSafe(workspace, path.join("reports", reportFile))) {
-      errorResponse(res, "Forbidden", 403);
-      return;
-    }
-
+    let metricsJson: Record<string, unknown> = {};
+    try { metricsJson = JSON.parse(experiment.metrics_json ?? "{}"); } catch { /* keep empty */ }
+    let foldScores: number[] | null = null;
     try {
-      const content = await fs.promises.readFile(reportPath, "utf-8");
-      jsonResponse(res, { content, filename: reportFile });
-    } catch {
-      errorResponse(res, `Report file not found: ${reportFile}`, 404);
-    }
+      const parsed = JSON.parse(experiment.fold_scores ?? "null");
+      foldScores = Array.isArray(parsed) ? parsed : null;
+    } catch { /* keep null */ }
+
+    const { content, filename } = buildExperimentReportMarkdown({
+      workspace,
+      experiment: {
+        experiment_id: experiment.experiment_id,
+        run_id: experiment.run_id,
+        round_number: experiment.round_number,
+        agent_name: experiment.agent_name,
+        model_type: experiment.model_type,
+        model_algorithm: experiment.model_algorithm,
+        problem_type: experiment.problem_type,
+        metric_name: experiment.metric_name,
+        val_metric: experiment.val_metric,
+        train_metric: experiment.train_metric,
+        fold_scores: foldScores,
+        hypothesis: experiment.hypothesis,
+        learned: experiment.learned,
+        next_focus: experiment.next_focus,
+        metrics_json: metricsJson,
+        status: experiment.status,
+        error_message: experiment.error_message,
+        created_at:
+          typeof experiment.created_at === "string"
+            ? experiment.created_at
+            : new Date(experiment.created_at).toISOString(),
+      },
+    });
+    jsonResponse(res, { content, filename });
   })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
 }
 
@@ -1458,6 +1496,42 @@ function handleLeaderboardScript(
       return;
     }
 
+    // B1: prefer the real arena script when the ledger points to a file that
+    // still exists inside the workspace. This is the actual code the agent
+    // produced — far more faithful than the generated template. Falls through
+    // to the template when the file is gone or the path is unsafe.
+    const artifactScript = experiment.artifact_script;
+    if (artifactScript && artifactScript.trim().length > 0) {
+      const resolvedArtifact = path.isAbsolute(artifactScript)
+        ? artifactScript
+        : path.join(workspace, artifactScript);
+      if (isPathSafe(workspace, resolvedArtifact)) {
+        try {
+          const realScript = await fs.promises.readFile(resolvedArtifact, "utf-8");
+          if (realScript.trim().length > 0) {
+            let preambleHp: Record<string, unknown> = {};
+            try { preambleHp = JSON.parse(experiment.hyperparameters); } catch { /* empty */ }
+            const preamble = buildReproductionPreamble({
+              experimentId: String(experiment.experiment_id),
+              modelType: experiment.model_type,
+              hyperparameters: preambleHp,
+              cvMean: experiment.val_metric,
+              trainMean: experiment.train_metric,
+              artifactPath: experiment.artifact_path,
+              metricName: experiment.metric_name,
+              features: [],
+              workspacePath: workspace,
+              problemType: experiment.problem_type ?? null,
+            });
+            const agentSlug = (bareAgentName(experiment.agent_name) || "model").toLowerCase().replace(/[^a-z0-9]/g, "_");
+            const filename = `reproduce_${agentSlug}_${experiment.experiment_id}.py`;
+            jsonResponse(res, { script: preamble + "\n" + realScript, filename, language: "python" });
+            return;
+          }
+        } catch { /* fall through to generated template */ }
+      }
+    }
+
     let features: string[] = [];
     try {
       const featuresParquet = path.join(workspace, "artifacts", "features.parquet");
@@ -1485,6 +1559,7 @@ function handleLeaderboardScript(
       metricName: experiment.metric_name,
       features,
       workspacePath: workspace,
+      problemType: experiment.problem_type ?? null,
     });
 
     const filename = `reproduce_${experiment.model_type.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${experiment.experiment_id}.py`;
