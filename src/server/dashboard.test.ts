@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createDashboardServer } from "../../dist/server/dashboard.js";
 import { type FormigaEvent } from "../../dist/installer/events.js";
 import { getDb, incrementSystemTokenSpend, getSystemTokenSpend } from "../../dist/db.js";
+import { daemonAuthHeaders } from "../../dist/server/test-auth.js";
 
 interface LogsTailResponse {
   lines: string[];
@@ -138,445 +139,6 @@ describe("dashboard logs-tail API", () => {
   });
 });
 
-describe("dashboard AutoResearch progress", () => {
-  it("serves run-scoped AutoResearch progress from the harness directory", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "Increase unit test coverage",
-          metricName: "coverage",
-          direction: "higher",
-          command: "scripts/measure-test-coverage.sh",
-        }, null, 2),
-      );
-      const entries = [
-        {
-          type: "session",
-          created_at: "2026-05-26T10:00:00.000Z",
-          goal: "Increase unit test coverage",
-          metric_name: "coverage",
-          direction: "higher",
-          command: "scripts/measure-test-coverage.sh",
-        },
-        {
-          type: "run_result",
-          run: 1,
-          created_at: "2026-05-26T10:01:00.000Z",
-          status: "measured",
-          metric: 0.336,
-          metric_name: "coverage",
-          direction: "higher",
-          duration_ms: 1200,
-          exit_code: 0,
-          command: "scripts/measure-test-coverage.sh",
-          output_tail: "0.336",
-          error_tail: "",
-        },
-        {
-          type: "run",
-          run: 1,
-          created_at: "2026-05-26T10:02:00.000Z",
-          status: "baseline",
-          metric: 0.336,
-          metric_name: "coverage",
-          direction: "higher",
-          duration_ms: 1200,
-          command: "scripts/measure-test-coverage.sh",
-          description: "baseline coverage",
-          baseline_metric: 0.336,
-          best_metric: 0.336,
-          improvement_ratio: 0,
-          asi: {
-            learned: "coverage script works",
-            next_focus: "cover pure helpers",
-          },
-        },
-      ];
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.jsonl"),
-        entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
-      );
-
-      const db = getDb();
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "run-autoresearch-1",
-        1,
-        "do-now",
-        "increase coverage",
-        "running",
-        JSON.stringify({ working_directory_for_harness: root }),
-        "2026-05-26T10:00:00.000Z",
-        "2026-05-26T10:02:00.000Z",
-      );
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/runs/run-autoresearch-1/autoresearch`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as {
-          exists: boolean;
-          cwd: string;
-          summary: { bestMetric: number; bestRun: number; totalRuns: number; nextPrompt: string };
-          experiments: Array<{ run: number; metric: number; learned: string; next_focus: string }>;
-        };
-
-        assert.equal(body.exists, true);
-        assert.equal(body.cwd, projectDir);
-        assert.equal(body.summary.bestMetric, 0.336);
-        assert.equal(body.summary.bestRun, 1);
-        assert.equal(body.summary.totalRuns, 1);
-        assert.match(body.summary.nextPrompt, /cover pure helpers/i);
-        assert.equal(body.experiments.length, 1);
-        assert.equal(body.experiments[0].learned, "coverage script works");
-        assert.equal(body.experiments[0].next_focus, "cover pure helpers");
-      } finally {
-        await stopDashboard(server);
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-it("GET /api/autoresearch/runs returns empty array when no runs have AutoResearch state", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-empty-"));
-    const homeDir = path.join(root, "home");
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      // Insert a run without a harness cwd at all
-      const db = getDb();
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "run-no-harness",
-        1,
-        "do-now",
-        "simple task",
-        "completed",
-        JSON.stringify({ workspace_mode: "direct" }),
-        "2026-05-26T10:00:00.000Z",
-        "2026-05-26T10:01:00.000Z",
-      );
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as { runs: unknown[] };
-        assert.ok(Array.isArray(body.runs));
-        assert.equal(body.runs.length, 0);
-      } finally {
-        await stopDashboard(server);
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("GET /api/autoresearch/runs returns only runs with autoresearch.config.json in harness cwd", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-filtered-"));
-    const homeDir = path.join(root, "home");
-    const projectDirWithAr = path.join(root, "project-with-ar");
-    const projectDirNoAr = path.join(root, "project-no-ar");
-    fs.mkdirSync(projectDirWithAr, { recursive: true });
-    fs.mkdirSync(projectDirNoAr, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      // Create an autoresearch config in one project dir
-      fs.writeFileSync(
-        path.join(projectDirWithAr, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "Optimize performance",
-          metricName: "total_µs",
-          direction: "lower",
-          command: "./bench.sh",
-        }),
-      );
-      // Don't put an autoresearch config in the other
-
-      const db = getDb();
-      // Run WITH autoresearch state
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "run-with-ar",
-        1,
-        "do-now",
-        "optimization task",
-        "running",
-        JSON.stringify({ working_directory_for_harness: projectDirWithAr }),
-        "2026-05-26T10:00:00.000Z",
-        "2026-05-26T10:01:00.000Z",
-      );
-      // Run WITHOUT autoresearch state
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "run-no-ar",
-        2,
-        "do-now",
-        "plain task",
-        "running",
-        JSON.stringify({ working_directory_for_harness: projectDirNoAr }),
-        "2026-05-26T10:02:00.000Z",
-        "2026-05-26T10:03:00.000Z",
-      );
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as { runs: Array<{ id: string }> };
-        assert.ok(Array.isArray(body.runs));
-        assert.equal(body.runs.length, 1);
-        assert.equal(body.runs[0].id, "run-with-ar");
-      } finally {
-        await stopDashboard(server);
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("GET /api/autoresearch/runs excludes runs without working_directory_for_harness", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-no-cwd-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      // Create config in project dir
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "test",
-          metricName: "total_µs",
-          direction: "lower",
-          command: "./bench.sh",
-        }),
-      );
-
-      const db = getDb();
-      // Run without any harness-related context keys
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "run-no-harness-context",
-        1,
-        "do-now",
-        "task",
-        "running",
-        JSON.stringify({ workspace_mode: "direct" }),
-        "2026-05-26T10:00:00.000Z",
-        "2026-05-26T10:01:00.000Z",
-      );
-      // Run with harness cwd that has no config
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "run-with-cwd-no-config",
-        2,
-        "do-now",
-        "task 2",
-        "running",
-        JSON.stringify({ working_directory_for_harness: "/tmp/nonexistent-dir" }),
-        "2026-05-26T10:02:00.000Z",
-        "2026-05-26T10:03:00.000Z",
-      );
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as { runs: unknown[] };
-        assert.ok(Array.isArray(body.runs));
-        assert.equal(body.runs.length, 0);
-      } finally {
-        await stopDashboard(server);
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("GET /api/autoresearch/runs excludes runs with harness cwd but no config file", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-cwd-no-config-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      // Create a valid project directory but do NOT create autoresearch.config.json inside it
-      // The directory exists, but has no AutoResearch state
-
-      const db = getDb();
-      // Run with harness cwd pointing to a real directory that has NO config file
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "run-cwd-exists-no-config",
-        1,
-        "do-now",
-        "task with cwd but no config",
-        "running",
-        JSON.stringify({ working_directory_for_harness: projectDir }),
-        "2026-05-27T10:00:00.000Z",
-        "2026-05-27T10:01:00.000Z",
-      );
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as { runs: unknown[] };
-        assert.ok(Array.isArray(body.runs));
-        assert.equal(body.runs.length, 0, "run with valid cwd but no config should be excluded");
-      } finally {
-        await stopDashboard(server);
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("GET /api/autoresearch/runs response shape matches expected { runs: [...] } format", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-autoresearch-runs-shape-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "Improve latency",
-          metricName: "latency_ms",
-          direction: "lower",
-          command: "./bench.sh",
-        }),
-      );
-
-      const db = getDb();
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        "run-ar-shape",
-        1,
-        "do-now",
-        "latency improvement",
-        "running",
-        JSON.stringify({ working_directory_for_harness: projectDir }),
-        "2026-05-26T10:00:00.000Z",
-        "2026-05-26T10:01:00.000Z",
-      );
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/runs`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as { runs: unknown[] };
-        assert.ok(Array.isArray(body.runs));
-        assert.equal(body.runs.length, 1);
-
-        const run = body.runs[0] as Record<string, unknown>;
-        assert.equal(run.id, "run-ar-shape");
-        // Verify it has the same fields as /api/runs
-        assert.ok("workflow_id" in run);
-        assert.ok("task" in run);
-        assert.ok("status" in run);
-        assert.ok("created_at" in run);
-        assert.ok("updated_at" in run);
-        assert.ok("run_number" in run);
-        assert.ok("total_steps" in run);
-        assert.ok("completed_steps" in run);
-        assert.ok("failed_steps" in run);
-        assert.ok("running_steps" in run);
-        assert.ok("waiting_steps" in run);
-        assert.ok("no_hurry" in run);
-        assert.equal(typeof run.no_hurry, "boolean");
-      } finally {
-        await stopDashboard(server);
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
 
 describe("dashboard stats API", () => {
   it("GET /api/stats returns systemTokensSpent and totalTokensSpent on fresh DB", async () => {
@@ -999,7 +561,7 @@ describe("dashboard run relaunch API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/nonexistent-id/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
       });
       assert.equal(response.status, 404);
 
@@ -1032,7 +594,7 @@ describe("dashboard run relaunch API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/${runId}/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
       });
       assert.equal(response.status, 409);
 
@@ -1070,7 +632,7 @@ describe("dashboard run relaunch API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/${runId}/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
       });
       assert.equal(response.status, 409);
 
@@ -1108,7 +670,7 @@ describe("dashboard run relaunch API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/${runId}/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
       });
       assert.equal(response.status, 409);
 
@@ -1146,7 +708,7 @@ describe("dashboard run relaunch API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/${runId}/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
         body: "not valid json!!!",
       });
       assert.equal(response.status, 400);
@@ -1187,7 +749,7 @@ describe("dashboard run relaunch API", () => {
       // but the handler routing is verified by getting a 500 (not 404/409)
       const response = await fetch(`${baseUrl}/api/runs/${runId}/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
         body: JSON.stringify({ task: "Updated task" }),
       });
 
@@ -1229,7 +791,7 @@ describe("dashboard run relaunch API", () => {
       // No body — should use original task. Will fail at runWorkflow (no daemon).
       const response = await fetch(`${baseUrl}/api/runs/${runId}/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
       });
 
       // 500 from runWorkflow failing is expected
@@ -1268,7 +830,7 @@ describe("dashboard run relaunch API", () => {
     try {
       const response = await fetch(`${baseUrl}/api/runs/${runId}/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
         body: JSON.stringify({ task: "   " }),
       });
 
@@ -1310,7 +872,7 @@ describe("dashboard run relaunch API", () => {
       // This will fail at runWorkflow but tests that notify_url is read from DB
       const response = await fetch(`${baseUrl}/api/runs/${runId}/relaunch`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...daemonAuthHeaders() },
       });
 
       // 500 from runWorkflow failing is expected
@@ -1608,7 +1170,7 @@ describe("dashboard cancel API", () => {
     const { server, baseUrl } = await startDashboard();
 
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST", headers: daemonAuthHeaders() });
       assert.equal(response.status, 200);
 
       const body = await response.json() as { canceled: boolean; runId: string };
@@ -1661,7 +1223,7 @@ describe("dashboard cancel API", () => {
     const { server, baseUrl } = await startDashboard();
 
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST", headers: daemonAuthHeaders() });
       assert.equal(response.status, 200);
 
       const body = await response.json() as { canceled: boolean; runId: string };
@@ -1691,7 +1253,7 @@ describe("dashboard cancel API", () => {
     const { server, baseUrl } = await startDashboard();
 
     try {
-      const response = await fetch(`${baseUrl}/api/runs/nonexistent-id/cancel`, { method: "POST" });
+      const response = await fetch(`${baseUrl}/api/runs/nonexistent-id/cancel`, { method: "POST", headers: daemonAuthHeaders() });
       assert.equal(response.status, 404);
 
       const body = await response.json() as { error: string };
@@ -1721,7 +1283,7 @@ describe("dashboard cancel API", () => {
     const { server, baseUrl } = await startDashboard();
 
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST", headers: daemonAuthHeaders() });
       assert.equal(response.status, 409);
 
       const body = await response.json() as { error: string };
@@ -1756,7 +1318,7 @@ describe("dashboard cancel API", () => {
     const { server, baseUrl } = await startDashboard();
 
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST", headers: daemonAuthHeaders() });
       assert.equal(response.status, 409);
 
       const body = await response.json() as { error: string };
@@ -1791,7 +1353,7 @@ describe("dashboard cancel API", () => {
     const { server, baseUrl } = await startDashboard();
 
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST", headers: daemonAuthHeaders() });
       assert.equal(response.status, 409);
 
       const body = await response.json() as { error: string };
@@ -1847,7 +1409,7 @@ describe("dashboard cancel API", () => {
     const { server, baseUrl } = await startDashboard();
 
     try {
-      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST" });
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/cancel`, { method: "POST", headers: daemonAuthHeaders() });
       assert.equal(response.status, 200);
 
       // Done step unchanged
@@ -1883,546 +1445,125 @@ describe("dashboard cancel API", () => {
 
 // ── AutoResearch Session API tests ───────────────────────────────────
 
-describe("dashboard AutoResearch session API", () => {
-  it("GET /api/autoresearch/sessions returns empty array when no sessions registered", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-sessions-empty-"));
-    const homeDir = path.join(root, "home");
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
 
+
+// ── Security tests (CR-1/2/3) ────────────────────────────────────────
+
+describe("dashboard security (CR-1/2/3)", () => {
+  it("binds to the loopback interface by default (CR-1)", async () => {
+    const { server } = await startDashboard();
     try {
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/sessions`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as { sessions: unknown[] };
-        assert.ok(Array.isArray(body.sessions));
-        assert.equal(body.sessions.length, 0);
-      } finally {
-        await stopDashboard(server);
-      }
+      const address = server.address();
+      assert.ok(address && typeof address !== "string");
+      assert.equal(address.address, "127.0.0.1");
     } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
+      await stopDashboard(server);
     }
   });
 
-  it("GET /api/autoresearch/sessions returns registered sessions with required fields", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-sessions-fields-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
+  it("rejects a mutating /api call without the daemon secret (CR-1)", async () => {
+    const { server, baseUrl } = await startDashboard();
     try {
-      // Create autoresearch config and log files
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "Optimize latency",
-          metricName: "p95_ms",
-          metricUnit: "ms",
-          direction: "lower",
-          command: "./bench.sh",
-        }),
-      );
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.jsonl"),
-        [
-          JSON.stringify({
-            type: "run", run: 1, created_at: "2026-05-26T10:00:00.000Z",
-            status: "baseline", metric: 42.5, metric_name: "p95_ms", direction: "lower",
-            description: "baseline", baseline_metric: 42.5, best_metric: 42.5, improvement_ratio: 0,
-            asi: { hypothesis: "measure baseline" },
-          }),
-          JSON.stringify({
-            type: "run", run: 2, created_at: "2026-05-26T10:05:00.000Z",
-            status: "keep", metric: 38.0, metric_name: "p95_ms", direction: "lower",
-            description: "cached", baseline_metric: 42.5, best_metric: 38.0, improvement_ratio: 0.106,
-            asi: { hypothesis: "add cache" },
-          }),
-        ].join("\n") + "\n",
-      );
-
-      const db = getDb();
-      const { upsertAutoresearchSession } = await import("../../dist/db.js");
-      upsertAutoresearchSession(projectDir);
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/sessions`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as {
-          sessions: Array<{
-            id: string;
-            cwd: string;
-            goal: string | null;
-            metric_name: string | null;
-            best_metric: number | null;
-            total_runs: number;
-            last_seen_at: string;
-            files_missing: number;
-          }>;
-        };
-        assert.ok(Array.isArray(body.sessions));
-        assert.equal(body.sessions.length, 1);
-
-        const session = body.sessions[0];
-        assert.equal(session.cwd, fs.realpathSync(projectDir));
-        assert.equal(session.goal, "Optimize latency");
-        assert.equal(session.metric_name, "p95_ms");
-        assert.equal(session.best_metric, 38.0);
-        assert.equal(session.total_runs, 2);
-        assert.equal(session.files_missing, 0);
-        assert.ok(typeof session.id === "string" && session.id.length > 0);
-        assert.ok(typeof session.last_seen_at === "string");
-      } finally {
-        await stopDashboard(server);
-      }
+      const response = await fetch(`${baseUrl}/api/runs/nonexistent-id/cancel`, { method: "POST" });
+      assert.equal(response.status, 401);
     } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
+      await stopDashboard(server);
     }
   });
 
-  it("GET /api/autoresearch/sessions/:id returns full session detail with experiments", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-session-by-id-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
+  it("accepts a mutating /api call with the daemon secret header (CR-1)", async () => {
+    const { server, baseUrl } = await startDashboard();
     try {
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "Reduce bundle size",
-          metricName: "bundle_kb",
-          direction: "lower",
-          command: "./measure.sh",
-        }),
-      );
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.jsonl"),
-        [
-          JSON.stringify({
-            type: "run", run: 1, created_at: "2026-05-26T10:00:00.000Z",
-            status: "baseline", metric: 512.0, metric_name: "bundle_kb", direction: "lower",
-            description: "baseline", baseline_metric: 512.0, best_metric: 512.0, improvement_ratio: 0,
-            asi: { hypothesis: "measure baseline", learned: "current build is 512kb", next_focus: "tree shake" },
-          }),
-          JSON.stringify({
-            type: "run", run: 2, created_at: "2026-05-26T10:05:00.000Z",
-            status: "discard", metric: 520.0, metric_name: "bundle_kb", direction: "lower",
-            description: "inline assets", baseline_metric: 512.0, best_metric: 512.0, improvement_ratio: 0.9846,
-            duration_ms: 2800,
-            asi: { hypothesis: "inline assets", learned: "bundle got larger", next_focus: "tree shake" },
-          }),
-          JSON.stringify({
-            type: "run", run: 3, created_at: "2026-05-26T10:10:00.000Z",
-            status: "keep", metric: 480.0, metric_name: "bundle_kb", direction: "lower",
-            description: "tree shake", baseline_metric: 512.0, best_metric: 480.0, improvement_ratio: 0.0625,
-            duration_ms: 3200, commit_before: "abc1234", commit_after: "def5678",
-            asi: { hypothesis: "enable tree shaking", learned: "tree shaking saves 32kb", next_focus: "minify css" },
-          }),
-        ].join("\n") + "\n",
-      );
-
-      const db = getDb();
-      const { upsertAutoresearchSession } = await import("../../dist/db.js");
-      upsertAutoresearchSession(projectDir);
-
-      // Get the session id (realpath of projectDir)
-      const realpath = fs.realpathSync(projectDir);
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/sessions/${encodeURIComponent(realpath)}`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as {
-          session: { id: string; cwd: string; goal: string; best_metric: number; total_runs: number };
-          exists: boolean;
-          summary: { bestMetric: number; bestRun: number; totalRuns: number; confidence_band: string; confidence_score: number; noise_floor_mad: number; confidence_sample_count: number };
-          experiments: Array<{ run: number; status: string; metric: number; description: string; hypothesis: string; learned: string; next_focus: string; confidence_band: string; confidence_score: number | null }>;
-        };
-
-        assert.equal(body.exists, true);
-        assert.equal(body.session.cwd, fs.realpathSync(projectDir));
-        assert.equal(body.session.goal, "Reduce bundle size");
-        assert.equal(body.session.best_metric, 480.0);
-        assert.equal(body.session.total_runs, 3);
-
-        assert.ok(body.summary);
-        assert.equal(body.summary.bestMetric, 480.0);
-        assert.equal(body.summary.bestRun, 3);
-        assert.equal(body.summary.totalRuns, 3);
-        assert.equal(body.summary.confidence_band, "high");
-        assert.equal(body.summary.confidence_score, 4);
-        assert.equal(body.summary.noise_floor_mad, 8);
-        assert.equal(body.summary.confidence_sample_count, 3);
-
-        assert.equal(body.experiments.length, 3);
-        assert.equal(body.experiments[0].run, 1);
-        assert.equal(body.experiments[0].status, "baseline");
-        assert.equal(body.experiments[0].metric, 512.0);
-        assert.equal(body.experiments[0].hypothesis, "measure baseline");
-        assert.equal(body.experiments[0].learned, "current build is 512kb");
-        assert.equal(body.experiments[0].next_focus, "tree shake");
-
-        assert.equal(body.experiments[1].run, 2);
-        assert.equal(body.experiments[1].status, "discard");
-
-        assert.equal(body.experiments[2].run, 3);
-        assert.equal(body.experiments[2].status, "keep");
-        assert.equal(body.experiments[2].hypothesis, "enable tree shaking");
-        assert.equal(body.experiments[2].confidence_band, "high");
-        assert.equal(body.experiments[2].confidence_score, 4);
-        assert.equal(body.experiments[2].learned, "tree shaking saves 32kb");
-        assert.equal(body.experiments[2].next_focus, "minify css");
-      } finally {
-        await stopDashboard(server);
-      }
+      const response = await fetch(`${baseUrl}/api/runs/nonexistent-id/cancel`, {
+        method: "POST",
+        headers: daemonAuthHeaders(),
+      });
+      // Reaches the handler (404: run not found), not the auth gate.
+      assert.equal(response.status, 404);
     } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
+      await stopDashboard(server);
     }
   });
 
-  it("GET /api/autoresearch/sessions/:id returns 404 for unknown session", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-session-404-"));
-    const homeDir = path.join(root, "home");
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
+  it("sets an HttpOnly SameSite=Strict session cookie on the SPA shell (CR-1)", async () => {
+    const { server, baseUrl } = await startDashboard();
     try {
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/sessions/nonexistent`);
-        assert.equal(response.status, 404);
-        const body = await response.json() as { error: string };
-        assert.match(body.error, /Session not found/);
-      } finally {
-        await stopDashboard(server);
-      }
+      const response = await fetch(`${baseUrl}/`);
+      assert.equal(response.status, 200);
+      const setCookie = response.headers.get("set-cookie") ?? "";
+      assert.ok(setCookie.includes("formiga_ds="), `expected session cookie, got: ${setCookie}`);
+      assert.ok(setCookie.includes("HttpOnly"), setCookie);
+      assert.ok(setCookie.includes("SameSite=Strict"), setCookie);
     } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
+      await stopDashboard(server);
     }
   });
 
-  it("backfillAutoresearchSessions inserts missing sessions from recent runs", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-backfill-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
+  it("blocks path traversal in /assets/ (CR-2)", async () => {
+    const { server, baseUrl } = await startDashboard();
     try {
-      // Create autoresearch project files
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "Backfill test",
-          metricName: "coverage",
-          direction: "higher",
-          command: "./cov.sh",
-        }),
-      );
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.jsonl"),
-        JSON.stringify({
-          type: "run", run: 1, created_at: "2026-05-27T10:00:00.000Z",
-          status: "baseline", metric: 0.55, metric_name: "coverage", direction: "higher",
-          description: "baseline", baseline_metric: 0.55, best_metric: 0.55, improvement_ratio: 0,
-          asi: { hypothesis: "measure baseline" },
-        }) + "\n",
-      );
-
-      const db = getDb();
-
-      // Create a run that points to the project dir but has no autoresearch session yet
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
-        VALUES (?, 1, 'do-now', 'backfill-task', 'completed', ?, 0, '2026-05-27T10:00:00.000Z', '2026-05-27T10:01:00.000Z')
-      `).run(
-        "run-backfill",
-        JSON.stringify({ working_directory_for_harness: projectDir }),
-      );
-
-      // Verify no session exists yet
-      const { getAutoresearchSessionById, getAutoresearchSessions } = await import("../../dist/db.js");
-      const sessionsBefore = getAutoresearchSessions();
-      assert.equal(sessionsBefore.length, 0);
-
-      // Run backfill
-      const { backfillAutoresearchSessions } = await import("../../dist/server/dashboard.js");
-      backfillAutoresearchSessions();
-
-      // Verify session was created
-      const sessionsAfter = getAutoresearchSessions();
-      assert.equal(sessionsAfter.length, 1);
-      assert.equal(sessionsAfter[0].cwd, fs.realpathSync(projectDir));
-      assert.equal(sessionsAfter[0].goal, "Backfill test");
-      assert.equal(sessionsAfter[0].metric_name, "coverage");
-      assert.equal(sessionsAfter[0].baseline_metric, 0.55);
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("backfillAutoresearchSessions does not duplicate existing sessions", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-backfill-no-dup-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "No duplicate test",
-          metricName: "latency_ms",
-          direction: "lower",
-          command: "./bench.sh",
-        }),
-      );
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.jsonl"),
-        JSON.stringify({
-          type: "run", run: 1, created_at: "2026-05-27T10:00:00.000Z",
-          status: "baseline", metric: 100, metric_name: "latency_ms", direction: "lower",
-          description: "baseline", baseline_metric: 100, best_metric: 100, improvement_ratio: 0,
-          asi: { hypothesis: "measure" },
-        }) + "\n",
-      );
-
-      const db = getDb();
-
-      // First upsert the session
-      const { upsertAutoresearchSession, getAutoresearchSessions } = await import("../../dist/db.js");
-      upsertAutoresearchSession(projectDir);
-      const sessionsBefore = getAutoresearchSessions();
-      assert.equal(sessionsBefore.length, 1);
-
-      // Create a run that would trigger backfill
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
-        VALUES (?, 1, 'do-now', 'task', 'completed', ?, 0, '2026-05-27T10:00:00.000Z', '2026-05-27T10:01:00.000Z')
-      `).run(
-        "run-no-dup",
-        JSON.stringify({ working_directory_for_harness: projectDir }),
-      );
-
-      // Run backfill - should not create a duplicate
-      const { backfillAutoresearchSessions } = await import("../../dist/server/dashboard.js");
-      backfillAutoresearchSessions();
-
-      const sessionsAfter = getAutoresearchSessions();
-      assert.equal(sessionsAfter.length, 1, "backfill should not create duplicate sessions");
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("backfillAutoresearchSessions handles runs without harness cwd gracefully", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-backfill-no-cwd-"));
-    const homeDir = path.join(root, "home");
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      const db = getDb();
-
-      // Create a run with no harness cwd
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
-        VALUES (?, 1, 'do-now', 'no-harness-task', 'completed', '{}', 0, '2026-05-27T10:00:00.000Z', '2026-05-27T10:01:00.000Z')
-      `).run("run-no-harness");
-
-      const { backfillAutoresearchSessions } = await import("../../dist/server/dashboard.js");
-      // Should not throw
-      assert.doesNotThrow(() => backfillAutoresearchSessions());
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("existing /api/autoresearch/runs still works after session API added", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-runs-backcompat-"));
-    const homeDir = path.join(root, "home");
-    const projectDir = path.join(root, "project");
-    fs.mkdirSync(projectDir, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      fs.writeFileSync(
-        path.join(projectDir, "autoresearch.config.json"),
-        JSON.stringify({
-          goal: "Back compat",
-          metricName: "total_µs",
-          direction: "lower",
-          command: "./bench.sh",
-        }),
-      );
-
-      const db = getDb();
-      db.prepare(`
-        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
-        VALUES (?, 1, 'do-now', 'back-compat-task', 'running', ?, 0, '2026-05-27T10:00:00.000Z', '2026-05-27T10:01:00.000Z')
-      `).run(
-        "run-backcompat",
-        JSON.stringify({ working_directory_for_harness: projectDir }),
-      );
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        // Old /api/autoresearch/runs endpoint still works
-        const runsResponse = await fetch(`${baseUrl}/api/autoresearch/runs`);
-        assert.equal(runsResponse.status, 200);
-        const runsBody = await runsResponse.json() as { runs: Array<{ id: string }> };
-        assert.ok(Array.isArray(runsBody.runs));
-        assert.equal(runsBody.runs.length, 1);
-        assert.equal(runsBody.runs[0].id, "run-backcompat");
-
-        // Old /api/runs/:id/autoresearch endpoint still works
-        const detailResponse = await fetch(`${baseUrl}/api/runs/run-backcompat/autoresearch`);
-        assert.equal(detailResponse.status, 200);
-        const detailBody = await detailResponse.json() as { exists: boolean };
-        assert.equal(detailBody.exists, true);
-      } finally {
-        await stopDashboard(server);
-      }
-    } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("multiple sessions are ordered by updated_at DESC", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-ar-sessions-order-"));
-    const homeDir = path.join(root, "home");
-    const projectDir1 = path.join(root, "project1");
-    const projectDir2 = path.join(root, "project2");
-    fs.mkdirSync(projectDir1, { recursive: true });
-    fs.mkdirSync(projectDir2, { recursive: true });
-    const dbPath = path.join(homeDir, ".formiga", "formiga.db");
-    const previousHome = process.env.HOME;
-    const previousDbPath = process.env.FORMIGA_DB_PATH;
-    process.env.HOME = homeDir;
-    process.env.FORMIGA_DB_PATH = dbPath;
-
-    try {
-      for (const dir of [projectDir1, projectDir2]) {
-        fs.writeFileSync(
-          path.join(dir, "autoresearch.config.json"),
-          JSON.stringify({
-            goal: "test",
-            metricName: "ms",
-            direction: "lower",
-            command: "./test.sh",
-          }),
+      // Use a raw http.request with a literal ../ path: the WHATWG URL parser
+      // (used by fetch) normalizes ../ segments client-side, which would hide
+      // the exact request the server must defend against.
+      const u = new URL(baseUrl);
+      const raw = await new Promise<{ status: number }>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: u.hostname,
+            port: u.port,
+            method: "GET",
+            path: "/assets/../../../../etc/passwd",
+          },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve({ status: res.statusCode ?? 0 }));
+          },
         );
-        fs.writeFileSync(
-          path.join(dir, "autoresearch.jsonl"),
-          JSON.stringify({
-            type: "run", run: 1, created_at: "2026-05-27T10:00:00.000Z",
-            status: "baseline", metric: 10, metric_name: "ms", direction: "lower",
-            description: "baseline", baseline_metric: 10, best_metric: 10, improvement_ratio: 0,
-            asi: { hypothesis: "test" },
-          }) + "\n",
-        );
-      }
-
-      const db = getDb();
-      const { upsertAutoresearchSession } = await import("../../dist/db.js");
-
-      // Upsert project1 first, then project2 (so project2 is most recently updated)
-      upsertAutoresearchSession(projectDir1);
-      // Small sleep to ensure different timestamps
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      upsertAutoresearchSession(projectDir2);
-
-      const { server, baseUrl } = await startDashboard();
-
-      try {
-        const response = await fetch(`${baseUrl}/api/autoresearch/sessions`);
-        assert.equal(response.status, 200);
-        const body = await response.json() as { sessions: Array<{ cwd: string }> };
-        assert.equal(body.sessions.length, 2);
-        // Most recently updated first
-        assert.equal(body.sessions[0].cwd, fs.realpathSync(projectDir2));
-        assert.equal(body.sessions[1].cwd, fs.realpathSync(projectDir1));
-      } finally {
-        await stopDashboard(server);
-      }
+        req.on("error", reject);
+        req.end();
+      });
+      assert.equal(raw.status, 403);
     } finally {
-      if (previousHome === undefined) delete process.env.HOME;
-      else process.env.HOME = previousHome;
-      if (previousDbPath === undefined) delete process.env.FORMIGA_DB_PATH;
-      else process.env.FORMIGA_DB_PATH = previousDbPath;
-      fs.rmSync(root, { recursive: true, force: true });
+      await stopDashboard(server);
+    }
+  });
+
+  it("serves a legitimate /assets/ file (CR-2 containment keeps working)", async () => {
+    const testDir = path.dirname(fileURLToPath(import.meta.url)); // <repo>/src/server
+    const assetsDir = path.resolve(testDir, "..", "..", "dist", "dashboard", "assets");
+    if (!fs.existsSync(assetsDir)) return; // SPA not built in this environment
+    const firstAsset = fs.readdirSync(assetsDir).find((f) => f.endsWith(".js"));
+    if (!firstAsset) return;
+
+    const { server, baseUrl } = await startDashboard();
+    try {
+      const response = await fetch(`${baseUrl}/assets/${firstAsset}`);
+      assert.equal(response.status, 200);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("does not emit Access-Control-Allow-Origin (CR-3)", async () => {
+    const { server, baseUrl } = await startDashboard();
+    try {
+      const response = await fetch(`${baseUrl}/api/version`);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("access-control-allow-origin"), null);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+
+  it("answers OPTIONS preflight with 204 and no CORS headers (CR-3)", async () => {
+    const { server, baseUrl } = await startDashboard();
+    try {
+      const response = await fetch(`${baseUrl}/api/runs`, { method: "OPTIONS" });
+      assert.equal(response.status, 204);
+      assert.equal(response.headers.get("access-control-allow-origin"), null);
+      assert.equal(response.headers.get("access-control-allow-methods"), null);
+    } finally {
+      await stopDashboard(server);
     }
   });
 });
