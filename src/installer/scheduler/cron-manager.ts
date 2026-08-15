@@ -493,6 +493,20 @@ export async function nudgeScheduledRuns(
       }
 
       // ── Launch polling round (fire-and-forget) ────────────────
+      // Re-check the in-flight marker right before launching (M-1). The guard
+      // above ran before the awaits (loadSpec, agent lookup); a timer tick may
+      // have started a round in the meantime and set the marker, in which case
+      // launching again would double-launch. executePollingRound also marks
+      // in-flight itself, so don't tryMarkJobInFlight here.
+      if (inFlightJobs.has(jobId)) {
+        result.skippedInFlight++;
+        result.jobs.push({
+          runId: info.runId,
+          agentId: info.agentId,
+          status: "skipped_in_flight",
+        });
+        continue;
+      }
       // tryMarkJobInFlight inside executePollingRound prevents
       // duplicate launches with near-simultaneous timer ticks.
       executePollingRound(info, agent, workflow).catch((err) => {
