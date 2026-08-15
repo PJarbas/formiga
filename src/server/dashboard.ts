@@ -48,6 +48,7 @@ import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, get
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
 import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse, LeaderboardEntry } from "../shared/dashboard-types.js";
 import { generateReproductionScript, buildReproductionPreamble } from "./script-templates.js";
+import { buildExperimentReportMarkdown } from "./report-builder.js";
 import {
   findActivePipelineRunId,
   getAgentUnifiedStatus,
@@ -1376,9 +1377,10 @@ function handleLeaderboardReport(
       return;
     }
 
+    // C2 — fetch the full row so the deterministic builder can reconstruct
+    // the report from the DB alone.
     const experiment = await prisma.experiment.findUnique({
       where: { experiment_id: experimentId },
-      select: { agent_name: true, run_id: true },
     });
     if (!experiment) {
       errorResponse(res, "Experiment not found", 404);
@@ -1400,25 +1402,57 @@ function handleLeaderboardReport(
       return;
     }
 
+    // Precedence: ml-pipeline agents with a real report file keep serving the
+    // file; arena agents (not in AGENT_REPORT_MAP) and missing files fall
+    // through to the DB builder — the 404 is gone.
     const agent = bareAgentName(experiment.agent_name);
     const reportFile = AGENT_REPORT_MAP[agent];
-    if (!reportFile) {
-      errorResponse(res, `No report mapping for agent: ${agent}`, 404);
-      return;
+    if (reportFile) {
+      const reportPath = path.join(workspace, "reports", reportFile);
+      if (isPathSafe(workspace, path.join("reports", reportFile))) {
+        try {
+          const content = await fs.promises.readFile(reportPath, "utf-8");
+          jsonResponse(res, { content, filename: reportFile });
+          return;
+        } catch { /* file missing → builder fallback */ }
+      }
     }
 
-    const reportPath = path.join(workspace, "reports", reportFile);
-    if (!isPathSafe(workspace, path.join("reports", reportFile))) {
-      errorResponse(res, "Forbidden", 403);
-      return;
-    }
-
+    let metricsJson: Record<string, unknown> = {};
+    try { metricsJson = JSON.parse(experiment.metrics_json ?? "{}"); } catch { /* keep empty */ }
+    let foldScores: number[] | null = null;
     try {
-      const content = await fs.promises.readFile(reportPath, "utf-8");
-      jsonResponse(res, { content, filename: reportFile });
-    } catch {
-      errorResponse(res, `Report file not found: ${reportFile}`, 404);
-    }
+      const parsed = JSON.parse(experiment.fold_scores ?? "null");
+      foldScores = Array.isArray(parsed) ? parsed : null;
+    } catch { /* keep null */ }
+
+    const { content, filename } = buildExperimentReportMarkdown({
+      workspace,
+      experiment: {
+        experiment_id: experiment.experiment_id,
+        run_id: experiment.run_id,
+        round_number: experiment.round_number,
+        agent_name: experiment.agent_name,
+        model_type: experiment.model_type,
+        model_algorithm: experiment.model_algorithm,
+        problem_type: experiment.problem_type,
+        metric_name: experiment.metric_name,
+        val_metric: experiment.val_metric,
+        train_metric: experiment.train_metric,
+        fold_scores: foldScores,
+        hypothesis: experiment.hypothesis,
+        learned: experiment.learned,
+        next_focus: experiment.next_focus,
+        metrics_json: metricsJson,
+        status: experiment.status,
+        error_message: experiment.error_message,
+        created_at:
+          typeof experiment.created_at === "string"
+            ? experiment.created_at
+            : new Date(experiment.created_at).toISOString(),
+      },
+    });
+    jsonResponse(res, { content, filename });
   })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
 }
 

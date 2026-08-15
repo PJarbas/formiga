@@ -445,6 +445,7 @@ export async function runArena(
       ece_calibrated: rich?.eceCalibrated ?? null,
       notes: rich?.notes ?? null,
       category: rich?.category ?? null,
+      feature_importances: rich?.featureImportances ?? null,
     });
     result.experimentId = experimentId;
   }
@@ -692,6 +693,7 @@ export async function runArena(
             ece_calibrated: richMetrics.eceCalibrated ?? null,
             notes: richMetrics.notes ?? null,
             category: richMetrics.category ?? null,
+            feature_importances: richMetrics.featureImportances ?? null,
             iteration_team: iterationTeam,
           });
           // Track dedup signature — metric is guaranteed non-null by the
