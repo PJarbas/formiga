@@ -249,15 +249,21 @@ export function buildExperimentReportMarkdown(ctx: ReportBuilderContext): BuildR
     ? ["", "> **Nota:** experimento registrado como falha — " + exp.error_message, ""].join("\n")
     : "";
 
-  const content =
-    header.join("\n") +
-    summary +
-    baseline +
-    buildMetricsSection(exp) +
-    buildFoldsSection(exp.fold_scores) +
-    buildReflectionSection(exp) +
-    buildTopFeaturesSection(exp.metrics_json) +
-    notes;
+  // Join blocks with "\n" so the `---` header terminator always lands on its
+  // own line — the dashboard parser treats a lone `---` as the end of the
+  // header, and `---## Seção` on one line would swallow every section.
+  const content = [
+    header.join("\n"),
+    summary,
+    baseline,
+    buildMetricsSection(exp),
+    buildFoldsSection(exp.fold_scores),
+    buildReflectionSection(exp),
+    buildTopFeaturesSection(exp.metrics_json),
+    notes,
+  ]
+    .filter((b) => typeof b === "string" && b.length > 0)
+    .join("\n");
 
   return {
     content,

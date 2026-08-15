@@ -52,7 +52,7 @@ function resolveModelImport(modelType: string): string {
  * Regressor. Defaults to the Regressor branch for unknown problem types
  * (back-compat with the pre-B2 behavior).
  */
-function resolveModelClass(modelType: string, problemType?: string | null): string {
+export function resolveModelClass(modelType: string, problemType?: string | null): string {
   const key = modelType.toLowerCase().replace(/[^a-z]/g, "");
   const isClassification = problemType?.toLowerCase() === "classification";
   if (key.includes("xgboost") || key.includes("xgb")) return isClassification ? "XGBClassifier" : "XGBRegressor";
@@ -71,46 +71,53 @@ function resolveModelClass(modelType: string, problemType?: string | null): stri
 /**
  * Resolve the sklearn evaluator for the configured metric.
  *
- * Returns `{ name, usesProba, needsAverage }`:
+ * Returns `{ name, usesProba, needsAverage, todo }`:
  * - `usesProba` — roc_auc/log_loss score class probabilities, so the
  *   reproduction script must call `predict_proba(...)[:, 1]` instead of
  *   `predict(...)`.
  * - `needsAverage` — multiclass-safe scoring with `average="macro"`.
+ * - `todo` — the metric was not mapped; the generated script must carry an
+ *   explicit `# TODO` so the fallback is visible, never silent.
  */
-function resolveEvaluator(
+export function resolveEvaluator(
   metricName: string,
   problemType?: string | null,
-): { name: string; usesProba: boolean; needsAverage: boolean } {
+): { name: string; usesProba: boolean; needsAverage: boolean; todo: boolean } {
   const mn = metricName.toLowerCase().replace(/[^a-z0-9_]/g, "");
   const isClassification = problemType?.toLowerCase() === "classification";
 
-  if (mn === "accuracy") return { name: "accuracy_score", usesProba: false, needsAverage: false };
-  if (["f1", "f1_score", "f1_macro"].includes(mn)) return { name: "f1_score", usesProba: false, needsAverage: true };
-  if (mn === "precision") return { name: "precision_score", usesProba: false, needsAverage: true };
-  if (mn === "recall") return { name: "recall_score", usesProba: false, needsAverage: true };
-  if (["roc_auc", "auc"].includes(mn)) return { name: "roc_auc_score", usesProba: true, needsAverage: false };
-  if (["log_loss", "logloss"].includes(mn)) return { name: "log_loss", usesProba: true, needsAverage: false };
+  if (mn === "accuracy") return { name: "accuracy_score", usesProba: false, needsAverage: false, todo: false };
+  if (["f1", "f1_score", "f1_macro"].includes(mn)) return { name: "f1_score", usesProba: false, needsAverage: true, todo: false };
+  if (mn === "precision") return { name: "precision_score", usesProba: false, needsAverage: true, todo: false };
+  if (mn === "recall") return { name: "recall_score", usesProba: false, needsAverage: true, todo: false };
+  if (["roc_auc", "auc"].includes(mn)) return { name: "roc_auc_score", usesProba: true, needsAverage: false, todo: false };
+  if (["log_loss", "logloss"].includes(mn)) return { name: "log_loss", usesProba: true, needsAverage: false, todo: false };
 
   // Regression metrics — used regardless of problemType for regression
   // datasets, but also as the default fallback when the metric is unknown.
-  if (mn === "rmse") return { name: "rmse", usesProba: false, needsAverage: false };
+  if (mn === "rmse") return { name: "rmse", usesProba: false, needsAverage: false, todo: false };
   if (!isClassification && (mn === "mse" || mn === "mean_squared_error")) {
-    return { name: "mean_squared_error", usesProba: false, needsAverage: false };
+    return { name: "mean_squared_error", usesProba: false, needsAverage: false, todo: false };
   }
   if (["mae", "mean_absolute_error"].includes(mn)) {
-    return { name: "mean_absolute_error", usesProba: false, needsAverage: false };
+    return { name: "mean_absolute_error", usesProba: false, needsAverage: false, todo: false };
   }
-  if (["r2", "r2_score"].includes(mn)) return { name: "r2_score", usesProba: false, needsAverage: false };
+  if (["r2", "r2_score"].includes(mn)) return { name: "r2_score", usesProba: false, needsAverage: false, todo: false };
 
   // Unknown metric — fall back to RMSE/R² with an explicit TODO so the user
   // can see the metric was not mapped, rather than silently scoring wrong.
-  return { name: "rmse", usesProba: false, needsAverage: false };
+  return { name: "rmse", usesProba: false, needsAverage: false, todo: true };
 }
 
 /** Python fragment computing the configured metric on (y_true, preds). */
 function evaluatorExpr(metricName: string, problemType?: string | null): string {
   const ev = resolveEvaluator(metricName, problemType);
-  if (ev.name === "rmse") return `float(np.sqrt(mean_squared_error(y_true, preds)))`;
+  if (ev.name === "rmse") {
+    const expr = "float(np.sqrt(mean_squared_error(y_true, preds)))";
+    return ev.todo
+      ? `${expr}  # TODO: métrica "${metricName}" não mapeada — usando RMSE como fallback`
+      : expr;
+  }
   const avg = ev.needsAverage ? ', average="macro", zero_division=0' : "";
   return `${ev.name}(y_true, preds${avg})`;
 }

@@ -24,8 +24,8 @@ const SCRIPT_DIR = "artifacts/models";
  * `effectiveScriptTimeoutMs`.
  */
 export const SCRIPT_TIMEOUT_FLOOR_MS = 300_000;
-const BENCHMARK_TIMEOUT_MS = 300_000;
-const TRAIN_TIMEOUT_MS = 300_000;
+export const BENCHMARK_TIMEOUT_MS = 300_000;
+export const TRAIN_TIMEOUT_MS = 300_000;
 
 /**
  * Effective wall-clock timeout for a script execution (A6).
@@ -140,7 +140,7 @@ function buildBudgetEnv(base: NodeJS.ProcessEnv, budget: ComputeBudget | undefin
  * the CPU cap raises SIGXCPU, killing a runaway grid even if the wall-clock
  * timeout (#89) is slow. Returns null on non-POSIX platforms.
  */
-function buildRlimitPrelude(budget: ComputeBudget | undefined): string | null {
+export function buildRlimitPrelude(budget: ComputeBudget | undefined): string | null {
   if (!budget || process.platform === "win32") return null;
   // A6 floor: CPU-time cap never below the 5-minute wall-clock floor — the
   // tier tiny budget (maxFitSeconds=30) would otherwise SIGXCPU the process
@@ -1200,7 +1200,7 @@ export function validateRichMetrics(
  * Never throws — missing/corrupt files degrade to `{ rich: {}, error }` so
  * the caller can decide whether to fail-fast (only on a successful benchmark).
  */
-function tryLoadRichMetrics(
+export function tryLoadRichMetrics(
   workspacePath: string,
   agentId: string,
   round: number,

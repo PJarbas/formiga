@@ -1261,6 +1261,10 @@ function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
     rejectedAt: (r.rejected_at as string | null) ?? null,
     rejectReason: (r.reject_reason as string | null) ?? null,
     artifactPath: (r.artifact_path as string | null) ?? null,
+    // Arena failure reason + machine exit code so a contract break
+    // (`[script_missing]`/`-2`) is distinguishable from a runtime crash (`1`).
+    errorMessage: (r.error_message as string | null) ?? null,
+    benchmarkExitCode: (r.benchmark_exit_code as number | null) ?? null,
     decision: (r.decision as string | null) ?? null,
     confidenceScore: (r.confidence_score as number | null) ?? null,
     confidenceBand: (r.confidence_band as string | null) ?? null,
