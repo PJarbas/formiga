@@ -12,6 +12,7 @@ import http from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { createDashboardServer } from "../../dist/server/dashboard.js";
 import { initLeaderboardSchema } from "../../dist/leaderboard/schema.js";
+import { daemonAuthHeaders } from "../../dist/server/test-auth.js";
 
 async function startDashboard(): Promise<{ server: http.Server; baseUrl: string }> {
   const server = await createDashboardServer(0);
@@ -237,12 +238,15 @@ describe("ML Dashboard API", () => {
 
   // ── /api/agents ─────────────────────────────────────────────────
 
-  it("GET /api/agents returns all 5 agents", async () => {
+  it("GET /api/agents returns all 8 registered agents", async () => {
     const data = await fetchJSON(`${baseUrl}/api/agents`) as Array<Record<string, unknown>>;
-    assert.equal(data.length, 5);
+    assert.equal(data.length, 8);
     const names = data.map((a) => a.name);
     assert.ok(names.includes("data-analyst"));
     assert.ok(names.includes("ml-critic"));
+    assert.ok(names.includes("arena-modeler-classic"));
+    assert.ok(names.includes("arena-modeler-advanced"));
+    assert.ok(names.includes("reporter"));
     // Each agent should have currentStatus field
     for (const agent of data) {
       assert.ok(typeof agent.currentStatus === "string");
@@ -467,13 +471,22 @@ describe("ML Dashboard API", () => {
   // ── /api/pipeline/control ───────────────────────────────────────
 
   it("POST /api/pipeline/pause returns 502 when daemon unavailable", async () => {
-    const resp = await fetch(`${baseUrl}/api/pipeline/pause`, { method: "POST" });
-    // 502 = Daemon unreachable (no daemon running in tests, but run exists)
-    assert.equal(resp.status, 502);
+    // Point the control client at an unused port so the test is hermetic
+    // (a live daemon on the real control port would answer 200 instead).
+    const prevControlPort = process.env.FORMIGA_CONTROL_PORT;
+    process.env.FORMIGA_CONTROL_PORT = "19999";
+    try {
+      const resp = await fetch(`${baseUrl}/api/pipeline/pause`, { method: "POST", headers: daemonAuthHeaders() });
+      // 502 = Daemon unreachable (no daemon running in tests, but run exists)
+      assert.equal(resp.status, 502);
+    } finally {
+      if (prevControlPort === undefined) delete process.env.FORMIGA_CONTROL_PORT;
+      else process.env.FORMIGA_CONTROL_PORT = prevControlPort;
+    }
   });
 
   it("POST /api/pipeline/cancel returns 500 or 200 depending on daemon", async () => {
-    const resp = await fetch(`${baseUrl}/api/pipeline/cancel`, { method: "POST" });
+    const resp = await fetch(`${baseUrl}/api/pipeline/cancel`, { method: "POST", headers: daemonAuthHeaders() });
     // 500 = stopWorkflow fails without daemon, 200 = success
     assert.ok(resp.status === 500 || resp.status === 200);
   });

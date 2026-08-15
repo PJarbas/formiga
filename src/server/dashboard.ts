@@ -39,6 +39,7 @@ import { getPrisma } from "../database/prisma.js";
 import { getRecentEvents, getRunEvents, readEventsFromCursor, type EventCursorSource } from "../installer/events.js";
 import { formatLogsTailLines } from "../installer/logs-tail-format.js";
 import { pauseRunWithDaemon, resumeRunWithDaemon } from "./control-client.js";
+import { ensureDaemonSecret, timingSafeSecretEquals } from "./control-server.js";
 import { runWorkflow } from "../installer/run.js";
 import { stopWorkflow, deleteWorkflow, getWorkflowStatus } from "../installer/status.js";
 import { getBuildVersion } from "../lib/version.js";
@@ -71,12 +72,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Always serve the built dashboard (vite output), regardless of source or dist runtime.
 const DASHBOARD_DIST = path.resolve(__dirname, "..", "..", "dist", "dashboard");
 
+// CR-1: bind loopback by default. Override only for intentional LAN exposure
+// (e.g. FORMIGA_DASHBOARD_HOST=0.0.0.0 behind a reverse proxy). When bound to
+// a non-loopback host, every /api/* request requires the daemon secret.
+const DASHBOARD_HOST = process.env.FORMIGA_DASHBOARD_HOST?.trim() || "127.0.0.1";
+const DASHBOARD_HOST_LOOPBACK = ["127.0.0.1", "localhost", "::1"].includes(DASHBOARD_HOST);
+const DASHBOARD_SECRET_COOKIE = "formiga_ds";
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
+// CR-3: no `Access-Control-Allow-Origin` — the SPA is served same-origin by
+// this server, so it needs no CORS. Omitting the header makes cross-origin
+// reads from a malicious page fail in the browser.
 function jsonResponse(res: http.ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
   });
   res.end(JSON.stringify(data));
 }
@@ -84,7 +94,6 @@ function jsonResponse(res: http.ServerResponse, data: unknown, status = 200): vo
 function binaryResponse(res: http.ServerResponse, content: Buffer, mime: string, status = 200): void {
   res.writeHead(status, {
     "Content-Type": mime,
-    "Access-Control-Allow-Origin": "*",
   });
   res.end(content);
 }
@@ -2806,20 +2815,30 @@ const MIME_TYPES: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-function serveStaticFile(res: http.ServerResponse, filePath: string): void {
+function serveStaticFile(res: http.ServerResponse, filePath: string, expectedSecret: string | null = null): void {
   try {
     const content = fs.readFileSync(filePath);
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, {
+    const headers: Record<string, string> = {
       "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream",
       "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=3600",
-    });
+    };
+    if (expectedSecret && ext === ".html") {
+      // CR-1: persist the session cookie on the SPA shell so the browser
+      // sends it with every same-origin /api call.
+      headers["Set-Cookie"] = `${DASHBOARD_SECRET_COOKIE}=${expectedSecret}; HttpOnly; SameSite=Strict; Path=/`;
+    }
+    res.writeHead(200, headers);
     res.end(content);
   } catch {
     // SPA fallback: serve index.html for any unmatched paths
     try {
       const indexHtml = fs.readFileSync(path.join(DASHBOARD_DIST, "index.html"));
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      const headers: Record<string, string> = { "Content-Type": "text/html; charset=utf-8" };
+      if (expectedSecret) {
+        headers["Set-Cookie"] = `${DASHBOARD_SECRET_COOKIE}=${expectedSecret}; HttpOnly; SameSite=Strict; Path=/`;
+      }
+      res.writeHead(200, headers);
       res.end(indexHtml);
     } catch {
       errorResponse(res, "Dashboard not built. Run npm run build:dashboard first.", 503);
@@ -2827,19 +2846,38 @@ function serveStaticFile(res: http.ServerResponse, filePath: string): void {
   }
 }
 
+// ── Port auth (CR-1) ─────────────────────────────────────────────────
+
+function extractCookie(req: http.IncomingMessage, name: string): string | null {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
+  }
+  return null;
+}
+
+/** Accepts the daemon secret via `x-formiga-secret` header or `formiga_ds` cookie. */
+function dashboardAuthValid(req: http.IncomingMessage, expectedSecret: string): boolean {
+  const header = req.headers["x-formiga-secret"];
+  const got = Array.isArray(header) ? header[0] : header;
+  const candidate = got ?? extractCookie(req, DASHBOARD_SECRET_COOKIE);
+  if (!candidate) return false;
+  return timingSafeSecretEquals(candidate, expectedSecret);
+}
+
 // ── Router ───────────────────────────────────────────────────────────
 
-function route(req: http.IncomingMessage, res: http.ServerResponse): void {
+function route(req: http.IncomingMessage, res: http.ServerResponse, expectedSecret: string): void {
   const url = req.url ?? "/";
   const method = req.method ?? "GET";
 
-  // CORS preflight
+  // CR-3: respond 204 with NO Access-Control-Allow-* headers so the browser
+  // rejects cross-origin preflights (the SPA is same-origin, needs no CORS).
   if (method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    });
+    res.writeHead(204, { "Cache-Control": "no-store" });
     res.end();
     return;
   }
@@ -2847,9 +2885,29 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // Parse URL path (strip query string)
   const pathname = url.split("?")[0];
 
+  // ── Port auth gate ──────────────────────────────────────────────────
+  // Loopback bound: require the daemon secret on mutating /api/* routes — a
+  // barrier against CSRF "drive-by" writes from a malicious website aimed at
+  // localhost. Non-loopback bound (explicit override): require it on every
+  // /api/* request. The /mcp HTTP transport is intentionally left out of this
+  // gate: it is covered by the loopback bind and external MCP clients do not
+  // yet send the secret (follow-up).
+  const isApi = pathname.startsWith("/api/");
+  const requiresAuth =
+    isApi &&
+    (method === "POST" ||
+      method === "PUT" ||
+      method === "PATCH" ||
+      method === "DELETE" ||
+      !DASHBOARD_HOST_LOOPBACK);
+  if (requiresAuth && !dashboardAuthValid(req, expectedSecret)) {
+    errorResponse(res, "Unauthorized", 401);
+    return;
+  }
+
   // React SPA default
   if (method === "GET" && pathname === "/") {
-    serveStaticFile(res, path.join(DASHBOARD_DIST, "index.html"));
+    serveStaticFile(res, path.join(DASHBOARD_DIST, "index.html"), expectedSecret);
     return;
   }
 
@@ -2875,6 +2933,12 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // GET /api/version (registered before /api/version-status to avoid prefix conflict)
   if (method === "GET" && pathname === "/api/version") {
     handleVersion(req, res);
+    return;
+  }
+
+  // GET /api/stats
+  if (method === "GET" && pathname === "/api/stats") {
+    handleStats(req, res);
     return;
   }
 
@@ -3228,15 +3292,23 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
     return;
   }
 
-  // Also serve /assets/ from dashboard dist (Vite output)
+  // CR-2: serve /assets/ from dashboard dist only, with path containment.
+  // `pathname` is raw (no normalization), so traversal segments are stripped
+  // and the resolved path is verified to stay inside DASHBOARD_DIST.
   if (pathname.startsWith("/assets/")) {
-    serveStaticFile(res, path.join(DASHBOARD_DIST, pathname));
+    const rel = decodeURIComponent(pathname).replace(/^\/+/, "");
+    const full = path.join(DASHBOARD_DIST, rel);
+    if (!isPathSafe(DASHBOARD_DIST, full)) {
+      errorResponse(res, "Forbidden", 403);
+      return;
+    }
+    serveStaticFile(res, full, expectedSecret);
     return;
   }
 
   // ━━ React SPA catch-all for non-API routes ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   if (method === "GET" && !pathname.startsWith("/api/")) {
-    serveStaticFile(res, path.join(DASHBOARD_DIST, "index.html"));
+    serveStaticFile(res, path.join(DASHBOARD_DIST, "index.html"), expectedSecret);
     return;
   }
 
@@ -3253,13 +3325,17 @@ export interface DashboardServerOptions {
 export async function createDashboardServer(port: number, options: DashboardServerOptions = {}): Promise<http.Server> {
   await initDatabase();
 
+  // CR-1: share the control-plane daemon secret so the dashboard and the
+  // control server authenticate against the same credential.
+  const expectedSecret = ensureDaemonSecret();
+
   // Wire the status-registry logger so unknown statuses are visible
   const { setStatusLogger } = await import("../shared/status-registry.js");
   setStatusLogger(logger);
 
   const server = http.createServer((req, res) => {
     try {
-      route(req, res);
+      route(req, res, expectedSecret);
     } catch (err) {
       console.error("Unhandled dashboard error:", err);
       if (!res.headersSent) {
@@ -3268,8 +3344,15 @@ export async function createDashboardServer(port: number, options: DashboardServ
     }
   });
 
-  server.listen(port, () => {
-    console.log(`Formiga dashboard listening on http://localhost:${port}`);
+  // B-10: bound socket timeouts so slow or dead clients cannot pin
+  // connections open. requestTimeout only covers receiving the request,
+  // so SSE/activity streams are unaffected.
+  server.requestTimeout = 60_000;
+  server.headersTimeout = 65_000;
+  server.keepAliveTimeout = 5_000;
+
+  server.listen(port, DASHBOARD_HOST, () => {
+    console.log(`Formiga dashboard listening on http://${DASHBOARD_HOST}:${port}`);
   });
 
   server.on("error", (err: NodeJS.ErrnoException) => {
