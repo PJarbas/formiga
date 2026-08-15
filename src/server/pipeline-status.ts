@@ -301,8 +301,9 @@ export async function getAgentRoundSummaries(
   }>
 > {
   const prisma = getPrisma();
+  const baseName = bareAgentName(agentName);
   const rows = await prisma.experiment.findMany({
-    where: { run_id: runId, agent_name: { endsWith: `_${agentName}` } },
+    where: { run_id: runId, agent_name: { in: [agentName, baseName] } },
     orderBy: { round_number: "asc" },
     select: {
       round_number: true,
