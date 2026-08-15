@@ -251,18 +251,18 @@ async function fireWebhook(evt: FormigaEvent): Promise<void> {
   const payload = JSON.stringify(evt);
 
   // Use global fetch (Node 18+)
+  const controller = new AbortController();
+  // B-5: the timeout must be cleared even when fetch throws, otherwise the
+  // 10s timer keeps the event loop alive (and may fire after the request
+  // already settled, aborting a reused AbortSignal).
+  const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-
     await fetch(notifyUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
       signal: controller.signal,
     });
-
-    clearTimeout(timeout);
   } catch (err) {
     // Fire-and-forget: log and move on
     logger.warn("Webhook POST failed", {
@@ -271,5 +271,7 @@ async function fireWebhook(evt: FormigaEvent): Promise<void> {
       runId: evt.runId,
       error: String(err),
     });
+  } finally {
+    clearTimeout(timeout);
   }
 }

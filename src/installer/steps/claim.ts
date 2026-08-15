@@ -90,11 +90,14 @@ const CLEANUP_THROTTLE_MS = 5 * 60 * 1000;
  * Find and claim a pending step for an agent, returning the resolved input.
  */
 export async function claimStep(agentId: string, runId: string, workerOwnership?: WorkerOwnership): Promise<ClaimResult> {
-  // Throttle cleanup: run at most once every 5 minutes across all agents
+  // Throttle cleanup: run at most once every 5 minutes across all agents.
+  // B-4: stamp lastCleanupTime BEFORE awaiting so concurrent claims don't
+  // all pass the gate while a slow cleanup is still running (stampede).
+  // Accepted tradeoff: a failed cleanup won't be retried for 5 minutes.
   const nowMs = Date.now();
   if (nowMs - lastCleanupTime >= CLEANUP_THROTTLE_MS) {
-    await cleanupAbandonedSteps();
     lastCleanupTime = nowMs;
+    await cleanupAbandonedSteps();
   }
   const prisma = getPrisma();
 
