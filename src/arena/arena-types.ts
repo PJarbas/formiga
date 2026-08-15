@@ -10,6 +10,8 @@ export type ConfidenceBand = "high" | "medium" | "low" | "unknown";
 
 export interface ArenaConfig {
   runId: string;
+  /** Workflow id that owns this run — used to resolve provisioned agent personas. */
+  workflowId?: string;
   workspacePath: string;
   benchmarkScript?: string;
   checksScript?: string;

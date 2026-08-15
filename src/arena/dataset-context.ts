@@ -5,6 +5,8 @@
 
 import path from "node:path";
 import fs from "node:fs";
+import { logger } from "../lib/logger.js";
+import { parseBenchmarkConfig } from "./benchmark-config.js";
 
 export interface DatasetContext {
   rows: number | null;
@@ -155,22 +157,20 @@ function readBenchmarkMeta(workspace: string): {
     if (!fs.existsSync(p)) continue;
     try {
       const raw = JSON.parse(fs.readFileSync(p, "utf-8"));
-      const problemType = raw.problemType ?? raw.type ?? null;
-      let metricName: string | null = null;
-      let metricDirection: "lower" | "higher" | null = null;
-      if (typeof raw.metric === "string") {
-        metricName = raw.metric;
-        const dir = raw.direction ?? raw.metric_direction;
-        metricDirection = dir === "lower" || dir === "minimize" ? "lower" :
-          dir === "higher" || dir === "maximize" ? "higher" : null;
-      } else if (raw.metric && typeof raw.metric === "object") {
-        metricName = raw.metric.name ?? null;
-        const dir = raw.metric.direction;
-        metricDirection = dir === "lower" || dir === "minimize" ? "lower" :
-          dir === "higher" || dir === "maximize" ? "higher" : null;
+      // Contract A5: structured parse — an invalid config is warned and
+      // degrades to null fields, never silently misread.
+      const parsed = parseBenchmarkConfig(raw);
+      if (!parsed.ok) {
+        logger.warn(`[benchmark_config_invalid] ${parsed.error}`, { workspace });
+        return { problemType: null, metricName: null, metricDirection: null, targetColumn: null };
       }
       const targetColumn = raw.data?.targetColumn ?? raw.target_column ?? null;
-      return { problemType, metricName, metricDirection, targetColumn };
+      return {
+        problemType: parsed.value.problemType,
+        metricName: parsed.value.metricName,
+        metricDirection: parsed.value.metricDirection,
+        targetColumn,
+      };
     } catch { /* continue */ }
   }
   return { problemType: null, metricName: null, metricDirection: null, targetColumn: null };

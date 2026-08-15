@@ -104,9 +104,9 @@ export interface ArenaExperiment {
   model_type: string;
   model_algorithm?: string | null;
   hyperparameters?: Record<string, unknown>;
-  hypothesis?: string;
-  learned?: string;
-  next_focus?: string;
+  hypothesis?: string | null;
+  learned?: string | null;
+  next_focus?: string | null;
   measured_metric: number | null;
   train_metric?: number | null;
   benchmark_stdout?: string;
@@ -116,12 +116,14 @@ export interface ArenaExperiment {
   confidence_band?: ConfidenceBand;
   decision?: ArenaDecision;
   duration_ms?: number;
-  artifact_script?: string;
+  artifact_script?: string | null;
   metric_name: string;
   artifact_path: string;
   metric_bag?: MetricBag;
   problem_type?: string | null;
   status?: string;
+  /** Human-readable failure reason (e.g. `[script_missing] ...`). Null on success. */
+  error_message?: string | null;
   // ── Journal/ledger fields ──
   fold_scores?: number[];
   train_score?: number | null;
@@ -209,6 +211,7 @@ function fromArenaExperiment(entry: ArenaExperiment) {
     benchmark_stdout: entry.benchmark_stdout ?? null,
     benchmark_stderr: entry.benchmark_stderr ?? null,
     benchmark_exit_code: entry.benchmark_exit_code ?? null,
+    error_message: entry.error_message ?? null,
     confidence_score: entry.confidence_score ?? null,
     confidence_band: entry.confidence_band ?? null,
     decision: entry.decision ?? null,
