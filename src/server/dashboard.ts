@@ -47,7 +47,7 @@ import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
 import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse, LeaderboardEntry } from "../shared/dashboard-types.js";
-import { generateReproductionScript } from "./script-templates.js";
+import { generateReproductionScript, buildReproductionPreamble } from "./script-templates.js";
 import {
   findActivePipelineRunId,
   getAgentUnifiedStatus,
@@ -1458,6 +1458,42 @@ function handleLeaderboardScript(
       return;
     }
 
+    // B1: prefer the real arena script when the ledger points to a file that
+    // still exists inside the workspace. This is the actual code the agent
+    // produced — far more faithful than the generated template. Falls through
+    // to the template when the file is gone or the path is unsafe.
+    const artifactScript = experiment.artifact_script;
+    if (artifactScript && artifactScript.trim().length > 0) {
+      const resolvedArtifact = path.isAbsolute(artifactScript)
+        ? artifactScript
+        : path.join(workspace, artifactScript);
+      if (isPathSafe(workspace, resolvedArtifact)) {
+        try {
+          const realScript = await fs.promises.readFile(resolvedArtifact, "utf-8");
+          if (realScript.trim().length > 0) {
+            let preambleHp: Record<string, unknown> = {};
+            try { preambleHp = JSON.parse(experiment.hyperparameters); } catch { /* empty */ }
+            const preamble = buildReproductionPreamble({
+              experimentId: String(experiment.experiment_id),
+              modelType: experiment.model_type,
+              hyperparameters: preambleHp,
+              cvMean: experiment.val_metric,
+              trainMean: experiment.train_metric,
+              artifactPath: experiment.artifact_path,
+              metricName: experiment.metric_name,
+              features: [],
+              workspacePath: workspace,
+              problemType: experiment.problem_type ?? null,
+            });
+            const agentSlug = (bareAgentName(experiment.agent_name) || "model").toLowerCase().replace(/[^a-z0-9]/g, "_");
+            const filename = `reproduce_${agentSlug}_${experiment.experiment_id}.py`;
+            jsonResponse(res, { script: preamble + "\n" + realScript, filename, language: "python" });
+            return;
+          }
+        } catch { /* fall through to generated template */ }
+      }
+    }
+
     let features: string[] = [];
     try {
       const featuresParquet = path.join(workspace, "artifacts", "features.parquet");
@@ -1485,6 +1521,7 @@ function handleLeaderboardScript(
       metricName: experiment.metric_name,
       features,
       workspacePath: workspace,
+      problemType: experiment.problem_type ?? null,
     });
 
     const filename = `reproduce_${experiment.model_type.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${experiment.experiment_id}.py`;
