@@ -113,7 +113,14 @@ export function extractTokenUsage(usageLike: unknown): number | null {
   return normalizeTokenUsage(total);
 }
 
-function collectTextFragments(value: unknown, sink: string[], depth = 0): void {
+/**
+ * Collect every non-empty string leaf reachable from `value` (depth-limited).
+ * Shared with StreamingMetadataExtractor: pi's tool events often nest a JSON
+ * string (with run/step IDs) inside a `text` field; walking the parsed object
+ * yields the un-escaped `{"stepId":"...","runId":"..."}` form that the field
+ * regexes can match.
+ */
+export function collectTextFragments(value: unknown, sink: string[], depth = 0): void {
   if (depth > 6 || value === null || value === undefined) return;
 
   if (typeof value === "string") {

@@ -72,12 +72,15 @@ describe("run token observability end-to-end (US-005 integration verification)",
             "INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 2, ?, 'Secondary token flow', 'running', '{}', 5, ?, ?)"
           ).run(runB, workflowId, now, now);
 
+          // 'waiting' steps keep every polling round firing (pending-work gate
+          // passes) without being claimed/completed — all 4 rounds must run
+          // even though there is no claimable work.
           db.prepare(
-            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement-primary', 'wf_token_observability_dev', 0, '', '', 'running', ?, ?)"
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement-primary', 'wf_token_observability_dev', 0, '', '', 'waiting', ?, ?)"
           ).run(stepA, runA, now, now);
 
           db.prepare(
-            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement-secondary', 'wf_token_observability_dev', 1, '', '', 'running', ?, ?)"
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement-secondary', 'wf_token_observability_dev', 1, '', '', 'waiting', ?, ?)"
           ).run(stepB, runB, now, now);
 
           const fakePiPath = path.join(process.env.HOME, "fake-pi");
@@ -229,7 +232,7 @@ describe("run token observability end-to-end (US-005 integration verification)",
             encoding: "utf-8",
           });
 
-          const server = createDashboardServer(0);
+          const server = await createDashboardServer(0);
           if (!server.listening) {
             await once(server, "listening");
           }

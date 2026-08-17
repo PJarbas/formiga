@@ -64,7 +64,7 @@ describe("run terminal lifecycle token events", () => {
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 41, ?, ?)"
           ).run(runId, now, now);
 
-          const outcome = advancePipeline(runId);
+          const outcome = await advancePipeline(runId);
 
           const eventsPath = path.join(process.env.HOME, ".formiga", "events", runId + ".jsonl");
           const events = fs.readFileSync(eventsPath, "utf-8").split(/\\r?\\n/).filter(Boolean).map((line) => JSON.parse(line));

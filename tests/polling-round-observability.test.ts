@@ -51,7 +51,9 @@ function captureLoggerCalls(): {
 
 /**
  * Insert a synthetic running run so executePollingRound's run-status check
- * passes. Returns a cleanup callback.
+ * passes, plus a `waiting` step so the pending-work gate passes and the round
+ * actually fires (without the step being claimed/completed). Returns a
+ * cleanup callback.
  */
 function seedRunningRun(workflowId: string): { runId: string; cleanup: () => void } {
   const db = getDb();
@@ -60,10 +62,14 @@ function seedRunningRun(workflowId: string): { runId: string; cleanup: () => voi
   db.prepare(
     "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, ?, 'observability-test', 'running', '{}', 0, ?, ?)",
   ).run(runId, workflowId, ts, ts);
+  db.prepare(
+    "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'observability-step', 'wf_developer', 0, '', '', 'waiting', ?, ?)",
+  ).run(crypto.randomUUID(), runId, ts, ts);
   return {
     runId,
     cleanup: () => {
       try {
+        getDb().prepare("DELETE FROM steps WHERE run_id = ?").run(runId);
         getDb().prepare("DELETE FROM runs WHERE id = ?").run(runId);
       } catch {
         /* best-effort */

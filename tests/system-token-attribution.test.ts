@@ -87,6 +87,12 @@ describe("system token attribution (US-002)", () => {
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 13, ?, ?)"
           ).run(runId, now, now);
 
+          // Waiting step keeps the polling round firing (pending-work gate
+          // passes) without being claimed/completed — tokens flow to system.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
+
           const job = {
             id: "job-system-attribution",
             name: "wf/dev",
@@ -107,7 +113,7 @@ describe("system token attribution (US-002)", () => {
           await executePollingRound(job, agent);
 
           const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
 
           console.log(JSON.stringify({
             runTokensSpent: runRow.tokens_spent,
@@ -179,7 +185,7 @@ describe("system token attribution (US-002)", () => {
           ).run(runId, now, now);
 
           db.prepare(
-            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'running', ?, ?)"
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
           ).run(stepId, runId, now, now);
 
           const job = {
@@ -202,7 +208,7 @@ describe("system token attribution (US-002)", () => {
           await executePollingRound(job, agent);
 
           const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
 
           console.log(JSON.stringify({
             runTokensSpent: runRow.tokens_spent,
@@ -255,6 +261,11 @@ describe("system token attribution (US-002)", () => {
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 3, ?, ?)"
           ).run(runId, now, now);
 
+          // Waiting step keeps the polling round firing without being claimed.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
+
           const job = {
             id: "job-heartbeat-system",
             name: "wf/dev",
@@ -275,7 +286,7 @@ describe("system token attribution (US-002)", () => {
           await executePollingRound(job, agent);
 
           const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
           const logPath = path.join(process.env.HOME, ".formiga", "formiga.log");
           const logContent = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
 
@@ -335,6 +346,11 @@ describe("system token attribution (US-002)", () => {
           db.prepare(
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 0, ?, ?)"
           ).run(runId, now, now);
+
+          // Waiting step keeps the polling round firing without being claimed.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
 
           const job = {
             id: "job-system-event",
@@ -413,6 +429,11 @@ describe("system token attribution (US-002)", () => {
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 0, ?, ?)"
           ).run(runId, now, now);
 
+          // Waiting step keeps the polling round firing without being claimed.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
+
           const job = {
             id: "job-accum-1",
             name: "wf/dev",
@@ -450,6 +471,11 @@ describe("system token attribution (US-002)", () => {
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 0, ?, ?)"
           ).run(runId, now, now);
 
+          // Waiting step keeps the polling round firing without being claimed.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
+
           // Write a different pi payload with 20 tokens for this round
           const fs = await import("node:fs");
           const piPath = process.env.FORMIGA_PI_BINARY;
@@ -485,7 +511,7 @@ describe("system token attribution (US-002)", () => {
 
           await executePollingRound(job, agent);
 
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
 
           console.log(JSON.stringify({ systemTokensSpent: systemTokens }));
         `,
@@ -529,6 +555,11 @@ describe("system token attribution (US-002)", () => {
           db.prepare(
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 0, ?, ?)"
           ).run(runId, now, now);
+
+          // Waiting step keeps the polling round firing without being claimed.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
 
           const job = {
             id: "job-logs-check",

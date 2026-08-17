@@ -202,7 +202,7 @@ describe("dashboard stats API", () => {
       `).run();
 
       // Add system token spend
-      incrementSystemTokenSpend(150);
+      await incrementSystemTokenSpend(150);
 
       const { server, baseUrl } = await startDashboard();
 

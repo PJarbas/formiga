@@ -78,6 +78,45 @@ describe("StreamingMetadataExtractor", () => {
     assert.equal(meta.stepId, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d");
   });
 
+  it("extracts run_id and step_id from escaped JSON nested in a text field (real pi contract)", () => {
+    // Real pi emits IDs inside a `text` field as escaped JSON — a raw
+    // JSON.stringify keeps the `\"` and breaks the field regex.
+    const payload = JSON.stringify({
+      stepId: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+      runId: "3b637688-99bf-491f-8999-6ab86427fbb9",
+      input: "Implement task",
+    });
+    const ext = new StreamingMetadataExtractor();
+    ext.processLine(
+      JSON.stringify({
+        type: "tool_execution_end",
+        toolName: "bash",
+        result: { content: [{ type: "text", text: payload }] },
+        isError: false,
+      }),
+    );
+    const meta = ext.getMetadata();
+    assert.equal(meta.runId, "3b637688-99bf-491f-8999-6ab86427fbb9");
+    assert.equal(meta.stepId, "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d");
+  });
+
+  it("keeps first-seen run/step id across multiple events", () => {
+    const firstRun = "11111111-2222-4333-8999-000000000001";
+    const secondRun = "99999999-8888-4777-8999-000000000002";
+    const stepId = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
+    const ext = new StreamingMetadataExtractor();
+    const payload = JSON.stringify({ stepId, runId: firstRun });
+    ext.processLine(
+      JSON.stringify({ type: "tool_execution_end", toolName: "bash", result: { content: [{ type: "text", text: payload }] }, isError: false }),
+    );
+    ext.processLine(
+      JSON.stringify({ type: "message_end", message: { role: "assistant", content: "ok", usage: { total_tokens: 10 }, run_id: secondRun } }),
+    );
+    const meta = ext.getMetadata();
+    assert.equal(meta.runId, firstRun);
+    assert.equal(meta.stepId, stepId);
+  });
+
   it("ignores malformed JSON lines", () => {
     const ext = new StreamingMetadataExtractor();
     ext.processLine("{broken json");
