@@ -181,9 +181,12 @@ describe("pi token end-to-end with fake pi shell script", () => {
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf-pi-e2e', 'Implement token tracking', 'running', '{}', 0, ?, ?)"
           ).run(runId, now, now);
 
-          // Insert step so toll_execution_end attribution can resolve runId
+          // Insert step so toll_execution_end attribution can resolve runId.
+          // 'waiting' keeps the polling round firing (pending-work gate passes)
+          // without being claimed/completed — the round must spawn pi and
+          // attribute the 4242 tokens to the run.
           db.prepare(
-            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement-token', 'wf_pi_e2e_dev', 0, '', '', 'running', ?, ?)"
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement-token', 'wf_pi_e2e_dev', 0, '', '', 'waiting', ?, ?)"
           ).run(stepId, runId, now, now);
 
           const job = {

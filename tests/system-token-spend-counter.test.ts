@@ -127,6 +127,12 @@ describe("system token spend counter — e2e integration", () => {
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 41, ?, ?)"
           ).run(runId, now, now);
 
+          // Waiting step keeps the polling round firing (pending-work gate
+          // passes) without being claimed/completed — tokens flow to system.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
+
           const job = {
             id: "job-system-integration",
             name: "wf/dev",
@@ -217,7 +223,7 @@ describe("system token spend counter — e2e integration", () => {
           ).run(runId, now, now);
 
           db.prepare(
-            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'running', ?, ?)"
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
           ).run(stepId, runId, now, now);
 
           const job = {
@@ -356,6 +362,11 @@ describe("system token spend counter — e2e integration", () => {
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 9, ?, ?)"
           ).run(runId, now, now);
 
+          // Waiting step keeps the polling round firing without being claimed.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
+
           const job = {
             id: "job-heartbeat-e2e",
             name: "wf/dev",
@@ -427,6 +438,11 @@ describe("system token spend counter — e2e integration", () => {
           db.prepare(
             "INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, created_at, updated_at) VALUES (?, 'wf', 'task', 'running', '{}', 50, ?, ?)"
           ).run(runId, now, now);
+
+          // Waiting step keeps the polling round firing without being claimed.
+          db.prepare(
+            "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at) VALUES (?, ?, 'implement', 'wf_dev', 0, '', '', 'waiting', ?, ?)"
+          ).run("${crypto.randomUUID()}", runId, now, now);
 
           // Execute heartbeat polling round (attributes 21 tokens to system)
           const job = {
