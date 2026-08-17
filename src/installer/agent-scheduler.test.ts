@@ -1,225 +1,380 @@
+// ══════════════════════════════════════════════════════════════════════
+// agent-scheduler.test.ts — Contract tests for the run-scoped scheduler
+// ══════════════════════════════════════════════════════════════════════
+//
+// These tests assert the CURRENT deliberate scheduler contract (see issue
+// #118). Behaviour under test:
+//
+//   • Fast polling: setupAgentCrons uses a fixed 2-minute interval (5 in
+//     noHurrySaveTokensMode) and IGNORES polling.timeoutSeconds. The old
+//     5/15/ceil(timeout/60) semantics were removed in the sequential-scheduler
+//     refactor — that was the drift that broke these tests on main.
+//   • Sequential scheduling: only agents with pending steps get jobs; with no
+//     pending steps the first agent is scheduled as a fallback. Double-setup
+//     is idempotent (job identity = formiga-<workflow>-<run>-<agent>).
+//   • Harness workdir: executePollingRound refuses to run (and tears the job
+//     down) when workingDirectoryForHarness is missing. Callers must pass it.
+//   • Harness type: createAgentCronJob reads harness_type from the run
+//     context (hermes) and defaults to "pi".
+//   • Nudge: skips in-flight jobs, skips agents with no work (guarded on the
+//     full prefixed agent id), converts pending-start timers to active
+//     intervals, and preserves job metadata.
+//
+// DB isolation: a temp HOME + FORMIGA_DB_PATH is used and getDb() is called
+// in before() so migrate() runs before any Prisma query. The old tests wrote
+// to the real ~/.formiga/formiga.db (UNIQUE constraint failures).
+// ══════════════════════════════════════════════════════════════════════
+
 import assert from "node:assert/strict";
-import { describe, it, afterEach, beforeEach } from "node:test";
-import fs from "node:fs";
-import path from "node:path";
+import { describe, it, before, after, beforeEach } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
+import path from "node:path";
+
 import { getDb } from "../../dist/db.js";
 import {
   setupAgentCrons,
   createAgentCronJob,
   _getJobIntervalsForRun,
-  removeRunCrons,
   shutdownAllCrons,
   tryMarkJobInFlight,
   nudgeScheduledRuns,
 } from "../../dist/installer/agent-scheduler.js";
-import type { SetupAgentCronsOptions, NudgeResult } from "../../dist/installer/agent-scheduler.js";
+import {
+  jobMetadata,
+  inFlightJobs,
+  activeTimers,
+  pendingStartTimers,
+} from "../../dist/installer/scheduler/shared.js";
 import type { WorkflowSpec } from "../../dist/installer/types.js";
 
-function makeWorkflow(overrides: {
-  pollingTimeoutSeconds?: number;
-} = {}) {
+// ── Fixtures ──────────────────────────────────────────────────────────
+
+const WORKFLOW_ID = "test-workflow";
+
+function makeWorkflow(
+  agents = [{ id: "test-agent", model: "fake", workspace: { baseDir: "." } }],
+  pollingTimeoutSeconds?: number,
+): WorkflowSpec {
   return {
-    id: "test-workflow",
-    agents: [
-      {
-        id: "test-agent",
-        model: "fake",
-        workspace: { baseDir: "." },
-      },
-    ],
-    steps: [
-      {
-        id: "step-1",
-        agent: "test-agent",
-        input: "do something",
-        expects: "STATUS",
-      },
-    ],
-    ...(overrides.pollingTimeoutSeconds !== undefined
-      ? { polling: { timeoutSeconds: overrides.pollingTimeoutSeconds } }
+    id: WORKFLOW_ID,
+    name: "Test",
+    agents,
+    steps: agents.map((a, i) => ({
+      id: `step-${i + 1}`,
+      agent: a.id,
+      input: "do something",
+      expects: "STATUS",
+    })),
+    ...(pollingTimeoutSeconds !== undefined
+      ? { polling: { timeoutSeconds: pollingTimeoutSeconds } }
       : {}),
-  };
+  } as WorkflowSpec;
 }
 
-describe("setupAgentCrons interval calculation", () => {
-  afterEach(() => {
-    shutdownAllCrons();
-  });
+// Mock spec used by the nudge group — contains every short agent id the
+// tests seed so the agent lookup inside nudgeScheduledRuns succeeds without
+// touching disk.
+const mockSpec: WorkflowSpec = {
+  id: WORKFLOW_ID,
+  name: "Test",
+  agents: [
+    { id: "dev", workspace: { baseDir: "/tmp", files: {} } },
+    { id: "agent-a", workspace: { baseDir: "/tmp", files: {} } },
+    { id: "agent-b", workspace: { baseDir: "/tmp", files: {} } },
+  ],
+  steps: [],
+} as WorkflowSpec;
+const mockLoadSpec = async (): Promise<WorkflowSpec> => mockSpec;
 
-  it("uses default interval 5 when no polling.timeoutSeconds is set", async () => {
+// ── Isolation ─────────────────────────────────────────────────────────
+
+let tempHome: string;
+let origHome: string | undefined;
+let origDbPath: string | undefined;
+let origStateDir: string | undefined;
+
+before(() => {
+  tempHome = mkdtempSync(path.join(os.tmpdir(), "formiga-agent-scheduler-test-"));
+  origHome = process.env.HOME;
+  origDbPath = process.env.FORMIGA_DB_PATH;
+  origStateDir = process.env.FORMIGA_STATE_DIR;
+  process.env.HOME = tempHome;
+  process.env.FORMIGA_DB_PATH = path.join(tempHome, ".formiga", "test.db");
+  process.env.FORMIGA_STATE_DIR = path.join(tempHome, ".formiga");
+  // First getDb() call migrates the schema; Prisma reads the same file.
+  getDb();
+});
+
+after(() => {
+  // Active interval/pending timers (setupAgentCrons creates real ones) would
+  // otherwise keep the test process alive.
+  shutdownAllCrons();
+  if (origHome) process.env.HOME = origHome;
+  else delete process.env.HOME;
+  if (origDbPath) process.env.FORMIGA_DB_PATH = origDbPath;
+  else delete process.env.FORMIGA_DB_PATH;
+  if (origStateDir) process.env.FORMIGA_STATE_DIR = origStateDir;
+  else delete process.env.FORMIGA_STATE_DIR;
+  rmSync(tempHome, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  shutdownAllCrons();
+  const db = getDb();
+  db.exec("DELETE FROM steps");
+  db.exec("DELETE FROM runs");
+  db.exec("DELETE FROM job_registry");
+  for (const id of [...inFlightJobs]) inFlightJobs.delete(id);
+  for (const id of [...activeTimers.keys()]) activeTimers.delete(id);
+  for (const id of [...pendingStartTimers.keys()]) pendingStartTimers.delete(id);
+  for (const id of [...jobMetadata.keys()]) jobMetadata.delete(id);
+});
+
+// Raw-SQL seeders (better-sqlite3) — these run against the temp DB that
+// getDb() migrated in before().
+function insertRun(runId: string, status = "running", context = "{}"): void {
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO runs (id, workflow_id, task, status, context, created_at, updated_at)
+       VALUES (?, '${WORKFLOW_ID}', 'test', ?, ?, datetime('now'), datetime('now'))`,
+    )
+    .run(runId, status, context);
+}
+
+function insertStep(runId: string, agentId: string): void {
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects,
+                                    status, retry_count, max_retries, type, created_at, updated_at)
+       VALUES (?, ?, 'plan', ?, 0, '', '', 'pending', 0, 3, 'single', datetime('now'), datetime('now'))`,
+    )
+    .run(`step-${runId}-${agentId}`, runId, agentId);
+}
+
+/**
+ * Register a job exactly as setupAgentCrons would, plus a paused run and a
+ * full-prefixed pending step so nudgeScheduledRuns passes both its guards:
+ *   - no-work guard keys on `${runId}::${fullPrefixedAgentId}`
+ *   - the fire-and-forget polling round hits the paused-run branch and
+ *     returns without spawning a harness or tearing the job down.
+ */
+function seedJob(
+  runId: string,
+  agentRawId: string,
+  opts: { inFlight?: boolean; pendingTimer?: boolean; harnessType?: string } = {},
+): { jobId: string; agentId: string } {
+  const jobId = `formiga-${WORKFLOW_ID}-${runId}-${agentRawId}`;
+  const agentId = `${WORKFLOW_ID}_${agentRawId}`;
+  insertRun(runId, "paused");
+  insertStep(runId, agentId);
+  jobMetadata.set(jobId, {
+    id: jobId,
+    workflowId: WORKFLOW_ID,
+    runId,
+    agentId,
+    intervalMinutes: 2,
+    sessionLabel: `${agentRawId}-cron`,
+    timeoutSeconds: 600,
+    workingDirectoryForHarness: tempHome,
+    harnessType: opts.harnessType ?? "pi",
+    createdAt: new Date().toISOString(),
+  });
+  if (opts.inFlight) inFlightJobs.add(jobId);
+  if (opts.pendingTimer) {
+    const t = setTimeout(() => {}, 60_000);
+    t.unref();
+    pendingStartTimers.set(jobId, t);
+  }
+  return { jobId, agentId };
+}
+
+// ── setupAgentCrons: fast-polling intervals ───────────────────────────
+
+describe("setupAgentCrons fast-polling intervals", () => {
+  it("uses 2-minute fast polling by default", async () => {
     const workflow = makeWorkflow();
-    const runId = "run-default-test";
-
-    await setupAgentCrons(workflow, runId);
-
-    const intervals = _getJobIntervalsForRun(runId);
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 5);
-
-    await removeRunCrons(runId);
-  });
-
-  it("uses Math.max(1, ...) floor when polling.timeoutSeconds is set (33s → ceil(33/60)=1)", async () => {
-    const workflow = makeWorkflow({ pollingTimeoutSeconds: 33 });
-    const runId = "run-floor-test";
-
-    await setupAgentCrons(workflow, runId);
-
-    const intervals = _getJobIntervalsForRun(runId);
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 1);
-
-    await removeRunCrons(runId);
-  });
-
-  it("ceil works for fractional minutes (120s → ceil(2)=2)", async () => {
-    const workflow = makeWorkflow({ pollingTimeoutSeconds: 120 });
-    const runId = "run-ceil-test";
-
-    await setupAgentCrons(workflow, runId);
+    const runId = "run-default";
+    await setupAgentCrons(workflow, runId, { workingDirectoryForHarness: "." });
 
     const intervals = _getJobIntervalsForRun(runId);
     assert.equal(intervals.length, 1);
     assert.equal(intervals[0].intervalMinutes, 2);
+  });
 
-    await removeRunCrons(runId);
+  it("uses 5-minute fast polling in noHurrySaveTokensMode", async () => {
+    const workflow = makeWorkflow();
+    const runId = "run-save";
+    await setupAgentCrons(workflow, runId, {
+      noHurrySaveTokensMode: true,
+      workingDirectoryForHarness: ".",
+    });
+
+    const intervals = _getJobIntervalsForRun(runId);
+    assert.equal(intervals.length, 1);
+    assert.equal(intervals[0].intervalMinutes, 5);
+  });
+
+  it("ignores polling.timeoutSeconds in normal mode (33s → still 2)", async () => {
+    const workflow = makeWorkflow(undefined, 33);
+    const runId = "run-timeout-ignored";
+    await setupAgentCrons(workflow, runId, { workingDirectoryForHarness: "." });
+
+    const intervals = _getJobIntervalsForRun(runId);
+    assert.equal(intervals.length, 1);
+    assert.equal(intervals[0].intervalMinutes, 2);
+  });
+
+  it("ignores polling.timeoutSeconds in save mode (1200s → still 5)", async () => {
+    const workflow = makeWorkflow(undefined, 1200);
+    const runId = "run-save-timeout-ignored";
+    await setupAgentCrons(workflow, runId, {
+      noHurrySaveTokensMode: true,
+      workingDirectoryForHarness: ".",
+    });
+
+    const intervals = _getJobIntervalsForRun(runId);
+    assert.equal(intervals.length, 1);
+    assert.equal(intervals[0].intervalMinutes, 5);
+  });
+
+  it("noHurrySaveTokensMode=false uses 2-minute fast polling", async () => {
+    const workflow = makeWorkflow();
+    const runId = "run-normal";
+    await setupAgentCrons(workflow, runId, {
+      noHurrySaveTokensMode: false,
+      workingDirectoryForHarness: ".",
+    });
+
+    const intervals = _getJobIntervalsForRun(runId);
+    assert.equal(intervals.length, 1);
+    assert.equal(intervals[0].intervalMinutes, 2);
   });
 
   it("works with multiple agents", async () => {
-    const workflow = {
-      ...makeWorkflow({ pollingTimeoutSeconds: 90 }),
-      agents: [
-        { id: "agent-a", model: "fake", workspace: { baseDir: "." } },
-        { id: "agent-b", model: "fake", workspace: { baseDir: "." } },
-      ],
-    };
+    const workflow = makeWorkflow([
+      { id: "agent-a", model: "fake", workspace: { baseDir: "." } },
+      { id: "agent-b", model: "fake", workspace: { baseDir: "." } },
+    ]);
     const runId = "run-multi";
-
-    await setupAgentCrons(workflow, runId);
+    // Seed pending steps with RAW agent ids: getAgentsForPendingSteps matches
+    // them for scheduling, but the immediate round's pending-work check (which
+    // uses the full prefixed agent id) finds no work → heartbeat path → the
+    // jobs survive without spawning a harness.
+    insertRun(runId);
+    insertStep(runId, "agent-a");
+    insertStep(runId, "agent-b");
+    await setupAgentCrons(workflow, runId, { workingDirectoryForHarness: "." });
 
     const intervals = _getJobIntervalsForRun(runId);
     assert.equal(intervals.length, 2);
-    // 90s / 60 = 1.5, ceil → 2
     for (const job of intervals) {
       assert.equal(job.intervalMinutes, 2);
     }
+  });
 
-    await removeRunCrons(runId);
+  it("tears down the job immediately when workingDirectoryForHarness is missing", async () => {
+    // executePollingRound refuses a round without a harness workdir and tears
+    // down the just-registered job. setupAgentCrons callers MUST pass
+    // workingDirectoryForHarness.
+    const workflow = makeWorkflow();
+    const runId = "run-no-workdir";
+    await setupAgentCrons(workflow, runId);
+
+    assert.equal(_getJobIntervalsForRun(runId).length, 0);
   });
 });
 
-describe("setupAgentCrons noHurrySaveTokensMode", () => {
-  afterEach(() => {
-    shutdownAllCrons();
-  });
+// ── setupAgentCrons: sequential scheduling ────────────────────────────
 
-  it("save-tokens mode uses default 15 when no polling.timeoutSeconds set", async () => {
-    const workflow = makeWorkflow();
-    const runId = "run-save-default";
-
-    await setupAgentCrons(workflow, runId, { noHurrySaveTokensMode: true });
-
-    const intervals = _getJobIntervalsForRun(runId);
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 15);
-
-    await removeRunCrons(runId);
-  });
-
-  it("save-tokens mode uses Math.max(15, ...) floor (33s → ceil=1 → max(15,1)=15)", async () => {
-    const workflow = makeWorkflow({ pollingTimeoutSeconds: 33 });
-    const runId = "run-save-floor";
-
-    await setupAgentCrons(workflow, runId, { noHurrySaveTokensMode: true });
+describe("setupAgentCrons sequential scheduling", () => {
+  it("falls back to the first agent when no steps are pending", async () => {
+    const workflow = makeWorkflow([
+      { id: "agent-a", model: "fake", workspace: { baseDir: "." } },
+      { id: "agent-b", model: "fake", workspace: { baseDir: "." } },
+    ]);
+    const runId = "run-fallback";
+    await setupAgentCrons(workflow, runId, { workingDirectoryForHarness: "." });
 
     const intervals = _getJobIntervalsForRun(runId);
     assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 15);
-
-    await removeRunCrons(runId);
+    assert.equal(intervals[0].agentId, `${WORKFLOW_ID}_agent-a`);
   });
 
-  it("save-tokens mode with 1200s timeout → ceil=20 → stays 20 (above floor)", async () => {
-    const workflow = makeWorkflow({ pollingTimeoutSeconds: 1200 });
-    const runId = "run-save-above-floor";
-
-    await setupAgentCrons(workflow, runId, { noHurrySaveTokensMode: true });
-
-    const intervals = _getJobIntervalsForRun(runId);
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 20);
-
-    await removeRunCrons(runId);
-  });
-
-  it("noHurrySaveTokensMode=false uses default 5", async () => {
-    const workflow = makeWorkflow();
-    const runId = "run-normal-default";
-
-    await setupAgentCrons(workflow, runId, { noHurrySaveTokensMode: false });
-
-    const intervals = _getJobIntervalsForRun(runId);
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 5);
-
-    await removeRunCrons(runId);
-  });
-
-  it("noHurrySaveTokensMode=false uses Math.max(1, ...) floor (33s → ceil=1)", async () => {
-    const workflow = makeWorkflow({ pollingTimeoutSeconds: 33 });
-    const runId = "run-normal-floor";
-
-    await setupAgentCrons(workflow, runId, { noHurrySaveTokensMode: false });
-
-    const intervals = _getJobIntervalsForRun(runId);
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 1);
-
-    await removeRunCrons(runId);
-  });
-
-  it("noHurrySaveTokensMode omitted (undefined) uses default 5", async () => {
-    const workflow = makeWorkflow();
-    const runId = "run-absent-default";
-
-    await setupAgentCrons(workflow, runId);
-
-    const intervals = _getJobIntervalsForRun(runId);
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 5);
-
-    await removeRunCrons(runId);
-  });
-
-  it("save-tokens mode with multiple agents", async () => {
-    const workflow = {
-      ...makeWorkflow({ pollingTimeoutSeconds: 90 }),
-      agents: [
-        { id: "agent-a", model: "fake", workspace: { baseDir: "." } },
-        { id: "agent-b", model: "fake", workspace: { baseDir: "." } },
-      ],
-    };
-    const runId = "run-save-multi";
-
-    await setupAgentCrons(workflow, runId, { noHurrySaveTokensMode: true });
+  it("schedules one job per agent with pending steps", async () => {
+    const workflow = makeWorkflow([
+      { id: "agent-a", model: "fake", workspace: { baseDir: "." } },
+      { id: "agent-b", model: "fake", workspace: { baseDir: "." } },
+    ]);
+    const runId = "run-seq";
+    insertRun(runId);
+    insertStep(runId, "agent-a");
+    insertStep(runId, "agent-b");
+    await setupAgentCrons(workflow, runId, { workingDirectoryForHarness: "." });
 
     const intervals = _getJobIntervalsForRun(runId);
     assert.equal(intervals.length, 2);
-    // 90s / 60 = 1.5, ceil → 2, Math.max(15, 2) → 15
-    for (const job of intervals) {
-      assert.equal(job.intervalMinutes, 15);
-    }
+    const agentIds = intervals.map((j) => j.agentId).sort();
+    assert.deepEqual(agentIds, [`${WORKFLOW_ID}_agent-a`, `${WORKFLOW_ID}_agent-b`]);
+  });
 
-    await removeRunCrons(runId);
+  it("is idempotent across double setup", async () => {
+    const workflow = makeWorkflow();
+    const runId = "run-idempotent";
+    insertRun(runId);
+    insertStep(runId, "test-agent");
+    await setupAgentCrons(workflow, runId, { workingDirectoryForHarness: "." });
+    await setupAgentCrons(workflow, runId, { workingDirectoryForHarness: "." });
+
+    assert.equal(_getJobIntervalsForRun(runId).length, 1);
   });
 });
 
-describe("tryMarkJobInFlight race guard", () => {
-  afterEach(() => {
-    shutdownAllCrons();
+// ── createAgentCronJob: harness type ──────────────────────────────────
+
+describe("createAgentCronJob harness type", () => {
+  it("reads harness_type 'hermes' from the run context", async () => {
+    const workflow = makeWorkflow();
+    const runId = "run-hermes-harness";
+    insertRun(runId, "running", '{"harness_type":"hermes"}');
+
+    const res = await createAgentCronJob({
+      workflowId: WORKFLOW_ID,
+      runId,
+      agent: workflow.agents[0],
+      workflow,
+      intervalMinutes: 2,
+      staggerOffsetMs: 60_000,
+      workingDirectoryForHarness: tempHome,
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(jobMetadata.get(res.id)?.harnessType, "hermes");
   });
 
+  it("defaults to 'pi' when the run context has no harness_type", async () => {
+    const workflow = makeWorkflow();
+    const runId = "run-pi-harness";
+    insertRun(runId, "running", "{}");
+
+    const res = await createAgentCronJob({
+      workflowId: WORKFLOW_ID,
+      runId,
+      agent: workflow.agents[0],
+      workflow,
+      intervalMinutes: 2,
+      staggerOffsetMs: 60_000,
+      workingDirectoryForHarness: tempHome,
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(jobMetadata.get(res.id)?.harnessType, "pi");
+  });
+});
+
+// ── tryMarkJobInFlight race guard ─────────────────────────────────────
+
+describe("tryMarkJobInFlight race guard", () => {
   it("returns true on first call for a given jobId", () => {
     const result = tryMarkJobInFlight("job-001");
     assert.equal(result, true);
@@ -245,9 +400,6 @@ describe("tryMarkJobInFlight race guard", () => {
   });
 
   it("is idempotent — check-and-add happens synchronously", () => {
-    // Simulate two concurrent calls that would race without the
-    // atomic check-and-add. Since JS is single-threaded we verify
-    // the fundamental contract: first call wins, second loses.
     const wins: boolean[] = [];
     for (let i = 0; i < 2; i++) {
       wins.push(tryMarkJobInFlight("job-concurrent"));
@@ -256,83 +408,21 @@ describe("tryMarkJobInFlight race guard", () => {
   });
 
   it("different jobIds are independent", () => {
-    // job-004 should not prevent job-005 from being marked
     tryMarkJobInFlight("job-004");
     assert.equal(tryMarkJobInFlight("job-005"), true);
-    // job-004 is still in flight
     assert.equal(tryMarkJobInFlight("job-004"), false);
   });
 
   it("shutdown clears in-flight state", () => {
     tryMarkJobInFlight("job-006");
     shutdownAllCrons();
-    // After shutdown, a fresh call should succeed
     assert.equal(tryMarkJobInFlight("job-006"), true);
   });
 });
 
-// ── nudgeScheduledRuns tests ────────────────────────────────────────
+// ── nudgeScheduledRuns ────────────────────────────────────────────────
 
 describe("nudgeScheduledRuns", () => {
-  let tempHome: string;
-
-  beforeEach(() => {
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-nudge-"));
-    process.env.FORMIGA_STATE_DIR = path.join(tempHome, ".formiga");
-  });
-
-  afterEach(() => {
-    shutdownAllCrons();
-    delete process.env.FORMIGA_STATE_DIR;
-    fs.rmSync(tempHome, { recursive: true, force: true });
-  });
-
-  function createWorkflowDir(workflowId: string, agentIds: string[]) {
-    const wfDir = path.join(
-      process.env.FORMIGA_STATE_DIR!,
-      "workflows",
-      workflowId,
-    );
-    fs.mkdirSync(wfDir, { recursive: true });
-    const agentsYaml = agentIds
-      .map(
-        (id) =>
-          `  - id: ${id}\n    model: fake\n    workspace:\n      baseDir: "."`,
-      )
-      .join("\n");
-    const yml =
-      `id: ${workflowId}\n` +
-      `agents:\n${agentsYaml}\n` +
-      `steps:\n` +
-      `  - id: step-1\n` +
-      `    agent: ${agentIds[0]}\n` +
-      `    input: "do"\n` +
-      `    expects: STATUS\n`;
-    fs.writeFileSync(path.join(wfDir, "workflow.yml"), yml);
-  }
-
-  function makeWorkflowSpec(
-    workflowId: string,
-    agentIds: string[],
-  ): WorkflowSpec {
-    return {
-      id: workflowId,
-      agents: agentIds.map((id) => ({
-        id,
-        model: "fake",
-        workspace: { baseDir: "." },
-      })),
-      steps: [
-        {
-          id: "s1",
-          agent: agentIds[0],
-          input: "do",
-          expects: "STATUS",
-        },
-      ],
-    } as WorkflowSpec;
-  }
-
   it("returns empty result for empty runIds", async () => {
     const result = await nudgeScheduledRuns([]);
     assert.deepStrictEqual(result.runIds, []);
@@ -351,53 +441,34 @@ describe("nudgeScheduledRuns", () => {
   });
 
   it("skips jobs that are in flight", async () => {
-    createWorkflowDir("wf-skip", ["dev"]);
-    const workflow = makeWorkflowSpec("wf-skip", ["dev"]);
-    await setupAgentCrons(workflow, "run-skip", {
-      workingDirectoryForHarness: tempHome,
-    });
+    seedJob("run-skip", "dev", { inFlight: true });
 
-    // Compute the job id (same format as buildJobId) and mark in-flight
-    const jobId = "formiga-wf-skip-run-skip-dev";
-    tryMarkJobInFlight(jobId);
-
-    const result = await nudgeScheduledRuns(["run-skip"]);
+    const result = await nudgeScheduledRuns(["run-skip"], { loadWorkflowSpec: mockLoadSpec });
     assert.equal(result.launched, 0);
     assert.equal(result.skippedInFlight, 1);
     assert.equal(result.jobs.length, 1);
     assert.equal(result.jobs[0].status, "skipped_in_flight");
-    assert.equal(result.jobs[0].agentId, "wf-skip_dev");
+    assert.equal(result.jobs[0].agentId, `${WORKFLOW_ID}_dev`);
     assert.equal(result.jobs[0].runId, "run-skip");
   });
 
   it("launches for non-in-flight scheduled jobs", async () => {
-    createWorkflowDir("wf-launch", ["dev"]);
-    const workflow = makeWorkflowSpec("wf-launch", ["dev"]);
-    await setupAgentCrons(workflow, "run-launch", {
-      workingDirectoryForHarness: tempHome,
-    });
+    seedJob("run-launch", "dev");
 
-    const result = await nudgeScheduledRuns(["run-launch"]);
+    const result = await nudgeScheduledRuns(["run-launch"], { loadWorkflowSpec: mockLoadSpec });
     assert.equal(result.launched, 1);
     assert.equal(result.skippedInFlight, 0);
     assert.equal(result.jobs.length, 1);
     assert.equal(result.jobs[0].status, "launched");
     assert.equal(result.jobs[0].runId, "run-launch");
-    assert.equal(result.jobs[0].agentId, "wf-launch_dev");
+    assert.equal(result.jobs[0].agentId, `${WORKFLOW_ID}_dev`);
   });
 
   it("nudges only matching runs, ignoring others", async () => {
-    createWorkflowDir("wf-multi", ["dev"]);
-    const workflow = makeWorkflowSpec("wf-multi", ["dev"]);
-    await setupAgentCrons(workflow, "run-a", {
-      workingDirectoryForHarness: tempHome,
-    });
-    await setupAgentCrons(workflow, "run-b", {
-      workingDirectoryForHarness: tempHome,
-    });
+    seedJob("run-a", "dev");
+    seedJob("run-b", "dev");
 
-    // Nudge only run-a
-    const result = await nudgeScheduledRuns(["run-a"]);
+    const result = await nudgeScheduledRuns(["run-a"], { loadWorkflowSpec: mockLoadSpec });
     assert.equal(result.launched, 1);
     assert.equal(result.skippedInFlight, 0);
     assert.equal(result.jobs.length, 1);
@@ -405,71 +476,43 @@ describe("nudgeScheduledRuns", () => {
   });
 
   it("converts pending-start timer to active interval on nudge", async () => {
-    createWorkflowDir("wf-pending", ["dev"]);
-    const workflow = makeWorkflowSpec("wf-pending", ["dev"]);
+    const { jobId } = seedJob("run-pending", "dev", { pendingTimer: true });
 
-    getDb().prepare("INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, scheduling_status, created_at, updated_at) VALUES (?, 1, 'wf-pending', 'test', 'running', '{}', 0, 'active', ?, ?)").run("run-pending", new Date().toISOString(), new Date().toISOString());
-
-    // Create job with stagger to get a pending-start timer
-    await createAgentCronJob({
-      workflowId: "wf-pending",
-      runId: "run-pending",
-      agent: { id: "dev", model: "fake", workspace: { baseDir: "." } },
-      workflow,
-      intervalMinutes: 5,
-      staggerOffsetMs: 60_000,
-      workingDirectoryForHarness: tempHome,
-    });
-
-    await nudgeScheduledRuns(["run-pending"]);
-
-    // After nudge, the job should have an active interval (was pending)
-    const intervals = _getJobIntervalsForRun("run-pending");
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].intervalMinutes, 5);
+    const result = await nudgeScheduledRuns(["run-pending"], { loadWorkflowSpec: mockLoadSpec });
+    assert.equal(result.launched, 1);
+    assert.equal(pendingStartTimers.has(jobId), false);
+    assert.equal(activeTimers.has(jobId), true);
+    assert.equal(_getJobIntervalsForRun("run-pending").length, 1);
   });
 
   it("preserves job metadata (harness type) through nudge", async () => {
-    createWorkflowDir("wf-harness", ["dev"]);
-    const workflow = makeWorkflowSpec("wf-harness", ["dev"]);
+    const { jobId } = seedJob("run-harness", "dev", { harnessType: "hermes" });
 
-    await setupAgentCrons(workflow, "run-harness", {
-      workingDirectoryForHarness: tempHome,
-    });
-
-    // Nudge should succeed without errors
-    const result = await nudgeScheduledRuns(["run-harness"]);
+    const result = await nudgeScheduledRuns(["run-harness"], { loadWorkflowSpec: mockLoadSpec });
     assert.equal(result.launched, 1);
     assert.equal(result.errors.length, 0);
+    assert.equal(jobMetadata.get(jobId)?.harnessType, "hermes");
   });
 
   it("returns errors for jobs whose workflow is missing from disk", async () => {
-    // Set up a job that references a workflow NOT on disk
-    const workflow = makeWorkflowSpec("wf-missing", ["dev"]);
-    await setupAgentCrons(workflow, "run-err", {
-      workingDirectoryForHarness: tempHome,
-    });
+    // No loadWorkflowSpec override: the default loader reads
+    // <FORMIGA_STATE_DIR>/workflows/test-workflow/workflow.yml, which does not
+    // exist in the temp HOME.
+    seedJob("run-err", "dev");
 
-    // Don't create the workflow dir — so loadWorkflowSpec will fail
     const result = await nudgeScheduledRuns(["run-err"]);
     assert.equal(result.launched, 0);
     assert.equal(result.errors.length, 1);
     assert.equal(result.jobs.length, 1);
     assert.equal(result.jobs[0].status, "error");
+    assert.ok(result.errors[0].error.length > 0);
   });
 
   it("handles mixed in-flight and launchable jobs", async () => {
-    createWorkflowDir("wf-mixed", ["dev", "qa"]);
-    const workflow = makeWorkflowSpec("wf-mixed", ["dev", "qa"]);
-    await setupAgentCrons(workflow, "run-mixed", {
-      workingDirectoryForHarness: tempHome,
-    });
+    seedJob("run-mixed", "agent-a", { inFlight: true });
+    seedJob("run-mixed", "agent-b");
 
-    // Mark dev as in-flight, qa should still launch
-    const devJobId = "formiga-wf-mixed-run-mixed-dev";
-    tryMarkJobInFlight(devJobId);
-
-    const result = await nudgeScheduledRuns(["run-mixed"]);
+    const result = await nudgeScheduledRuns(["run-mixed"], { loadWorkflowSpec: mockLoadSpec });
     assert.equal(result.launched, 1);
     assert.equal(result.skippedInFlight, 1);
     assert.equal(result.jobs.length, 2);
@@ -478,7 +521,7 @@ describe("nudgeScheduledRuns", () => {
     const skipped = result.jobs.filter((j) => j.status === "skipped_in_flight");
     assert.equal(launched.length, 1);
     assert.equal(skipped.length, 1);
-    assert.equal(launched[0].agentId, "wf-mixed_qa");
-    assert.equal(skipped[0].agentId, "wf-mixed_dev");
+    assert.equal(launched[0].agentId, `${WORKFLOW_ID}_agent-b`);
+    assert.equal(skipped[0].agentId, `${WORKFLOW_ID}_agent-a`);
   });
 });
