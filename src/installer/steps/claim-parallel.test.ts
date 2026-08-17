@@ -86,7 +86,7 @@ describe("claimStep parallel_group semantics", () => {
       );
   }
 
-  it("claims two sibling steps in same parallel_group concurrently", () => {
+  it("claims two sibling steps in same parallel_group concurrently", async () => {
     insertRun("r1");
     insertStep({ id: "s1", runId: "r1", stepId: "eda", agentId: "data-analyst", stepIndex: 0, status: "done" });
     insertStep({
@@ -109,19 +109,19 @@ describe("claimStep parallel_group semantics", () => {
     });
 
     // First sibling — preceded only by a done step → claimable.
-    const r2 = claimStep("modeler-classic", "r1");
+    const r2 = await claimStep("modeler-classic", "r1");
     assert.equal(r2.found, true);
     assert.equal(r2.stepId, "s2");
 
     // Second sibling — s2 is now 'running' and would normally block s3 because
     // s2.step_index < s3.step_index and s2.status NOT IN ('done','skipped').
     // The parallel_group exception in the prev-step filter must skip s2.
-    const r3 = claimStep("modeler-advanced", "r1");
+    const r3 = await claimStep("modeler-advanced", "r1");
     assert.equal(r3.found, true);
     assert.equal(r3.stepId, "s3");
   });
 
-  it("blocks post-group step while any group sibling is still running", () => {
+  it("blocks post-group step while any group sibling is still running", async () => {
     insertRun("r2");
     insertStep({ id: "s1", runId: "r2", stepId: "eda", agentId: "data-analyst", stepIndex: 0, status: "done" });
     insertStep({
@@ -155,11 +155,11 @@ describe("claimStep parallel_group semantics", () => {
     // s4 must wait because the parallel_group exception only applies when
     // BOTH prev.parallel_group and s.parallel_group are non-null AND equal.
     // s4.parallel_group is NULL, so siblings still count as upstream blockers.
-    const r = claimStep("ml-critic", "r2");
+    const r = await claimStep("ml-critic", "r2");
     assert.equal(r.found, false);
   });
 
-  it("blocks post-group step when only one group member is done", () => {
+  it("blocks post-group step when only one group member is done", async () => {
     insertRun("r3");
     insertStep({ id: "s1", runId: "r3", stepId: "eda", agentId: "data-analyst", stepIndex: 0, status: "done" });
     insertStep({
@@ -189,11 +189,11 @@ describe("claimStep parallel_group semantics", () => {
       status: "pending",
     });
 
-    const r = claimStep("ml-critic", "r3");
+    const r = await claimStep("ml-critic", "r3");
     assert.equal(r.found, false);
   });
 
-  it("allows post-group step once every group member is done", () => {
+  it("allows post-group step once every group member is done", async () => {
     insertRun("r4");
     insertStep({ id: "s1", runId: "r4", stepId: "eda", agentId: "data-analyst", stepIndex: 0, status: "done" });
     insertStep({
@@ -223,12 +223,12 @@ describe("claimStep parallel_group semantics", () => {
       status: "pending",
     });
 
-    const r = claimStep("ml-critic", "r4");
+    const r = await claimStep("ml-critic", "r4");
     assert.equal(r.found, true);
     assert.equal(r.stepId, "s4");
   });
 
-  it("group siblings stay blocked when a pre-group (non-group) step is still pending", () => {
+  it("group siblings stay blocked when a pre-group (non-group) step is still pending", async () => {
     insertRun("r5");
     insertStep({ id: "s1", runId: "r5", stepId: "eda", agentId: "data-analyst", stepIndex: 0, status: "pending" });
     insertStep({
@@ -252,11 +252,13 @@ describe("claimStep parallel_group semantics", () => {
 
     // The parallel_group exception ONLY suppresses siblings in the same
     // group — the eda step (parallel_group=NULL) is a real blocker.
-    assert.equal(claimStep("modeler-classic", "r5").found, false);
-    assert.equal(claimStep("modeler-advanced", "r5").found, false);
+    const rc1 = await claimStep("modeler-classic", "r5");
+    assert.equal(rc1.found, false);
+    const rc2 = await claimStep("modeler-advanced", "r5");
+    assert.equal(rc2.found, false);
   });
 
-  it("treats different parallel_groups as non-siblings (still block each other)", () => {
+  it("treats different parallel_groups as non-siblings (still block each other)", async () => {
     insertRun("r6");
     insertStep({ id: "s1", runId: "r6", stepId: "eda", agentId: "data-analyst", stepIndex: 0, status: "done" });
     insertStep({
@@ -279,17 +281,17 @@ describe("claimStep parallel_group semantics", () => {
     });
 
     // s2 is claimable — only the done eda step precedes it.
-    const r2 = claimStep("agent-a", "r6");
+    const r2 = await claimStep("agent-a", "r6");
     assert.equal(r2.found, true);
     assert.equal(r2.stepId, "s2");
 
     // s3 must NOT skip s2: their parallel_groups differ, so the exception
     // does not apply. s2 is now running → s3 is blocked.
-    const r3 = claimStep("agent-b", "r6");
+    const r3 = await claimStep("agent-b", "r6");
     assert.equal(r3.found, false);
   });
 
-  it("ignores parallel_group when run is not 'running'", () => {
+  it("ignores parallel_group when run is not 'running'", async () => {
     insertRun("r7");
     getDb().prepare("UPDATE runs SET status = 'paused' WHERE id = 'r7'").run();
     insertStep({ id: "s1", runId: "r7", stepId: "eda", agentId: "data-analyst", stepIndex: 0, status: "done" });
@@ -304,11 +306,11 @@ describe("claimStep parallel_group semantics", () => {
     });
 
     // run.status='paused' blocks any claim regardless of parallel_group.
-    const r = claimStep("modeler-classic", "r7");
+    const r = await claimStep("modeler-classic", "r7");
     assert.equal(r.found, false);
   });
 
-  it("only matches the requested agent within a parallel_group", () => {
+  it("only matches the requested agent within a parallel_group", async () => {
     insertRun("r8");
     insertStep({ id: "s1", runId: "r8", stepId: "eda", agentId: "data-analyst", stepIndex: 0, status: "done" });
     insertStep({
@@ -332,7 +334,7 @@ describe("claimStep parallel_group semantics", () => {
 
     // Asking for modeler-classic must not claim modeler-advanced's step
     // even though both are in the same parallel_group.
-    const r = claimStep("modeler-classic", "r8");
+    const r = await claimStep("modeler-classic", "r8");
     assert.equal(r.found, true);
     assert.equal(r.stepId, "s2");
 

@@ -68,6 +68,10 @@ describe("medic", () => {
         claim_pid INTEGER,
         claim_pgid INTEGER,
         claim_updated_at TEXT,
+        consecutive_heartbeats INTEGER DEFAULT 0,
+        spawn_count INTEGER DEFAULT 0,
+        last_outcome TEXT,
+        last_outcome_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -94,8 +98,8 @@ describe("medic", () => {
   });
 
   describe("checkDatabaseIntegrity", () => {
-    it("returns ok for a healthy database", () => {
-      const result = checkDatabaseIntegrity();
+    it("returns ok for a healthy database", async () => {
+      const result = await checkDatabaseIntegrity();
       assert.equal(result.ok, true);
     });
   });

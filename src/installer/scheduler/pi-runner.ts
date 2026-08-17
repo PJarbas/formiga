@@ -156,6 +156,15 @@ export async function runPi(
   // when detached:true. Fall back to childPid if getpgid is unavailable.
   const pgid = childPid ?? 0;
 
+  // Capture spawn failures early (ENOENT/EACCES etc.). Without a listener
+  // Node emits an unhandled 'error' and crashes the daemon; we want runPi
+  // to reject instead. child.stdout is null in that case, so the stream
+  // below would otherwise throw an opaque TypeError over the real cause.
+  let spawnError: Error | null = null;
+  child.on("error", (err) => {
+    spawnError = err;
+  });
+
   if (childPid && options.onSpawn) {
     try {
       options.onSpawn({ pid: childPid, pgid });
@@ -187,57 +196,79 @@ export async function runPi(
     }
   });
 
-  // Stream stdout to disk while extracting metadata in real-time
-  await streamStdoutWithExtractor(child.stdout!, outputFile, extractor, options.activityContext);
-
-  // Wait for child exit. Apply timeout guard.
-  // (stdout was already consumed above, so child should close soon)
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      // Terminate the whole process group: SIGTERM, then SIGKILL after 5s.
-      if (pgid) {
-        safeKillPgid(pgid, "SIGTERM");
-        setTimeout(() => safeKillPgid(pgid, "SIGKILL"), 5000).unref();
-      } else {
-        try { child.kill("SIGKILL"); } catch { /* best effort */ }
-      }
-      reject(new Error(`pi timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.on("error", (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      if (settled) return;
-      settled = true;
-      if (code === 0 || code === null) {
-        resolve();
-      } else {
-        const failureDurationMs = Date.now() - startedAt;
-        const failureStderr = stderrPieces.join("");
-        const failureStderrMeta = buildStreamLogMetadata(failureStderr);
-        logger.error("pi execution failed", {
-          pid: childPid ?? null,
-          pgid,
-          exitCode: code,
-          signal,
-          durationMs: failureDurationMs,
-          stderrBytes: failureStderrMeta.bytes,
-          stderrPreview: failureStderrMeta.preview,
-          stderrTruncated: failureStderrMeta.truncated,
-        });
-        const stderrSuffix = failureStderr ? `\nstderr: ${failureStderr}` : "";
-        reject(new Error(`pi failed: exited with code ${code}${signal ? ` (signal ${signal})` : ""}${stderrSuffix}`));
-      }
-    });
+  // CR-4: the timeout guard is installed immediately after spawn and covers
+  // the WHOLE invocation (streaming + exit wait), racing the work below.
+  // Previously the guard was only installed after streamStdoutWithExtractor
+  // resolved, so a wedged run whose stdout never closes escaped the timeout
+  // entirely and ran forever.
+  let timedOut = false;
+  let rejectTimeout!: (err: Error) => void;
+  const timeoutGuard = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
   });
+  const killProcessGroup = (): void => {
+    // Terminate the whole process group: SIGTERM, then SIGKILL after 5s.
+    if (pgid) {
+      safeKillPgid(pgid, "SIGTERM");
+      setTimeout(() => safeKillPgid(pgid, "SIGKILL"), 5000).unref();
+    } else {
+      try { child.kill("SIGKILL"); } catch { /* best effort */ }
+    }
+  };
+  const timer = setTimeout(() => {
+    timedOut = true;
+    logger.warn("pi timed out — killed process group", { pid: childPid ?? null, pgid, timeoutMs });
+    killProcessGroup();
+    rejectTimeout(new Error(`pi timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  // Track exit BEFORE streaming. A child that dies while the stream is
+  // being consumed (timeout kill, crash) can emit 'close' before we'd
+  // otherwise attach the listener — attaching here closes that race.
+  let settleExit: (code: number | null, signal: NodeJS.Signals | null) => void;
+  const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    settleExit = (code, signal) => resolve({ code, signal });
+  });
+  child.once("close", (code, signal) => settleExit(code, signal));
+
+  // Stream stdout while waiting for exit, racing the timeout guard so a
+  // wedged stream still dies on time (CR-4). On any stream rejection kill
+  // the group so the child can't outlive runPi (CR-5), then surface the
+  // most useful cause: timeout, spawn failure, or the stream error.
+  try {
+    const exitSignal = await Promise.race([
+      (async () => {
+        try {
+          await streamStdoutWithExtractor(child.stdout!, outputFile, extractor, options.activityContext);
+        } catch (err) {
+          if (!timedOut) killProcessGroup();
+          throw spawnError ?? err;
+        }
+        return await exitPromise;
+      })(),
+      timeoutGuard,
+    ]);
+    const { code, signal } = exitSignal;
+    if (code !== 0 && code !== null) {
+      const failureDurationMs = Date.now() - startedAt;
+      const failureStderr = stderrPieces.join("");
+      const failureStderrMeta = buildStreamLogMetadata(failureStderr);
+      logger.error("pi execution failed", {
+        pid: childPid ?? null,
+        pgid,
+        exitCode: code,
+        signal,
+        durationMs: failureDurationMs,
+        stderrBytes: failureStderrMeta.bytes,
+        stderrPreview: failureStderrMeta.preview,
+        stderrTruncated: failureStderrMeta.truncated,
+      });
+      const stderrSuffix = failureStderr ? `\nstderr: ${failureStderr}` : "";
+      throw new Error(`pi failed: exited with code ${code}${signal ? ` (signal ${signal})` : ""}${stderrSuffix}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 
   const durationMs = Date.now() - startedAt;
   const stderrOut = stderrPieces.join("");

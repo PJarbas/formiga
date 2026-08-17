@@ -124,13 +124,19 @@ export async function completeStep(stepId: string, output: string): Promise<{ st
 
   if (!step) throw new Error(`Step not found: ${stepId}`);
 
-  // Guard: don't process completions for failed runs
+  // Guard: don't process completions for failed runs, or for paused/draining
+  // runs. A stale completion must not advance a run the user has paused (M-2).
   const runId = step.run_id;
   const runCheck = await prisma.run.findUnique({
     where: { id: runId },
-    select: { status: true },
+    select: { status: true, scheduling_status: true },
   });
-  if (runCheck?.status === "failed" || runCheck?.status === "canceled") {
+  if (
+    runCheck?.status === "failed" ||
+    runCheck?.status === "canceled" ||
+    runCheck?.status === "paused" ||
+    runCheck?.scheduling_status === "draining_pause"
+  ) {
     return { status: "blocked" };
   }
 

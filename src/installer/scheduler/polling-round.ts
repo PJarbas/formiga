@@ -653,10 +653,25 @@ export async function executePollingRound(
       return;
     }
     if (row.status === "paused") {
+      // AL-2: this branch returns before the try/finally that clears the
+      // marker — without an explicit delete the job is stuck in-flight and
+      // every later tick is skipped forever.
+      inFlightJobs.delete(job.id);
+      inFlightChildren.delete(job.id);
       logger.debug("Polling round skipped — run paused", { ...context });
       return;
     }
     if (row.scheduling_status === "draining_pause") {
+      // AL-1: the heartbeat path must also drive drain finalization. When a
+      // drain is requested and in-flight work finishes, only a step-completion
+      // event used to finalize the pause — a drain with no completing step
+      // could hang in draining_pause. finalizeDrainingPause re-checks in-flight
+      // steps and only flips to paused when it's safe.
+      const { finalizeDrainingPause } = await import("../step-ops.js");
+      await finalizeDrainingPause(job.runId);
+      // AL-2: clear the marker (see paused branch above).
+      inFlightJobs.delete(job.id);
+      inFlightChildren.delete(job.id);
       logger.debug("Polling round skipped — run draining before pause (in-flight work can complete)", { ...context });
       return;
     }

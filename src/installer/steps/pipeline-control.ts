@@ -172,12 +172,19 @@ export async function finalizeDrainingPause(runId: string): Promise<void> {
 export async function advancePipeline(runId: string): Promise<{ advanced: boolean; runCompleted: boolean }> {
   const prisma = getPrisma();
 
-  // Guard: don't advance or complete a run that's already failed/cancelled
+  // Guard: don't advance or complete a run that's already failed/cancelled,
+  // paused, or draining before pause. A stale round must not promote a
+  // waiting step (or complete the run) on a run the user has paused (M-2).
   const run = await prisma.run.findUnique({
     where: { id: runId },
-    select: { status: true },
+    select: { status: true, scheduling_status: true },
   });
-  if (run?.status === "failed" || run?.status === "canceled") {
+  if (
+    run?.status === "failed" ||
+    run?.status === "canceled" ||
+    run?.status === "paused" ||
+    run?.scheduling_status === "draining_pause"
+  ) {
     return { advanced: false, runCompleted: false };
   }
 

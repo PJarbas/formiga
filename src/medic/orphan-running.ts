@@ -80,7 +80,19 @@ export async function findOrphanedRunningSteps(): Promise<OrphanedRunningStep[]>
       status: "running",
       claim_pid: { not: null },
       claim_updated_at: { lt: cutoff },
-      run: { status: "running" },
+      run: {
+        status: "running",
+        // AL-1: never reclaim a step whose run the user is pausing (drain
+        // in progress) or already paused. Reverting a dead step to pending
+        // would re-activate a run that was explicitly asked to wind down.
+        // `{ not: "draining_pause" }` alone would also drop NULL
+        // scheduling_status rows (SQL: NOT (NULL = x) is NULL), so include
+        // the explicit null branch to keep normal runs reclaimable.
+        OR: [
+          { scheduling_status: { not: "draining_pause" } },
+          { scheduling_status: null },
+        ],
+      },
     },
     select: {
       id: true,

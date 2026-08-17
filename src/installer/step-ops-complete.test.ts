@@ -29,12 +29,18 @@ describe("completeStep basic paths", () => {
     db.exec("PRAGMA journal_mode=WAL");
     db.exec(`CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
+      run_number INTEGER,
       workflow_id TEXT NOT NULL DEFAULT 'test',
       task TEXT NOT NULL DEFAULT 'test',
       status TEXT NOT NULL DEFAULT 'running',
       context TEXT NOT NULL DEFAULT '{}',
       tokens_spent INTEGER NOT NULL DEFAULT 0,
+      notify_url TEXT,
       scheduling_status TEXT,
+      scheduling_requested_at TEXT,
+      scheduling_error TEXT,
+      max_duration_minutes INTEGER,
+      last_progress_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
@@ -54,6 +60,15 @@ describe("completeStep basic paths", () => {
       loop_config TEXT,
       current_story_id TEXT,
       abandoned_count INTEGER DEFAULT 0,
+      parallel_group TEXT,
+      claim_job_id TEXT,
+      claim_pid INTEGER,
+      claim_pgid INTEGER,
+      claim_updated_at TEXT,
+      consecutive_heartbeats INTEGER DEFAULT 0,
+      spawn_count INTEGER DEFAULT 0,
+      last_outcome TEXT,
+      last_outcome_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
@@ -72,6 +87,23 @@ describe("completeStep basic paths", () => {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )`);
+    // The teardown path (scheduleRunCronTeardown/finalizeDrainingPause) fires
+    // a job_registry cleanup after run completion — give it a real table so it
+    // doesn't throw post-test.
+    db.exec(`CREATE TABLE IF NOT EXISTS job_registry (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      harness_type TEXT,
+      pid INTEGER,
+      pgid INTEGER,
+      interval_minutes INTEGER NOT NULL DEFAULT 5,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      metadata TEXT
+    )`);
   });
 
   afterEach(() => {
@@ -85,7 +117,7 @@ describe("completeStep basic paths", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("completes a simple single step", () => {
+  it("completes a simple single step", async () => {
     db.prepare(
       "INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)"
     ).run("run-1", "wf", "test", "running");
@@ -94,14 +126,14 @@ describe("completeStep basic paths", () => {
       "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status) VALUES (?, ?, ?, ?, ?, ?, ?)"
     ).run("step-1-id", "run-1", "plan", "dev", 0, "", "running");
 
-    const result = completeStep("step-1-id", "CHANGES: done");
+    const result = await completeStep("step-1-id", "CHANGES: done");
     assert.ok(result.status === "advanced" || result.status === "completed");
 
     const step = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-1-id") as { status: string };
     assert.equal(step.status, "done");
   });
 
-  it("blocks completion for failed runs", () => {
+  it("blocks completion for failed runs", async () => {
     db.prepare(
       "INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)"
     ).run("run-fail", "wf", "test", "failed");
@@ -110,45 +142,45 @@ describe("completeStep basic paths", () => {
       "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, status) VALUES (?, ?, ?, ?, ?, ?)"
     ).run("step-fail-id", "run-fail", "plan", "dev", 0, "running");
 
-    const result = completeStep("step-fail-id", "output");
+    const result = await completeStep("step-fail-id", "output");
     assert.equal(result.status, "blocked");
   });
 
-  it("throws when step not found", () => {
-    assert.throws(
-      () => completeStep("nonexistent-id", "output"),
+  it("throws when step not found", async () => {
+    await assert.rejects(
+      completeStep("nonexistent-id", "output"),
       /Step not found/,
     );
   });
 
-  it("passes expects validation", () => {
+  it("passes expects validation", async () => {
     db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r2", "wf", "t", "running");
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status) VALUES (?, ?, ?, ?, ?, ?, ?)").run("s2", "r2", "plan", "dev", 0, "STATUS: done", "running");
-    const r = completeStep("s2", "STATUS: done");
+    const r = await completeStep("s2", "STATUS: done");
     assert.ok(r.status === "advanced" || r.status === "completed");
   });
 
-  it("retries on expects failure", () => {
+  it("retries on expects failure", async () => {
     db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r3", "wf", "t", "running");
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status) VALUES (?, ?, ?, ?, ?, ?, ?)").run("s3", "r3", "plan", "dev", 0, "REPO: x", "running");
-    const r = completeStep("s3", "wrong");
+    const r = await completeStep("s3", "wrong");
     assert.equal(r.status, "retrying");
   });
 
-  it("fails when expects exhausted", () => {
+  it("fails when expects exhausted", async () => {
     db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r4", "wf", "t", "running");
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, retry_count, max_retries) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s4", "r4", "plan", "dev", 0, "REPO: x", "running", 3, 3);
-    const r = completeStep("s4", "no");
+    const r = await completeStep("s4", "no");
     assert.equal(r.status, "failed");
   });
 
-  it("completes loop step story and stays running for next story", () => {
+  it("completes loop step story and stays running for next story", async () => {
     db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r7", "wf", "t", "running");
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, type, current_story_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s7-loop", "r7", "develop", "dev", 0, "", "running", "loop", "story-1-id");
     db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-1-id", "r7", 0, "US-001", "Login", "Build login", '["AC1"]', "running");
     db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-2-id", "r7", 1, "US-002", "Dashboard", "Build dashboard", '["AC2"]', "pending");
 
-    const r = completeStep("s7-loop", "CHANGES: done");
+    const r = await completeStep("s7-loop", "CHANGES: done");
     // Without verify_each, checkLoopContinuation finds pending stories → advanced
     assert.ok(r.status === "advanced" || r.status === "completed");
 
@@ -161,14 +193,14 @@ describe("completeStep basic paths", () => {
     assert.equal(step.current_story_id, null);
   });
 
-  it("completes loop step and finishes run when all stories done", () => {
+  it("completes loop step and finishes run when all stories done", async () => {
     db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r8", "wf", "t", "running");
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, type, current_story_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s8-loop", "r8", "develop", "dev", 0, "", "running", "loop", "story-last-id");
     db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-last-id", "r8", 0, "US-FINAL", "Final", "Last story", '["AC1"]', "running");
     // Mark all other potential stories as done (so checkLoopContinuation sees no pending)
     // With only one story and it just being completed, pipeline should finish
 
-    const r = completeStep("s8-loop", "CHANGES: done");
+    const r = await completeStep("s8-loop", "CHANGES: done");
     // No verify_each, no pending stories → run completed
     assert.ok(r.status === "advanced" || r.status === "completed");
 
@@ -177,14 +209,14 @@ describe("completeStep basic paths", () => {
     assert.ok(step.status === "done" || step.status === "running");
   });
 
-  it("completes loop step with verify_each: sets verify step to pending", () => {
+  it("completes loop step with verify_each: sets verify step to pending", async () => {
     db.prepare("INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)").run("r9", "wf", "t", "running");
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, type, loop_config, current_story_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s9-loop", "r9", "develop", "dev", 0, "", "running", "loop", JSON.stringify({ verify_each: true, verify_step: "verify" }), "story-vfy-id");
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status) VALUES (?, ?, ?, ?, ?, ?, ?)").run("s9-verify", "r9", "verify", "verifier", 1, "", "waiting");
     db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-vfy-id", "r9", 0, "US-VFY", "Verify", "Needs verify", '["AC1"]', "running");
     db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-vfy-2", "r9", 1, "US-NEXT", "Next", "More", '["AC2"]', "pending");
 
-    const r = completeStep("s9-loop", "CHANGES: done");
+    const r = await completeStep("s9-loop", "CHANGES: done");
     assert.equal(r.status, "advanced");
 
     // Verify step should now be pending
@@ -196,7 +228,7 @@ describe("completeStep basic paths", () => {
     assert.equal(loopStep.status, "running");
   });
 
-  it("completes verify step with retry: resets story to pending", () => {
+  it("completes verify step with retry: resets story to pending", async () => {
     db.prepare("INSERT INTO runs (id, workflow_id, task, status, context) VALUES (?, ?, ?, ?, ?)").run("r10", "wf", "t", "running", "{}");
     // Loop step with verify_each pointing to the verify step
     db.prepare("INSERT INTO steps (id, run_id, step_id, agent_id, step_index, expects, status, type, loop_config) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("s10-loop", "r10", "develop", "dev", 0, "", "pending", "loop", JSON.stringify({ verify_each: true, verify_step: "verify2" }));
@@ -204,7 +236,7 @@ describe("completeStep basic paths", () => {
     db.prepare("INSERT INTO stories (id, run_id, story_index, story_id, title, description, acceptance_criteria, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("story-10-done", "r10", 0, "US-DONE", "DoneStory", "Was done", '["AC1"]', "done");
 
     // Complete verify step with STATUS: retry
-    const r = completeStep("s10-verify", "STATUS: retry\nISSUES: needs work");
+    const r = await completeStep("s10-verify", "STATUS: retry\nISSUES: needs work");
     assert.ok(r.status === "advanced" || r.status === "completed");
 
     // The last done story should be reset to pending
@@ -215,5 +247,73 @@ describe("completeStep basic paths", () => {
     // Loop step should be set to pending (ready for next story iteration)
     const loopStep = db.prepare("SELECT status FROM steps WHERE id = ?").get("s10-loop") as { status: string };
     assert.equal(loopStep.status, "pending");
+  });
+
+  // ── M-2: stale completions/advances must not touch paused or draining runs ──
+
+  it("blocks completion for paused runs (M-2)", async () => {
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)"
+    ).run("run-paused", "wf", "test", "paused");
+
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, status) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run("step-paused-id", "run-paused", "plan", "dev", 0, "running");
+
+    const result = await completeStep("step-paused-id", "output");
+    assert.equal(result.status, "blocked");
+
+    const step = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-paused-id") as { status: string };
+    assert.equal(step.status, "running");
+  });
+
+  it("blocks completion for draining_pause runs (M-2)", async () => {
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, scheduling_status) VALUES (?, ?, ?, ?, ?)"
+    ).run("run-drain", "wf", "test", "running", "draining_pause");
+
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, status) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run("step-drain-id", "run-drain", "plan", "dev", 0, "running");
+
+    const result = await completeStep("step-drain-id", "output");
+    assert.equal(result.status, "blocked");
+
+    const step = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-drain-id") as { status: string };
+    assert.equal(step.status, "running");
+  });
+
+  it("advancePipeline does not advance paused runs (M-2)", async () => {
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status) VALUES (?, ?, ?, ?)"
+    ).run("run-adv-paused", "wf", "test", "paused");
+
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, status) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run("step-adv-paused", "run-adv-paused", "plan", "dev", 0, "waiting");
+
+    const { advancePipeline } = await import("../../dist/installer/step-ops.js");
+    const result = await advancePipeline("run-adv-paused");
+    assert.deepEqual(result, { advanced: false, runCompleted: false });
+
+    const step = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-adv-paused") as { status: string };
+    assert.equal(step.status, "waiting");
+  });
+
+  it("advancePipeline does not advance draining_pause runs (M-2)", async () => {
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, scheduling_status) VALUES (?, ?, ?, ?, ?)"
+    ).run("run-adv-drain", "wf", "test", "running", "draining_pause");
+
+    db.prepare(
+      "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, status) VALUES (?, ?, ?, ?, ?, ?)"
+    ).run("step-adv-drain", "run-adv-drain", "plan", "dev", 0, "waiting");
+
+    const { advancePipeline } = await import("../../dist/installer/step-ops.js");
+    const result = await advancePipeline("run-adv-drain");
+    assert.deepEqual(result, { advanced: false, runCompleted: false });
+
+    const step = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-adv-drain") as { status: string };
+    assert.equal(step.status, "waiting");
   });
 });

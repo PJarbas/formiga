@@ -76,8 +76,8 @@ describe("medic checks", () => {
   });
 
   describe("checkDatabaseIntegrity", () => {
-    it("returns ok for a healthy database", () => {
-      const result = checkDatabaseIntegrity();
+    it("returns ok for a healthy database", async () => {
+      const result = await checkDatabaseIntegrity();
       assert.equal(result.ok, true);
     });
   });
@@ -230,8 +230,8 @@ describe("medic checks", () => {
   });
 
   describe("checkDatabaseIntegrity", () => {
-    it("returns ok for a healthy database", () => {
-      const result = checkDatabaseIntegrity();
+    it("returns ok for a healthy database", async () => {
+      const result = await checkDatabaseIntegrity();
       assert.equal(result.ok, true);
     });
   });
