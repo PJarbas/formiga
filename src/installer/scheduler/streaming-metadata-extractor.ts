@@ -12,7 +12,7 @@
 // No .join() on unbounded arrays — toString() checks total size first.
 // ══════════════════════════════════════════════════════════════════════
 
-import { extractTokenUsage } from "./polling-parser.js";
+import { extractTokenUsage, collectTextFragments } from "./polling-parser.js";
 
 // ── Public types ──────────────────────────────────────────────────────
 
@@ -127,11 +127,26 @@ export class StreamingMetadataExtractor {
         if (record) {
           this.jsonDetected = true;
 
-          // Extract run/step IDs from any JSON event
-          const runMatch = JSON.stringify(record).match(RUN_ID_REGEX);
-          if (runMatch) this.runId = runMatch[1];
-          const stepMatch = JSON.stringify(record).match(STEP_ID_REGEX);
-          if (stepMatch) this.stepId = stepMatch[1];
+          // Extract run/step IDs from any JSON event.
+          // Real pi nests IDs inside a `text` field as escaped JSON
+          // (e.g. "text": "{\"stepId\":\"...\",\"runId\":\"...\"}"); the raw
+          // JSON.stringify keeps the escaped quotes, which breaks the field
+          // regex. Collect un-escaped text fragments (shared with
+          // polling-parser) so the regex sees the clean "key":"value" form.
+          // Raw string covers top-level fields; fragments cover the
+          // escaped-nested contract. First-seen-wins per ID across lines.
+          const fragments: string[] = [];
+          collectTextFragments(record, fragments);
+          const idText = [JSON.stringify(record), fragments.join("\n")].join("\n");
+
+          if (!this.runId) {
+            const runMatch = idText.match(RUN_ID_REGEX);
+            if (runMatch) this.runId = runMatch[1];
+          }
+          if (!this.stepId) {
+            const stepMatch = idText.match(STEP_ID_REGEX);
+            if (stepMatch) this.stepId = stepMatch[1];
+          }
 
           // Extract token usage + assistant text from message_end
           if (record.type === "message_end") {
