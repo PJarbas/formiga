@@ -193,58 +193,118 @@ export async function getAgentUnifiedStatus(
 
 /**
  * Resolve the current phase of the ML pipeline for a run.
- *
- * Priority:
- *   1. Look at `experiments` (leaderboard records) — agents that have
- *      submitted experiments tell us the highest phase.
- *   2. Fallback to the `steps` table for early stages before any
- *      experiment exists.
+ * Single-run convenience wrapper over `getCurrentPhases`.
  */
 export async function getCurrentPhase(runId: string): Promise<string> {
+  const phases = await getCurrentPhases([runId]);
+  return phases.get(runId) ?? "idle";
+}
+
+/**
+ * Resolve the current phase of the ML pipeline for many runs in a single
+ * batch (M-5). Replaces the per-run N+1 in `/api/runs`: the experiments
+ * max-round, current-round agents, arena-session and steps fallback queries
+ * each run once for all runs instead of 3-4 queries per run.
+ *
+ * Result maps `runId` → phase; a run with no rows at all gets "idle".
+ *
+ * Priority (same as the original single-run logic):
+ *   1. Experiments tell us the highest phase reached.
+ *   2. Arena session takes precedence over agent-derived phases.
+ *   3. Fallback to the `steps` table before any experiment exists.
+ */
+export async function getCurrentPhases(runIds: string[]): Promise<Map<string, string>> {
+  const phases = new Map<string, string>();
+  if (runIds.length === 0) return phases;
   const prisma = getPrisma();
 
-  // Step 1: experiments are the preferred source when they exist
-  const maxAgg = await prisma.experiment.aggregate({
-    where: { run_id: runId },
+  // Step 1: max round per run — one grouped query instead of one aggregate/run.
+  const roundRows = await prisma.experiment.groupBy({
+    by: ["run_id"],
+    where: { run_id: { in: runIds } },
     _max: { round_number: true },
   });
-  const currentRound = maxAgg._max.round_number ?? 0;
+  const currentRoundByRun = new Map<string, number>();
+  for (const row of roundRows) {
+    currentRoundByRun.set(row.run_id, row._max.round_number ?? 0);
+  }
 
-  const expAgents = await prisma.experiment.findMany({
-    where: {
-      run_id: runId,
-      round_number: currentRound,
-    },
-    distinct: ["agent_name"],
-    select: { agent_name: true },
+  // Step 2: agents present at each run's current round — one query, filtered
+  // in memory (the original filtered by round_number in SQL per run).
+  const agentRows = await prisma.experiment.findMany({
+    where: { run_id: { in: runIds } },
+    distinct: ["run_id", "agent_name", "round_number"],
+    select: { run_id: true, agent_name: true, round_number: true },
   });
-  const agentNames = new Set(expAgents.map((a) => a.agent_name));
+  const agentsByRun = new Map<string, Set<string>>();
+  for (const row of agentRows) {
+    if (row.round_number !== currentRoundByRun.get(row.run_id)) continue;
+    let set = agentsByRun.get(row.run_id);
+    if (!set) {
+      set = new Set<string>();
+      agentsByRun.set(row.run_id, set);
+    }
+    set.add(row.agent_name);
+  }
 
-  // Check for arena session first
-  const hasArenaSession = await prisma.arenaSession.count({
-    where: { run_id: runId },
-  }) > 0;
-  if (hasArenaSession) return "arena";
+  // Step 3: arena sessions per run — one grouped count instead of one count/run.
+  const arenaRows = await prisma.arenaSession.groupBy({
+    by: ["run_id"],
+    where: { run_id: { in: runIds } },
+    _count: { _all: true },
+  });
+  const arenaRuns = new Set(arenaRows.map((r) => r.run_id));
 
+  for (const runId of runIds) {
+    const agentNames = agentsByRun.get(runId) ?? new Set<string>();
+    if (arenaRuns.has(runId)) {
+      phases.set(runId, "arena");
+      continue;
+    }
+    const phase = derivePhaseFromAgents(agentNames);
+    if (phase) phases.set(runId, phase);
+  }
+
+  // Step 4: no experiments yet for the remaining runs — read from steps.
+  const idleRunIds = runIds.filter((id) => !phases.has(id));
+  if (idleRunIds.length > 0) {
+    const steps = await prisma.step.findMany({
+      where: { run_id: { in: idleRunIds } },
+      select: { run_id: true, step_id: true, status: true },
+    });
+    const stepStatusByRun = new Map<string, Record<string, VisualStatus>>();
+    for (const s of steps) {
+      let map = stepStatusByRun.get(s.run_id);
+      if (!map) {
+        map = {};
+        stepStatusByRun.set(s.run_id, map);
+      }
+      map[s.step_id] = STEP_TO_VISUAL[s.status as StepStatus] ?? "todo";
+    }
+    for (const runId of idleRunIds) {
+      phases.set(runId, derivePhaseFromSteps(stepStatusByRun.get(runId) ?? {}));
+    }
+  }
+
+  return phases;
+}
+
+/** Map the agent set present at a run's current round to a phase label. */
+function derivePhaseFromAgents(agentNames: Set<string>): string {
   if (agentNames.has("ml-critic")) return "audit";
   if (agentNames.has("modeler-classic") || agentNames.has("modeler-advanced")) return "modeling";
   if (agentNames.has("feature-engineer")) return "feature_engineering";
   if (agentNames.has("data-analyst")) return "data_analysis";
   if (agentNames.size > 0) return "complete";
+  return "";
+}
 
-  // Step 2: no experiments yet — read from steps
-  const steps = await prisma.step.findMany({
-    where: { run_id: runId },
-    select: { step_id: true, status: true },
-  });
-  const stepStatus: Record<string, VisualStatus> = {};
-  for (const s of steps) stepStatus[s.step_id] = STEP_TO_VISUAL[s.status as StepStatus] ?? "todo";
-
+/** Fallback phase derivation from step visual statuses (no experiments yet). */
+function derivePhaseFromSteps(stepStatus: Record<string, VisualStatus>): string {
   if (stepStatus["audit"] === "running" || stepStatus["audit"] === "done") return "audit";
   if (stepStatus["model-classic"] === "running" || stepStatus["model-classic"] === "done" || stepStatus["model-advanced"] === "running" || stepStatus["model-advanced"] === "done") return "modeling";
   if (stepStatus["features"] === "running" || stepStatus["features"] === "done") return "feature_engineering";
   if (stepStatus["eda"] === "running" || stepStatus["eda"] === "done") return "data_analysis";
-
   return "idle";
 }
 

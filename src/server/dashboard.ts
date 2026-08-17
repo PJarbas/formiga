@@ -55,6 +55,7 @@ import {
   getAgentUnifiedStatus,
   getAgentHealth,
   getCurrentPhase,
+  getCurrentPhases,
   getAgentRoundSummaries,
 } from "./pipeline-status.js";
 import { ArenaRepositoryImpl } from "../arena/arena-repository.js";
@@ -2325,26 +2326,50 @@ const FALLBACK_PHASE_LABELS: Array<{ id: string; label: string }> = [
   { id: "complete", label: "Done" },
 ];
 
-async function derivePhaseLabelsFromRun(runId: string): Promise<Array<{ id: string; label: string }>> {
+/**
+ * Batch variant of the per-run label derivation (M-5): resolves the phase
+ * pipeline labels for many runs with a single `steps` query instead of one
+ * per run, so `/api/runs` does not N+1 on the label derivation either.
+ */
+async function derivePhaseLabelsFromRuns(
+  runIds: string[],
+): Promise<Map<string, Array<{ id: string; label: string }>>> {
+  const map = new Map<string, Array<{ id: string; label: string }>>();
+  if (runIds.length === 0) return map;
   const prisma = getPrisma();
+
   const steps = await prisma.step.findMany({
-    where: { run_id: runId },
+    where: { run_id: { in: runIds } },
     orderBy: { step_index: "asc" },
-    select: { step_id: true },
+    select: { run_id: true, step_id: true },
   });
 
-  if (steps.length === 0) return FALLBACK_PHASE_LABELS;
-
-  const seen = new Set<string>();
-  const labels: Array<{ id: string; label: string }> = [];
+  const byRun = new Map<string, Array<{ id: string; label: string }>>();
+  const seenByRun = new Map<string, Set<string>>();
   for (const step of steps) {
-    const id = step.step_id;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    labels.push({ id, label: STEP_LABEL_MAP[id] ?? id.charAt(0).toUpperCase() + id.slice(1) });
+    let seen = seenByRun.get(step.run_id);
+    if (!seen) {
+      seen = new Set<string>();
+      seenByRun.set(step.run_id, seen);
+    }
+    if (seen.has(step.step_id)) continue; // first occurrence wins (matches single-run logic)
+    seen.add(step.step_id);
+    let labels = byRun.get(step.run_id);
+    if (!labels) {
+      labels = [];
+      byRun.set(step.run_id, labels);
+    }
+    labels.push({
+      id: step.step_id,
+      label: STEP_LABEL_MAP[step.step_id] ?? step.step_id.charAt(0).toUpperCase() + step.step_id.slice(1),
+    });
   }
-  labels.push({ id: "complete", label: "Done" });
-  return labels;
+
+  for (const runId of runIds) {
+    const labels = byRun.get(runId) ?? [];
+    map.set(runId, labels.length === 0 ? FALLBACK_PHASE_LABELS : [...labels, { id: "complete", label: "Done" }]);
+  }
+  return map;
 }
 
 function derivePhases(
@@ -2487,10 +2512,16 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
 
     const STALE_THRESHOLD_MIN = parseInt(process.env.FORMIGA_RUN_MAX_DURATION_MINUTES ?? "120", 10) || 120;
 
-    const runs = await Promise.all(
-      allRuns.map(async (run) => {
-        const currentPhase = await getCurrentPhase(run.id);
-        const phaseLabels = await derivePhaseLabelsFromRun(run.id);
+    // M-5: resolve phases and phase-labels for every run in one batched pass
+    // instead of 3-4 + 1 queries per run (the /api/runs N+1).
+    const [currentPhases, phaseLabelsMap] = await Promise.all([
+      getCurrentPhases(runIds),
+      derivePhaseLabelsFromRuns(runIds),
+    ]);
+
+    const runs = allRuns.map((run) => {
+        const currentPhase = currentPhases.get(run.id) ?? "idle";
+        const phaseLabels = phaseLabelsMap.get(run.id) ?? FALLBACK_PHASE_LABELS;
         const stats = statsMap.get(run.id);
         const startMs = run.created_at?.getTime() ?? null;
         const endMs = run.updated_at?.getTime() ?? null;
@@ -2559,8 +2590,7 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
           no_hurry,
           staleness,
         };
-      }),
-    );
+    });
 
     jsonResponse(res, { runs });
   })().catch((err) => errorResponse(res, `Failed to build runs snapshot: ${(err as Error).message}`));
