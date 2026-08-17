@@ -1006,24 +1006,17 @@ function buildPromptsForRound(
       prompt += `### Warm-Start: Melhores Anteriores para Este Dataset\n`;
       prompt += warmStartHints.join("\n") + "\n\n";
     }
-    // Inject Formiga API helpers for artifact access
-    const apiUrl = config.formigaApi ?? process.env.FORMIGA_DASHBOARD_URL ?? "http://localhost:3334";
-    prompt += `### Formiga API (acesso a artefatos)\n\n`;
-    prompt += `Use estas funções bash para ler/salvar artefatos e consultar o leaderboard:\n\n`;
-    prompt += `\`\`\`bash\n`;
-    prompt += `formiga_read_artifact() {\n`;
-    prompt += `  curl -s "${apiUrl}/api/runs/${config.runId}/agent-artifacts/$1" | jq -r '.content'\n`;
-    prompt += `}\n\n`;
-    prompt += `formiga_save_artifact() {\n`;
-    prompt += `  local key="$1"; local content="$2"\n`;
-    prompt += `  curl -s -X POST "${apiUrl}/api/runs/${config.runId}/agent-artifacts/$key" \\\n`;
-    prompt += `    -H "Content-Type: application/json" \\\n`;
-    prompt += `    -d "{\\"stepId\\": \\"arena\\", \\"agentId\\": \\"${agent.id}\\", \\"content\\": $content}"\n`;
-    prompt += `}\n\n`;
-    prompt += `formiga_leaderboard() {\n`;
-    prompt += `  curl -s "${apiUrl}/api/leaderboard/$1?runId=${config.runId}"\n`;
-    prompt += `}\n`;
-    prompt += `\`\`\`\n\n`;
+    // Formiga dashboard persistence: the pi extension exposes native tools
+    // (save_artifact / log_decision / report_metric / query_leaderboard). Do NOT
+    // inject curl/bash helpers here — they bypass the tool system, carry the
+    // wrong step attribution, and miss the dashboard auth header.
+    prompt += `### Formiga Dashboard (persistência de artefatos)\n\n`;
+    prompt += `Use as ferramentas nativas da extensão formiga-agent-tools (disponíveis nesta sessão) para persistir saídas no dashboard — NUNCA use curl/bash para isso:\n\n`;
+    prompt += `  - save_artifact({ key, data })   Persiste JSON estruturado (EDA report, features metadata, baseline submission, configs)\n`;
+    prompt += `  - report_metric({ name, value, tags? })   Reporta métricas numéricas (CV score, tempos, contagens)\n`;
+    prompt += `  - log_decision({ decision_type, description, reasoning? })   Registra decisões para auditoria/explicabilidade\n`;
+    prompt += `  - query_leaderboard({ limit? })  Lê o estado atual do leaderboard\n\n`;
+    prompt += `Artefatos de etapas anteriores estão disponíveis em disco sob \`artifacts/\` — use as ferramentas de leitura de arquivo para consultá-los.\n\n`;
     prompt += `**Artefatos disponíveis:** eda_config, eda_report, features_metadata, baseline_submission, split_config, benchmark_config\n\n`;
 
     prompt += `### Regras\n`;

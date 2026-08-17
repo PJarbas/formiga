@@ -4,6 +4,9 @@
 
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   readContext,
@@ -29,10 +32,89 @@ describe("readContext", () => {
 
   test("falls back to defaults when env is empty", () => {
     const ctx = readContext({});
-    assert.equal(ctx.apiUrl, "http://localhost:3737");
+    assert.equal(ctx.apiUrl, "http://localhost:3334");
     assert.equal(ctx.runId, "unknown");
     assert.equal(ctx.stepId, "unknown");
     assert.equal(ctx.agentId, "unknown");
+  });
+});
+
+// ── x-formiga-secret header ──────────────────────────────────────────
+
+describe("x-formiga-secret header", () => {
+  const originalFetch = globalThis.fetch;
+  const originalHome = process.env.HOME;
+  let tempDir;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-secret-test-"));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    process.env.HOME = originalHome;
+    delete process.env.FORMIGA_API_SECRET;
+    delete process.env.FORMIGA_DAEMON_SECRET_FILE;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test("sends x-formiga-secret read from the daemon secret file (trimmed)", async () => {
+    const secretFile = path.join(tempDir, "daemon-secret");
+    fs.writeFileSync(secretFile, "  top-secret  \n");
+    process.env.FORMIGA_DAEMON_SECRET_FILE = secretFile;
+
+    let capturedInit;
+    globalThis.fetch = async (_url, init) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ id: 1, artifactKey: "k" }), { status: 200 });
+    };
+
+    await saveArtifact(
+      { apiUrl: "http://x", runId: "r", stepId: "s", agentId: "a" },
+      "k",
+      {},
+    );
+
+    assert.equal(capturedInit.headers["x-formiga-secret"], "top-secret");
+  });
+
+  test("omits the header when no secret can be resolved", async () => {
+    process.env.FORMIGA_DAEMON_SECRET_FILE = path.join(tempDir, "missing-secret");
+
+    let capturedInit;
+    globalThis.fetch = async (_url, init) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ id: 1, artifactKey: "k" }), { status: 200 });
+    };
+
+    await saveArtifact(
+      { apiUrl: "http://x", runId: "r", stepId: "s", agentId: "a" },
+      "k",
+      {},
+    );
+
+    assert.equal(capturedInit.headers["x-formiga-secret"], undefined);
+  });
+
+  test("FORMIGA_API_SECRET env var takes precedence over the secret file", async () => {
+    const secretFile = path.join(tempDir, "daemon-secret");
+    fs.writeFileSync(secretFile, "file-secret\n");
+    process.env.FORMIGA_DAEMON_SECRET_FILE = secretFile;
+    process.env.FORMIGA_API_SECRET = "env-secret";
+
+    let capturedInit;
+    globalThis.fetch = async (_url, init) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ id: 1, artifactKey: "k" }), { status: 200 });
+    };
+
+    await saveArtifact(
+      { apiUrl: "http://x", runId: "r", stepId: "s", agentId: "a" },
+      "k",
+      {},
+    );
+
+    assert.equal(capturedInit.headers["x-formiga-secret"], "env-secret");
   });
 });
 

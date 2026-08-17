@@ -726,20 +726,50 @@ async function checkLoopContinuation(runId: string, loopStepId: string): Promise
 
 // ── Artifact Auto-Registration ──────────────────────────────────────────
 
-/** Known artifact files per agent, relative to workspace/artifacts/ */
-const AGENT_ARTIFACT_FILES: Record<string, string[]> = {
-  "data-analyst": ["eda_report.json", "eda_config.json"],
-  "feature-engineer": ["features_meta.json", "features.parquet", "split.pkl", "split.checksum"],
-  "modeler-classic": ["modeler-classic_submission.json"],
-  "modeler-advanced": ["modeler-advanced_submission.json"],
-  "ml-critic": ["audit_report.json"],
+/**
+ * Known artifact files per agent (relative to workspace/artifacts/), mapped to
+ * the canonical dashboard artifact key the frontend expects (see
+ * AGENT_INFO_REGISTRY.artifactsOut in src/shared/dashboard-types.ts). The key is
+ * stored bare (e.g. "eda_report") — the frontend and the MCP read path look it
+ * up by exact key, so the old `<agentId>/<fileName>` form never surfaced.
+ */
+const AGENT_ARTIFACT_FILES: Record<string, Array<{ key: string; file: string }>> = {
+  "data-analyst": [
+    { key: "eda_report", file: "eda_report.json" },
+    { key: "eda_config", file: "eda_config.json" },
+  ],
+  "feature-engineer": [
+    { key: "features_metadata", file: "feature_quality_report.json" },
+    { key: "split_config", file: "split.pkl" },
+    { key: "baseline_submission", file: "baseline.json" },
+    { key: "preprocessing_config", file: "benchmark_config.json" },
+  ],
+  "modeler-classic": [
+    { key: "modeler_classic_submission", file: "modeler-classic_submission.json" },
+  ],
+  "modeler-advanced": [
+    { key: "modeler_advanced_submission", file: "modeler-advanced_submission.json" },
+  ],
+  "ml-critic": [{ key: "audit_report", file: "audit_report.json" }],
 };
+
+/**
+ * Strip the `<workflowId>_` prefix from a stored agent id (e.g.
+ * "ml-autoresearch_data-analyst" → "data-analyst"). Arena/pi runs persist the
+ * workflow-prefixed form (arena-engine.ts builds `ml-autoresearch_<persona>`),
+ * but the artifact map and the frontend registry are keyed by bare persona name.
+ */
+function normalizeAgentId(agentId: string, workflowId?: string): string {
+  if (!workflowId) return agentId;
+  const prefix = `${workflowId}_`;
+  return agentId.startsWith(prefix) ? agentId.slice(prefix.length) : agentId;
+}
 
 /**
  * Auto-register artifacts produced by an agent into the agent_artifacts table.
  * Called after step completion. Best-effort: missing files are silently skipped.
  */
-async function autoRegisterArtifacts(
+export async function autoRegisterArtifacts(
   runId: string,
   stepId: string,
   agentId: string,
@@ -748,20 +778,22 @@ async function autoRegisterArtifacts(
   const workspace = context.workspace ?? context.working_directory_for_harness;
   if (!workspace) return;
 
-  const knownFiles = AGENT_ARTIFACT_FILES[agentId];
+  const workflowId = await getWorkflowId(runId);
+  const baseAgentId = normalizeAgentId(agentId, workflowId);
+  const knownFiles = AGENT_ARTIFACT_FILES[baseAgentId];
   if (!knownFiles) return;
 
   try {
     const { recordAgentArtifact } = await import("../../server/routes/agent-activity.js");
     const artifactsDir = path.join(workspace, "artifacts");
 
-    for (const fileName of knownFiles) {
-      const filePath = path.join(artifactsDir, fileName);
+    for (const entry of knownFiles) {
+      const filePath = path.join(artifactsDir, entry.file);
       if (!fs.existsSync(filePath)) continue;
 
       try {
         const stat = fs.statSync(filePath);
-        const content = fileName.endsWith(".json")
+        const content = entry.file.endsWith(".json")
           ? JSON.parse(fs.readFileSync(filePath, "utf-8"))
           : { path: filePath, size: stat.size };
 
@@ -769,14 +801,14 @@ async function autoRegisterArtifacts(
           runId,
           stepId,
           agentId,
-          artifactKey: `${agentId}/${fileName}`,
+          artifactKey: entry.key,
           artifactPath: filePath,
           content: content as Record<string, unknown>,
-          contentType: fileName.endsWith(".json") ? "json" : "binary",
+          contentType: entry.file.endsWith(".json") ? "json" : "binary",
           sizeBytes: stat.size,
         });
       } catch (err) {
-        logger.debug("Artifact auto-register skipped", { agentId, fileName, error: String(err) });
+        logger.debug("Artifact auto-register skipped", { agentId, fileName: entry.file, error: String(err) });
       }
     }
   } catch (err) {
