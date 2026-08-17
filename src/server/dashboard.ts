@@ -205,18 +205,21 @@ function handleRunDetail(
 }
 
 function handleEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
-    const events = getRecentEvents(Math.min(limit, 500));
+    // B-9: clamp the limit so a malformed/absent param can't read the whole ledger.
+    const rawLimit = parseInt(url.searchParams.get("limit") ?? "50", 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 50;
+    const events = await getRecentEvents(limit);
     jsonResponse(res, { events });
-  } catch (err) {
-    errorResponse(res, `Failed to get events: ${(err as Error).message}`);
-  }
+  })().catch((err) => {
+    logger.error("handleEvents failed", { error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 function handleLogsTail(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const offsetParam = parseInt(url.searchParams.get("offset") ?? "0", 10);
     const offset = Number.isFinite(offsetParam) ? offsetParam : 0;
@@ -226,13 +229,14 @@ function handleLogsTail(req: http.IncomingMessage, res: http.ServerResponse): vo
       ? { kind: "run", runId }
       : { kind: "global" };
 
-    const { events, nextOffset } = readEventsFromCursor(source, offset);
+    const { events, nextOffset } = await readEventsFromCursor(source, offset);
     const lines = formatLogsTailLines(events);
 
     jsonResponse(res, { lines, nextOffset });
-  } catch (err) {
-    errorResponse(res, `Failed to get logs-tail events: ${(err as Error).message}`);
-  }
+  })().catch((err) => {
+    logger.error("handleLogsTail failed", { error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 function handleStats(_req: http.IncomingMessage, res: http.ServerResponse): void {

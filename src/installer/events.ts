@@ -51,6 +51,43 @@ function getEventsFileForSource(source: EventCursorSource): string {
 // ── Event Emission ───────────────────────────────────────────────────
 
 /**
+ * Ledgers are rotated by size once they exceed this threshold so that a
+ * single file never grows unbounded (the reads above only ever touch one
+ * bounded file + its backup).
+ */
+const MAX_LEDGER_BYTES = 10 * 1024 * 1024; // 10MB
+/** Keep one rotated backup (all.jsonl + all.jsonl.1); older ones are removed. */
+const MAX_LEDGER_BACKUPS = 1;
+/** Tail window read by getRecentEvents — always covers the recent N lines. */
+const MAX_RECENT_READ_BYTES = 512 * 1024; // 512KB
+
+/**
+ * Rotate a ledger file in place once it exceeds MAX_LEDGER_BYTES: rename it
+ * to `<file>.1`, removing any older backup first. Best-effort — a failure
+ * must never lose the already-appended line, so it is only logged.
+ */
+function rotateLedgerFileIfNeeded(file: string): void {
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size <= MAX_LEDGER_BYTES) return;
+    const backup = `${file}.1`;
+    if (fs.existsSync(backup)) fs.rmSync(backup);
+    fs.renameSync(file, backup);
+    logger.info("Rotated events ledger", {
+      file: path.basename(file),
+      sizeBytes: stat.size,
+    });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") return; // file disappeared between append and rotation
+    logger.warn("Failed to rotate events ledger", {
+      file: path.basename(file),
+      error: String(err),
+    });
+  }
+}
+
+/**
  * Emit a Formiga event.
  *
  * Writes:
@@ -76,6 +113,7 @@ export function emitEvent(evt: FormigaEvent): void {
       error: String(err),
     });
   }
+  rotateLedgerFileIfNeeded(runFile);
 
   // Write to global events file
   const globalFile = getGlobalEventsFile();
@@ -87,6 +125,7 @@ export function emitEvent(evt: FormigaEvent): void {
       error: String(err),
     });
   }
+  rotateLedgerFileIfNeeded(globalFile);
 
   // Fire-and-forget webhook if applicable
   fireWebhook(evt).catch((err) => {
@@ -105,16 +144,18 @@ export function emitEvent(evt: FormigaEvent): void {
  * - ~/.formiga/events/all.jsonl (global)
  * - ~/.formiga/events/<runId>.jsonl (per-run)
  *
- * Returns only complete newline-terminated records and the next cursor offset.
- * Malformed JSON lines are skipped safely.
+ * Async (fs.promises) so hot request paths never block the event loop on the
+ * (up to 10MB, size-rotated) ledger. Only the bytes after `offset` are read,
+ * and only complete newline-terminated records are returned along with the
+ * next cursor offset. Malformed JSON lines are skipped safely.
  */
-export function readEventsFromCursor(source: EventCursorSource, offset = 0): EventCursorReadResult {
+export async function readEventsFromCursor(source: EventCursorSource, offset = 0): Promise<EventCursorReadResult> {
   const eventsFile = getEventsFileForSource(source);
   const safeOffset = Math.max(0, Math.floor(offset));
 
-  let fileBuffer: Buffer;
+  let fh: fs.promises.FileHandle;
   try {
-    fileBuffer = fs.readFileSync(eventsFile);
+    fh = await fs.promises.open(eventsFile, "r");
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT") return { events: [], nextOffset: 0 };
@@ -127,57 +168,137 @@ export function readEventsFromCursor(source: EventCursorSource, offset = 0): Eve
     return { events: [], nextOffset: safeOffset };
   }
 
-  const startOffset = safeOffset > fileBuffer.length ? 0 : safeOffset;
-  let cursor = startOffset;
-  const events: FormigaEvent[] = [];
-
-  while (cursor < fileBuffer.length) {
-    const newlineIndex = fileBuffer.indexOf(0x0A, cursor);
-    if (newlineIndex === -1) break; // trailing partial line
-
-    const lineBuffer = fileBuffer.subarray(cursor, newlineIndex);
-    cursor = newlineIndex + 1;
-
-    if (lineBuffer.length === 0) continue;
-
-    const line = lineBuffer.toString("utf-8").replace(/\r$/, "");
-    if (!line) continue;
-
+  try {
+    // Opening a directory succeeds on some platforms; the read then throws
+    // (EISDIR). Any post-open failure is non-fatal — behave like the old
+    // readFileSync fallback (empty result, offset unchanged).
+    let stat: fs.Stats;
     try {
-      const parsed = JSON.parse(line);
-      if (parsed && typeof parsed === "object") {
-        events.push(parsed as FormigaEvent);
-      }
-    } catch {
-      // Ignore malformed JSONL rows so later valid events still stream.
+      stat = await fh.stat();
+    } catch (err) {
+      logger.warn("Failed to stat event cursor source", {
+        source: source.kind,
+        runId: source.kind === "run" ? source.runId : undefined,
+        error: String(err),
+      });
+      return { events: [], nextOffset: safeOffset };
     }
-  }
 
-  return { events, nextOffset: cursor };
+    // Ledger rotated or truncated below the cursor? Start over from the top.
+    const startOffset = safeOffset > stat.size ? 0 : safeOffset;
+    const bytesToRead = stat.size - startOffset;
+    const buf = Buffer.alloc(bytesToRead);
+    try {
+      if (bytesToRead > 0) await fh.read(buf, 0, bytesToRead, startOffset);
+    } catch (err) {
+      logger.warn("Failed to read event cursor source", {
+        source: source.kind,
+        runId: source.kind === "run" ? source.runId : undefined,
+        error: String(err),
+      });
+      return { events: [], nextOffset: safeOffset };
+    }
+
+    let cursor = startOffset;
+    const events: FormigaEvent[] = [];
+
+    while (cursor < startOffset + buf.length) {
+      const rel = buf.indexOf(0x0a, cursor - startOffset);
+      if (rel === -1) break; // trailing partial line
+      const newlineIndex = startOffset + rel;
+
+      const lineBuffer = buf.subarray(cursor - startOffset, rel);
+      cursor = newlineIndex + 1;
+
+      if (lineBuffer.length === 0) continue;
+
+      const line = lineBuffer.toString("utf-8").replace(/\r$/, "");
+      if (!line) continue;
+
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed && typeof parsed === "object") {
+          events.push(parsed as FormigaEvent);
+        }
+      } catch {
+        // Ignore malformed JSONL rows so later valid events still stream.
+      }
+    }
+
+    return { events, nextOffset: cursor };
+  } finally {
+    await fh.close();
+  }
 }
 
 /**
- * Read the most recent N events from the global events file.
+ * Read up to `limit` events from the tail of a single ledger file, without
+ * loading the whole file. Returns [] when the file is missing or unreadable.
+ * The chunk may start mid-line; the partial first line fails JSON.parse and
+ * is filtered out below.
  */
-export function getRecentEvents(limit = 50): FormigaEvent[] {
-  const globalFile = getGlobalEventsFile();
+async function readEventTail(file: string, limit: number): Promise<FormigaEvent[]> {
+  let fh: fs.promises.FileHandle;
   try {
-    const content = fs.readFileSync(globalFile, "utf-8");
-    const lines = content.trim().split("\n").filter(Boolean);
-    const recent = lines.slice(-limit);
-    return recent.map((line) => {
+    fh = await fs.promises.open(file, "r");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT") {
+      logger.warn("Failed to read events file tail", {
+        file: path.basename(file),
+        error: String(err),
+      });
+    }
+    return [];
+  }
+
+  try {
+    // A directory opens fine but then stat/read throw (EISDIR) — treat any
+    // post-open failure as "no events" instead of crashing the caller.
+    let stat: fs.Stats;
+    try {
+      stat = await fh.stat();
+    } catch {
+      return [];
+    }
+    if (stat.size === 0) return [];
+
+    const readBytes = Math.min(stat.size, MAX_RECENT_READ_BYTES);
+    const buf = Buffer.alloc(readBytes);
+    try {
+      await fh.read(buf, 0, readBytes, stat.size - readBytes);
+    } catch {
+      return [];
+    }
+
+    const lines = buf.toString("utf-8").split("\n").filter(Boolean);
+    return lines.slice(-limit).map((line) => {
       try {
         return JSON.parse(line) as FormigaEvent;
       } catch {
         return null;
       }
     }).filter((e): e is FormigaEvent => e !== null);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT") return [];
-    logger.warn("Failed to read global events", { error: String(err) });
-    return [];
+  } finally {
+    await fh.close();
   }
+}
+
+/**
+ * Read the most recent N events from the global events file.
+ *
+ * Async, and only the tail of each file is read. The ledger is size-rotated
+ * at 10MB into `all.jsonl.1`, so the rotated backup's tail is also consulted
+ * (older first) so the "recent events" view stays populated across a
+ * rotation instead of going briefly empty.
+ */
+export async function getRecentEvents(limit = 50): Promise<FormigaEvent[]> {
+  const globalFile = getGlobalEventsFile();
+  const [active, backup] = await Promise.all([
+    readEventTail(globalFile, limit),
+    readEventTail(`${globalFile}.1`, limit),
+  ]);
+  return [...backup, ...active].slice(-limit);
 }
 
 /**

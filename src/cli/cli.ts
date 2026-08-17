@@ -85,7 +85,7 @@ function getLogsTailPollIntervalMs(): number {
 }
 
 async function streamEventSource(source: EventCursorSource, initialLimit: number): Promise<void> {
-  const initial = readEventsFromCursor(source, 0);
+  const initial = await readEventsFromCursor(source, 0);
   const firstBatch = initial.events.slice(-Math.max(1, initialLimit));
   if (firstBatch.length === 0) console.log("No events yet.");
   else printEvents(firstBatch);
@@ -106,7 +106,7 @@ async function streamEventSource(source: EventCursorSource, initialLimit: number
       }
       if (abort.signal.aborted) break;
 
-      const next = readEventsFromCursor(source, cursor);
+      const next = await readEventsFromCursor(source, cursor);
       cursor = next.nextOffset;
       if (next.events.length > 0) printEvents(next.events);
     }
@@ -1293,7 +1293,7 @@ Examples:
     const selector = parseLogsSelector(args[1]);
 
     if (selector.kind === "global-recent" || selector.kind === "global-limit") {
-      printEvents(getRecentEvents(selector.limit));
+      printEvents(await getRecentEvents(selector.limit));
       return;
     }
 

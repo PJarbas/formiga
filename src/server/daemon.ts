@@ -165,20 +165,40 @@ process.on("exit", cleanupPidFile);
 
 // --- Event Loop Watchdog ---
 // Detects when the event loop is blocked (stuck daemon) and self-terminates.
+//
+// The threshold is deliberately generous (60s): the synchronous SQLite layer
+// can stall the loop for short bursts under load, and suicide should be a
+// last resort for a truly wedged process — not a reaction to normal blocking.
+// When it does fire, we log a cause report (recent lag samples + memory) so
+// the operator can see where the loop spent its time before we exit.
 const HEARTBEAT_INTERVAL_MS = 10_000;
-const MAX_EVENT_LOOP_LAG_MS = 30_000;
+const MAX_EVENT_LOOP_LAG_MS = 60_000;
+const LAG_SAMPLE_WINDOW = 20; // keep the last 20 lag samples for the cause report
 
 function startEventLoopWatchdog(): void {
   let lastHeartbeat = Date.now();
+  const recentLags: number[] = [];
 
   const timer = setInterval(() => {
     const now = Date.now();
     const lag = now - lastHeartbeat - HEARTBEAT_INTERVAL_MS;
     lastHeartbeat = now;
 
+    recentLags.push(lag);
+    if (recentLags.length > LAG_SAMPLE_WINDOW) recentLags.shift();
+
     if (lag > MAX_EVENT_LOOP_LAG_MS) {
+      const sorted = [...recentLags].sort((a, b) => a - b);
+      const p50 = sorted[Math.floor(sorted.length / 2)] ?? lag;
+      const mem = process.memoryUsage();
       console.error(
         `[watchdog] Event loop blocked for ${lag}ms (threshold: ${MAX_EVENT_LOOP_LAG_MS}ms). Daemon is stuck — self-terminating.`,
+      );
+      console.error(
+        `[watchdog] Recent lag samples (ms): min=${sorted[0] ?? 0} p50=${p50} max=${sorted[sorted.length - 1] ?? 0} (n=${sorted.length})`,
+      );
+      console.error(
+        `[watchdog] Memory sample: rss=${Math.round(mem.rss / 1024 / 1024)}MB heapUsed=${Math.round(mem.heapUsed / 1024 / 1024)}MB heapTotal=${Math.round(mem.heapTotal / 1024 / 1024)}MB`,
       );
       cleanupPidFile();
       process.exit(2);
