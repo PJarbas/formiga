@@ -430,19 +430,47 @@ async function buildArenaConfig(runId: string): Promise<ArenaConfig | null> {
 // ── Public entry point ─────────────────────────────────────────────
 
 /**
+ * Arena runs currently active in this process (run_id). Guards against
+ * duplicate in-process launches of the same run: direct-spawn (fresh launch)
+ * and the reconciler (re-admission after a daemon restart) both funnel through
+ * launchArenaFromStep. Empty on boot, so a restart can always re-admit.
+ */
+const activeArenaRuns = new Set<string>();
+
+/**
  * Launch the arena engine for a workflow run's arena step.
  *
  * This is invoked by spawnAgentsForPendingSteps (direct-spawn.ts) when it
- * detects a pending "arena" step. The function:
+ * detects a pending "arena" step, and by the reconciler to re-admit a
+ * resumable session after a daemon restart (AL-4). The function:
  *   1. Leaves the step in "running"
  *   2. Builds the ArenaConfig from run context + benchmark_config.json
  *   3. Calls runArena() with the pi-based parallel harness
  *   4. On completion, calls completeStep(stepId, output) so the pipeline advances.
  *
  * It is designed to be fire-and-forget from the scheduler; any errors are
- * logged and surfaced by marking the step failed.
+ * logged and surfaced by marking the step failed. The activeArenaRuns guard
+ * makes concurrent launches of the same run a no-op.
  */
 export async function launchArenaFromStep(
+  runId: string,
+  stepId: string,
+): Promise<void> {
+  if (activeArenaRuns.has(runId)) {
+    logger.warn(
+      `arena workflow: run ${runId.slice(0, 8)} already active in-process — skipping duplicate launch`,
+    );
+    return;
+  }
+  activeArenaRuns.add(runId);
+  try {
+    await launchArenaFromStepInner(runId, stepId);
+  } finally {
+    activeArenaRuns.delete(runId);
+  }
+}
+
+async function launchArenaFromStepInner(
   runId: string,
   stepId: string,
 ): Promise<void> {

@@ -278,6 +278,64 @@ async function benchmarkOne(
   });
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// Arena checkpoint (AL-4)
+//
+// The arena loop is pure in-memory orchestration — allResults, best fold
+// scores, per-team budget, and dedup signatures. On daemon restart that state
+// is lost and the reconciler would mark the run failed after the stuck
+// threshold. To make runs resumable we persist a compact checkpoint at the
+// end of every round. Only the fields the prompt builder actually reads are
+// stored (benchmark stdout/stderr/duration are deliberately omitted — they're
+// large and never re-read on the resume path).
+// ════════════════════════════════════════════════════════════════════════
+
+interface ArenaCheckpoint {
+  version: 1;
+  allResults: Array<Pick<AgentRoundResult, "agentId" | "hypothesis" | "learned" | "nextFocus" | "metric" | "decision" | "notes">>;
+  bestFoldScores: number[] | null;
+  teamExperimentCount: Record<string, number>;
+  existingDedupSignatures: string[];
+  consecutiveNoImprove: number;
+}
+
+function serializeArenaCheckpoint(state: {
+  allResults: AgentRoundResult[];
+  bestFoldScores: number[] | null;
+  teamExperimentCount: Map<string, number>;
+  existingDedupSignatures: Set<string>;
+  consecutiveNoImprove: number;
+}): string {
+  const checkpoint: ArenaCheckpoint = {
+    version: 1,
+    allResults: state.allResults.map((r) => ({
+      agentId: r.agentId,
+      hypothesis: r.hypothesis,
+      learned: r.learned,
+      nextFocus: r.nextFocus,
+      metric: r.metric,
+      decision: r.decision,
+      notes: r.notes,
+    })),
+    bestFoldScores: state.bestFoldScores,
+    teamExperimentCount: Object.fromEntries(state.teamExperimentCount),
+    existingDedupSignatures: [...state.existingDedupSignatures],
+    consecutiveNoImprove: state.consecutiveNoImprove,
+  };
+  return JSON.stringify(checkpoint);
+}
+
+function parseArenaCheckpoint(raw: string | null | undefined): ArenaCheckpoint | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as ArenaCheckpoint;
+    if (parsed?.version !== 1 || !Array.isArray(parsed.allResults)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Run the full arena loop.
  */
@@ -293,28 +351,101 @@ export async function runArena(
 ): Promise<ArenaResult> {
   ensureScriptDir(config.workspacePath);
 
-  // 1. Create session
-  const session: ArenaSession = await repo.createFromConfig(config.runId, config);
+  // In-memory loop state (declared up-front so both the create and resume
+  // paths can mutate them before the round loop).
+  let consecutiveNoImprove = 0;
+  let stopReason = "max_rounds";
+  let roundImproved = false;
+  const allResults: AgentRoundResult[] = [];
+  let bestFoldScores: number[] | null = null;
+  const teamExperimentCount = new Map<string, number>();
+  const existingDedupSignatures = new Set<string>();
+  const maxIterationsPerTeam = 5;
 
-  // 2. Establish baseline from benchmark_config.json or by running benchmark script
+  // 1. Resume or create session (AL-4)
+  let isResume = false;
+  let session: ArenaSession | null = await repo.getByRunId(config.runId);
+
+  if (session) {
+    // A terminal session means a previous run already finished the loop —
+    // most likely a crash between repo.finalize and the workflow completing
+    // the step. Returning the finalized result lets the workflow advance the
+    // step instead of replaying (or worse, re-running baseline, which would
+    // wipe best_metric). A failed session stays a failure: throw so the
+    // workflow marks the step failed for retry.
+    if (session.status === "converged" || session.status === "target_reached" || session.status === "max_rounds") {
+      return {
+        sessionId: session.id,
+        runId: session.runId,
+        status: session.status,
+        totalRounds: session.currentRound,
+        bestMetric: session.bestMetric,
+        bestAgent: session.bestAgent,
+        totalKeep: session.totalKeep,
+        totalDiscard: session.totalDiscard,
+        totalCrash: session.totalCrash,
+        stopReason: session.status,
+      };
+    }
+    if (session.status !== "running") {
+      throw new Error(`Arena session ${config.runId} is ${session.status} — cannot (re)start`);
+    }
+    // Resume path: restore the in-memory loop state from the last checkpoint.
+    // Baseline is NOT re-established — setBaseline would wipe best_metric, and
+    // the persisted baseline_metric is already loaded with the session.
+    isResume = true;
+    const checkpoint = parseArenaCheckpoint(session.stateJson);
+    if (checkpoint) {
+      for (const r of checkpoint.allResults) {
+        allResults.push({
+          ...r,
+          durationMs: 0,
+          benchmarkStdout: "",
+          benchmarkStderr: "",
+          benchmarkExitCode: null,
+          scriptPath: "",
+        });
+      }
+      bestFoldScores = checkpoint.bestFoldScores;
+      for (const [agentId, count] of Object.entries(checkpoint.teamExperimentCount)) teamExperimentCount.set(agentId, count);
+      for (const sig of checkpoint.existingDedupSignatures) existingDedupSignatures.add(sig);
+      consecutiveNoImprove = checkpoint.consecutiveNoImprove;
+      console.log("[arena-engine] resume", { runId: config.runId, fromRound: session.currentRound, restoredResults: allResults.length });
+    } else {
+      // Crash before the first checkpoint was written: the session row exists
+      // but holds no resumable state. Restart the loop from currentRound+1;
+      // for a pristine session that is round 1 with best_metric=null, which
+      // reproduces a fresh start.
+      console.warn("[arena-engine] resume without checkpoint — restarting loop", { runId: config.runId, currentRound: session.currentRound });
+    }
+  } else {
+    // Fresh run: create the session row.
+    session = await repo.createFromConfig(config.runId, config);
+  }
+
+  // 2. Establish baseline from benchmark_config.json or by running benchmark
+  //    script. Skipped entirely on resume — setBaseline would wipe best_metric,
+  //    and the persisted baseline_metric is already loaded with the session.
   let baselineMetric: number | null = null;
-  // Try reading baseline from config first (most reliable)
-  const benchmarkConfigPaths = [
-    path.join(config.workspacePath, "benchmark_config.json"),
-    path.join(config.workspacePath, "artifacts", "benchmark_config.json"),
-  ];
-  for (const cfgPath of benchmarkConfigPaths) {
-    if (fs.existsSync(cfgPath)) {
-      try {
-        const cfgRaw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-        const baselineCfg = cfgRaw.baseline;
-        if (baselineCfg) {
-          // Look for cv_rmse_mean, cv_<metric>_mean, or any metric value
-          const metricKey = `cv_${config.metricName.toLowerCase()}_mean`;
-          baselineMetric = baselineCfg[metricKey] ?? baselineCfg.cv_rmse_mean ?? baselineCfg.metric ?? null;
-        }
-      } catch { /* ignore parse errors */ }
-      break;
+  if (!isResume) {
+    // Try reading baseline from config first (most reliable)
+    const benchmarkConfigPaths = [
+      path.join(config.workspacePath, "benchmark_config.json"),
+      path.join(config.workspacePath, "artifacts", "benchmark_config.json"),
+    ];
+    for (const cfgPath of benchmarkConfigPaths) {
+      if (fs.existsSync(cfgPath)) {
+        try {
+          const cfgRaw = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+          const baselineCfg = cfgRaw.baseline;
+          if (baselineCfg) {
+            // Look for cv_rmse_mean, cv_<metric>_mean, or any metric value
+            const metricKey = `cv_${config.metricName.toLowerCase()}_mean`;
+            baselineMetric = baselineCfg[metricKey] ?? baselineCfg.cv_rmse_mean ?? baselineCfg.metric ?? null;
+          }
+        } catch { /* ignore parse errors */ }
+        break;
+      }
     }
   }
   // Read dataset context once for the entire arena run
@@ -324,27 +455,19 @@ export async function runArena(
   // a 150-row dataset) are killed by timeout + RLIMIT_CPU, not just advised.
   const budget = deriveComputeBudget(datasetCtx.complexityTier);
 
-  // Fallback: run benchmark with baseline .pkl if no config baseline
-  if (baselineMetric === null) {
+  // Fallback: run benchmark with baseline .pkl if no config baseline (fresh runs only)
+  if (!isResume && baselineMetric === null) {
     const baselinePkl = path.join(config.workspacePath, "artifacts", "baseline.pkl");
     if (fs.existsSync(baselinePkl)) {
       const baseline = await benchmarkOne(config, baselinePkl, budget);
       baselineMetric = baseline.metric;
     }
   }
-  if (baselineMetric !== null) {
+  if (!isResume && baselineMetric !== null) {
     await repo.setBaseline(session.id, baselineMetric);
     session.baselineMetric = baselineMetric;
     session.bestMetric = baselineMetric;
   }
-
-  let consecutiveNoImprove = 0;
-  let stopReason = "max_rounds";
-  let roundImproved = false;
-
-  // History tracking for prompts
-  const allResults: AgentRoundResult[] = [];
-
 
   // ── Tier gate for the creative team (ISSUE-10) ──
   // The 3rd team (modeler-creative) explores decorrelation-seeking approaches
@@ -389,19 +512,6 @@ export async function runArena(
   // auditor (gate G2) rejects experiments whose hash does not match the
   // session's — catches stale-dataset submissions after features are rebuilt.
   const sessionContentHash = readSessionContentHash(config.workspacePath);
-
-  // ── Best-fold-scores tracker for Nadeau-Bengio significance ──
-  // Holds the per-fold scores of the current best experiment (any team), so
-  // each new candidate can be statistically compared rather than judged by a
-  // raw scalar comparison. Populated when an experiment becomes the new best.
-  let bestFoldScores: number[] | null = null;
-
-  // ── Per-team experiment ledger (budget + dedup) ──
-  const teamExperimentCount = new Map<string, number>();
-  const existingDedupSignatures = new Set<string>();
-  // Max iterations per team: default 5. Configurable per agent via
-  // ArenaAgentConfig in a future iteration; today uniform.
-  const maxIterationsPerTeam = 5;
 
   // ── Failed-attempt ledger helper (contract A4) ──
   // One uniform FAILED registration for every failure mode (agent_no_response,
@@ -450,8 +560,9 @@ export async function runArena(
     result.experimentId = experimentId;
   }
 
-  // 3. Round loop
-  for (let round = 1; round <= config.maxRounds; round++) {
+  // 3. Round loop — resumes from the last completed round on a restarted run
+  const startRound = session.currentRound + 1;
+  for (let round = startRound; round <= config.maxRounds; round++) {
     session.currentRound = round;
 
     // Build prompts with dataset context for complexity-aware generation
@@ -764,8 +875,18 @@ export async function runArena(
     }
     session.consecutiveNoImprove = consecutiveNoImprove;
 
-    // Persist round result
+    // Persist round result + resume checkpoint (AL-4). The checkpoint is
+    // saved BEFORE advancing current_round: a crash between the two leaves
+    // current_round one behind the checkpoint, which replays the round on
+    // resume (at-least-once) rather than silently skipping it.
     allResults.push(...roundResults);
+    await repo.saveCheckpoint(session.id, serializeArenaCheckpoint({
+      allResults,
+      bestFoldScores,
+      teamExperimentCount,
+      existingDedupSignatures,
+      consecutiveNoImprove,
+    }));
     await repo.updateRound(session.id, round, session.bestMetric, session.bestAgent, null, consecutiveNoImprove);
 
     // Emit event

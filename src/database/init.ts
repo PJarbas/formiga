@@ -50,6 +50,7 @@ export async function initDatabase(): Promise<void> {
       total_crash INTEGER NOT NULL DEFAULT 0,
       total_checks_failed INTEGER NOT NULL DEFAULT 0,
       consecutive_no_improve INTEGER NOT NULL DEFAULT 0,
+      state_json TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE

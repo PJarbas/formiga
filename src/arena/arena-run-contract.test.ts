@@ -106,6 +106,7 @@ function makeHarness(): Harness {
     createFromConfig: async () => session,
     update: async () => {},
     updateRound: async () => {},
+    saveCheckpoint: async () => {},
     // Mirror ArenaRepositoryImpl.updateStats so the session counters read back
     // by runArena's final getById reflect the decisions recorded.
     updateStats: async (_id, decision) => {

@@ -190,6 +190,7 @@ model ArenaSession {
   total_crash            Int      @default(0)
   total_checks_failed    Int      @default(0)
   consecutive_no_improve Int      @default(0)
+  state_json             String?
   created_at             DateTime @default(now())
   updated_at             DateTime @updatedAt
   run                    Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
