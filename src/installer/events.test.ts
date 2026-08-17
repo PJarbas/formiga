@@ -124,37 +124,37 @@ describe("events", () => {
   });
 
   describe("getRecentEvents", () => {
-    it("reads recent events from the global file", () => {
+    it("reads recent events from the global file", async () => {
       emitEvent(makeEvent("run-a", "run.started"));
       emitEvent(makeEvent("run-a", "step.running"));
 
-      const events = getRecentEvents(10);
+      const events = await getRecentEvents(10);
       assert.ok(events.length >= 2);
       assert.equal(events[0]!.runId, "run-a");
       assert.equal(events[0]!.event, "run.started");
     });
 
-    it("respects the limit parameter", () => {
+    it("respects the limit parameter", async () => {
       for (let i = 0; i < 5; i++) {
         emitEvent(makeEvent(`run-limit-${i}`, "run.started"));
       }
-      const events = getRecentEvents(3);
+      const events = await getRecentEvents(3);
       assert.ok(events.length <= 3);
     });
 
-    it("returns empty array when no global events exist", () => {
-      const events = getRecentEvents();
+    it("returns empty array when no global events exist", async () => {
+      const events = await getRecentEvents();
       assert.deepEqual(events, []);
     });
 
-    it("skips malformed JSON lines", () => {
+    it("skips malformed JSON lines", async () => {
       emitEvent(makeEvent("run-mal", "run.started"));
 
       const globalFile = path.join(stateDir, "events", "all.jsonl");
       fs.appendFileSync(globalFile, "not valid json\n", "utf-8");
       emitEvent(makeEvent("run-mal", "run.completed"));
 
-      const events = getRecentEvents(10);
+      const events = await getRecentEvents(10);
       const completed = events.filter((e) => e.event === "run.completed");
       assert.equal(completed.length, 1);
     });
@@ -216,7 +216,7 @@ describe("events", () => {
   });
 
   describe("readEventsFromCursor", () => {
-    it("returns only events appended after the provided global offset", () => {
+    it("returns only events appended after the provided global offset", async () => {
       const globalFile = path.join(stateDir, "events", "all.jsonl");
       fs.mkdirSync(path.dirname(globalFile), { recursive: true });
 
@@ -224,21 +224,21 @@ describe("events", () => {
       const second = makeEvent("run-a", "step.running");
       fs.appendFileSync(globalFile, `${JSON.stringify(first)}\n${JSON.stringify(second)}\n`, "utf-8");
 
-      const initial = readEventsFromCursor({ kind: "global" }, 0);
+      const initial = await readEventsFromCursor({ kind: "global" }, 0);
       assert.deepEqual(initial.events, [first, second]);
 
       const third = makeEvent("run-a", "step.done");
       fs.appendFileSync(globalFile, `${JSON.stringify(third)}\n`, "utf-8");
 
-      const appended = readEventsFromCursor({ kind: "global" }, initial.nextOffset);
+      const appended = await readEventsFromCursor({ kind: "global" }, initial.nextOffset);
       assert.deepEqual(appended.events, [third]);
 
-      const nothingNew = readEventsFromCursor({ kind: "global" }, appended.nextOffset);
+      const nothingNew = await readEventsFromCursor({ kind: "global" }, appended.nextOffset);
       assert.deepEqual(nothingNew.events, []);
       assert.equal(nothingNew.nextOffset, appended.nextOffset);
     });
 
-    it("supports run-specific event files", () => {
+    it("supports run-specific event files", async () => {
       const runId = "run-123";
       const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
       fs.mkdirSync(path.dirname(runFile), { recursive: true });
@@ -246,17 +246,17 @@ describe("events", () => {
       const first = makeEvent(runId, "story.started");
       fs.appendFileSync(runFile, `${JSON.stringify(first)}\n`, "utf-8");
 
-      const initial = readEventsFromCursor({ kind: "run", runId }, 0);
+      const initial = await readEventsFromCursor({ kind: "run", runId }, 0);
       assert.deepEqual(initial.events, [first]);
 
       const second = makeEvent(runId, "story.done");
       fs.appendFileSync(runFile, `${JSON.stringify(second)}\n`, "utf-8");
 
-      const appended = readEventsFromCursor({ kind: "run", runId }, initial.nextOffset);
+      const appended = await readEventsFromCursor({ kind: "run", runId }, initial.nextOffset);
       assert.deepEqual(appended.events, [second]);
     });
 
-    it("handles offset beyond file length by resetting to 0", () => {
+    it("handles offset beyond file length by resetting to 0", async () => {
       const runId = "run-overflow";
       const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
       fs.mkdirSync(path.dirname(runFile), { recursive: true });
@@ -264,12 +264,12 @@ describe("events", () => {
       const evt = makeEvent(runId, "run.started");
       fs.appendFileSync(runFile, `${JSON.stringify(evt)}\n`, "utf-8");
 
-      const result = readEventsFromCursor({ kind: "run", runId }, 999999);
+      const result = await readEventsFromCursor({ kind: "run", runId }, 999999);
       assert.equal(result.events.length, 1);
       assert.equal(result.events[0]!.runId, runId);
     });
 
-    it("handles empty lines gracefully", () => {
+    it("handles empty lines gracefully", async () => {
       const runId = "run-empty-lines";
       const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
       fs.mkdirSync(path.dirname(runFile), { recursive: true });
@@ -277,12 +277,12 @@ describe("events", () => {
       const evt = makeEvent(runId, "run.started");
       fs.appendFileSync(runFile, `\n${JSON.stringify(evt)}\n\n`, "utf-8");
 
-      const result = readEventsFromCursor({ kind: "run", runId }, 0);
+      const result = await readEventsFromCursor({ kind: "run", runId }, 0);
       assert.equal(result.events.length, 1);
       assert.equal(result.events[0]!.event, "run.started");
     });
 
-    it("ignores malformed/incomplete JSONL rows", () => {
+    it("ignores malformed/incomplete JSONL rows", async () => {
       const runId = "run-malformed";
       const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
       fs.mkdirSync(path.dirname(runFile), { recursive: true });
@@ -290,17 +290,17 @@ describe("events", () => {
       const first = makeEvent(runId, "run.started");
       fs.appendFileSync(runFile, `${JSON.stringify(first)}\n{\"ts\":\"partial\"`, "utf-8");
 
-      const initial = readEventsFromCursor({ kind: "run", runId }, 0);
+      const initial = await readEventsFromCursor({ kind: "run", runId }, 0);
       assert.deepEqual(initial.events, [first]);
 
       const later = makeEvent(runId, "run.completed");
       fs.appendFileSync(runFile, `, invalid}\n${JSON.stringify(later)}\n`, "utf-8");
 
-      const afterMalformed = readEventsFromCursor({ kind: "run", runId }, initial.nextOffset);
+      const afterMalformed = await readEventsFromCursor({ kind: "run", runId }, initial.nextOffset);
       assert.deepEqual(afterMalformed.events, [later]);
     });
 
-    it("skips non-object JSON values (strings, numbers, booleans, null)", () => {
+    it("skips non-object JSON values (strings, numbers, booleans, null)", async () => {
       const runId = "run-nonobject";
       const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
       fs.mkdirSync(path.dirname(runFile), { recursive: true });
@@ -308,12 +308,12 @@ describe("events", () => {
       const evt = makeEvent(runId, "run.started");
       fs.appendFileSync(runFile, `"not an object"\n42\ntrue\nfalse\nnull\n${JSON.stringify(evt)}\n`, "utf-8");
 
-      const result = readEventsFromCursor({ kind: "run", runId }, 0);
+      const result = await readEventsFromCursor({ kind: "run", runId }, 0);
       assert.equal(result.events.length, 1);
       assert.equal(result.events[0]!.event, "run.started");
     });
 
-    it("handles trailing partial line (no final newline)", () => {
+    it("handles trailing partial line (no final newline)", async () => {
       const runId = "run-partial";
       const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
       fs.mkdirSync(path.dirname(runFile), { recursive: true });
@@ -321,15 +321,15 @@ describe("events", () => {
       const evt = makeEvent(runId, "run.started");
       fs.appendFileSync(runFile, `${JSON.stringify(evt)}\n`, "utf-8");
 
-      const result = readEventsFromCursor({ kind: "run", runId }, 0);
+      const result = await readEventsFromCursor({ kind: "run", runId }, 0);
       assert.equal(result.events.length, 1);
 
       fs.appendFileSync(runFile, `{\"ts\":\"partial\",\"event\"`, "utf-8");
-      const afterPartial = readEventsFromCursor({ kind: "run", runId }, result.nextOffset);
+      const afterPartial = await readEventsFromCursor({ kind: "run", runId }, result.nextOffset);
       assert.deepEqual(afterPartial.events, []);
     });
 
-    it("handles carriage return in line endings", () => {
+    it("handles carriage return in line endings", async () => {
       const runId = "run-cr";
       const runFile = path.join(stateDir, "events", `${runId}.jsonl`);
       fs.mkdirSync(path.dirname(runFile), { recursive: true });
@@ -337,7 +337,7 @@ describe("events", () => {
       const evt = makeEvent(runId, "run.started");
       fs.appendFileSync(runFile, `${JSON.stringify(evt)}\r\n`, "utf-8");
 
-      const result = readEventsFromCursor({ kind: "run", runId }, 0);
+      const result = await readEventsFromCursor({ kind: "run", runId }, 0);
       assert.equal(result.events.length, 1);
       assert.equal(result.events[0]!.event, "run.started");
     });
@@ -420,18 +420,18 @@ describe("events", () => {
     });
   });
 
-  it("returns empty when events file does not exist (ENOENT)", () => {
-    const result = readEventsFromCursor({ kind: "global" }, 0);
+  it("returns empty when events file does not exist (ENOENT)", async () => {
+    const result = await readEventsFromCursor({ kind: "global" }, 0);
     assert.deepEqual(result.events, []);
     assert.equal(result.nextOffset, 0);
   });
 
-  it("returns empty on non-ENOENT read error (e.g. permission denied)", () => {
+  it("returns empty on non-ENOENT read error (e.g. permission denied)", async () => {
     // Create a directory where the file would be — making readFileSync fail with EISDIR
     const globalFile = path.join(stateDir, "events", "all.jsonl");
     fs.mkdirSync(globalFile, { recursive: true }); // create a directory with the file name
 
-    const result = readEventsFromCursor({ kind: "global" }, 0);
+    const result = await readEventsFromCursor({ kind: "global" }, 0);
     assert.deepEqual(result.events, []);
   });
 });
@@ -495,12 +495,12 @@ describe("getRecentEvents", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("returns empty array when global file does not exist", () => {
-    const events = getRecentEvents();
+  it("returns empty array when global file does not exist", async () => {
+    const events = await getRecentEvents();
     assert.deepEqual(events, []);
   });
 
-  it("reads recent events from global file", () => {
+  it("reads recent events from global file", async () => {
     const globalFile = path.join(stateDir, "events", "all.jsonl");
     fs.mkdirSync(path.dirname(globalFile), { recursive: true });
 
@@ -508,13 +508,13 @@ describe("getRecentEvents", () => {
     const evt2 = makeEvent("run-a", "run.completed");
     fs.appendFileSync(globalFile, `${JSON.stringify(evt1)}\n${JSON.stringify(evt2)}\n`, "utf-8");
 
-    const events = getRecentEvents();
+    const events = await getRecentEvents();
     assert.equal(events.length, 2);
     assert.equal(events[0]!.event, "run.started");
     assert.equal(events[1]!.event, "run.completed");
   });
 
-  it("respects limit parameter", () => {
+  it("respects limit parameter", async () => {
     const globalFile = path.join(stateDir, "events", "all.jsonl");
     fs.mkdirSync(path.dirname(globalFile), { recursive: true });
 
@@ -523,13 +523,13 @@ describe("getRecentEvents", () => {
       fs.appendFileSync(globalFile, `${JSON.stringify(evt)}\n`, "utf-8");
     }
 
-    const events = getRecentEvents(3);
+    const events = await getRecentEvents(3);
     assert.equal(events.length, 3);
     assert.equal(events[0]!.event, "event.7");
     assert.equal(events[2]!.event, "event.9");
   });
 
-  it("skips malformed JSON lines", () => {
+  it("skips malformed JSON lines", async () => {
     const globalFile = path.join(stateDir, "events", "all.jsonl");
     fs.mkdirSync(path.dirname(globalFile), { recursive: true });
 
@@ -537,19 +537,19 @@ describe("getRecentEvents", () => {
     const evt2 = makeEvent("run-a", "run.completed");
     fs.appendFileSync(globalFile, `${JSON.stringify(evt1)}\nnot-json\n${JSON.stringify(evt2)}\n`, "utf-8");
 
-    const events = getRecentEvents();
+    const events = await getRecentEvents();
     // Only valid JSON lines are returned
     assert.equal(events.length, 2);
     assert.equal(events[0]!.event, "run.started");
     assert.equal(events[1]!.event, "run.completed");
   });
 
-  it("handles global events file being a directory (non-ENOENT error)", () => {
+  it("handles global events file being a directory (non-ENOENT error)", async () => {
     // Create a directory where the global file should be
     const globalFileAsDir = path.join(stateDir, "events", "all.jsonl");
     fs.mkdirSync(globalFileAsDir, { recursive: true });
 
-    const events = getRecentEvents();
+    const events = await getRecentEvents();
     assert.deepEqual(events, []);
   });
 });
@@ -623,5 +623,77 @@ describe("getEventsPath", () => {
   it("returns the events directory under FORMIGA_STATE_DIR", () => {
     const p = getEventsPath();
     assert.ok(p.includes("events"));
+  });
+});
+
+describe("events ledger rotation (M-3)", () => {
+  let stateDir: string;
+  let originalStateDir: string | undefined;
+
+  beforeEach(() => {
+    originalStateDir = process.env.FORMIGA_STATE_DIR;
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-rotate-"));
+    process.env.FORMIGA_STATE_DIR = stateDir;
+  });
+
+  afterEach(() => {
+    if (originalStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+    else process.env.FORMIGA_STATE_DIR = originalStateDir;
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("rotates run and global ledgers to <file>.1 when they exceed the threshold", () => {
+    const runFile = path.join(stateDir, "events", "run-big.jsonl");
+    const globalFile = path.join(stateDir, "events", "all.jsonl");
+    fs.mkdirSync(path.dirname(runFile), { recursive: true });
+
+    // Fill both ledgers just past the 10MB rotation threshold.
+    const filler = Buffer.alloc(10 * 1024 * 1024 + 1, 0x61);
+    fs.writeFileSync(runFile, filler);
+    fs.writeFileSync(globalFile, filler);
+
+    emitEvent(makeEvent("run-big", "run.started"));
+
+    assert.ok(fs.existsSync(`${runFile}.1`), "run ledger should be rotated to .1");
+    assert.ok(fs.existsSync(`${globalFile}.1`), "global ledger should be rotated to .1");
+
+    // The next emit recreates the active ledgers from scratch.
+    emitEvent(makeEvent("run-big", "run.started"));
+    assert.ok(fs.existsSync(runFile), "active run ledger recreated on next append");
+    assert.ok(fs.existsSync(globalFile), "active global ledger recreated on next append");
+  });
+
+  it("removes an older backup when rotating again", () => {
+    const runFile = path.join(stateDir, "events", "run-big.jsonl");
+    fs.mkdirSync(path.dirname(runFile), { recursive: true });
+
+    // First rotation.
+    fs.writeFileSync(runFile, Buffer.alloc(10 * 1024 * 1024 + 1, 0x61));
+    emitEvent(makeEvent("run-big", "run.started"));
+    assert.ok(fs.existsSync(`${runFile}.1`));
+    fs.writeFileSync(`${runFile}.1`, "stale backup");
+
+    // Second rotation replaces the stale backup.
+    fs.writeFileSync(runFile, Buffer.alloc(10 * 1024 * 1024 + 1, 0x61));
+    emitEvent(makeEvent("run-big", "run.started"));
+    const backupContent = fs.readFileSync(`${runFile}.1`, "utf-8");
+    assert.ok(!backupContent.includes("stale backup"), "oldest backup is replaced");
+  });
+
+  it("getRecentEvents spans a rotated ledger (backup tail + active tail)", async () => {
+    const globalFile = path.join(stateDir, "events", "all.jsonl");
+    fs.mkdirSync(path.dirname(globalFile), { recursive: true });
+
+    const old1 = makeEvent("run-a", "backup.1");
+    const old2 = makeEvent("run-a", "backup.2");
+    fs.appendFileSync(globalFile, `${JSON.stringify(old1)}\n${JSON.stringify(old2)}\n`, "utf-8");
+    fs.renameSync(globalFile, `${globalFile}.1`); // simulate a rotation that already happened
+
+    const fresh1 = makeEvent("run-a", "active.1");
+    fs.appendFileSync(globalFile, `${JSON.stringify(fresh1)}\n`, "utf-8");
+
+    const events = await getRecentEvents(10);
+    assert.deepEqual(events.map((e) => e.event), ["backup.1", "backup.2", "active.1"]);
   });
 });

@@ -55,6 +55,7 @@ import {
   getAgentUnifiedStatus,
   getAgentHealth,
   getCurrentPhase,
+  getCurrentPhases,
   getAgentRoundSummaries,
 } from "./pipeline-status.js";
 import { ArenaRepositoryImpl } from "../arena/arena-repository.js";
@@ -201,22 +202,29 @@ function handleRunDetail(
     }
 
     jsonResponse(res, { run, steps, events, worktree, failure_reason, prompt: run.task });
-  })().catch((err) => errorResponse(res, `Failed to get run detail: ${(err as Error).message}`));
+  })().catch((err) => {
+    // B-8: log server-side, reply generic — don't leak internals to the client.
+    logger.error("handleRunDetail failed", { runId, error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 function handleEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
-    const events = getRecentEvents(Math.min(limit, 500));
+    // B-9: clamp the limit so a malformed/absent param can't read the whole ledger.
+    const rawLimit = parseInt(url.searchParams.get("limit") ?? "50", 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 500) : 50;
+    const events = await getRecentEvents(limit);
     jsonResponse(res, { events });
-  } catch (err) {
-    errorResponse(res, `Failed to get events: ${(err as Error).message}`);
-  }
+  })().catch((err) => {
+    logger.error("handleEvents failed", { error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 function handleLogsTail(req: http.IncomingMessage, res: http.ServerResponse): void {
-  try {
+  (async () => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const offsetParam = parseInt(url.searchParams.get("offset") ?? "0", 10);
     const offset = Number.isFinite(offsetParam) ? offsetParam : 0;
@@ -226,13 +234,14 @@ function handleLogsTail(req: http.IncomingMessage, res: http.ServerResponse): vo
       ? { kind: "run", runId }
       : { kind: "global" };
 
-    const { events, nextOffset } = readEventsFromCursor(source, offset);
+    const { events, nextOffset } = await readEventsFromCursor(source, offset);
     const lines = formatLogsTailLines(events);
 
     jsonResponse(res, { lines, nextOffset });
-  } catch (err) {
-    errorResponse(res, `Failed to get logs-tail events: ${(err as Error).message}`);
-  }
+  })().catch((err) => {
+    logger.error("handleLogsTail failed", { error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 function handleStats(_req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -1232,7 +1241,11 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
       bestCvMean: bestRow?.val_metric ?? null,
       filters: { agentName: agentName || undefined, roundNumber: roundStr ? Number(roundStr) : undefined, status: statusFilter || undefined },
     });
-  })().catch((err) => errorResponse(res, `Failed to get leaderboard: ${(err as Error).message}`));
+  })().catch((err) => {
+    // B-8: log server-side, reply generic.
+    logger.error("handleLeaderboard failed", { error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 function safeParseJson(raw: string): Record<string, unknown> {
@@ -1367,9 +1380,40 @@ function resolveWorkspaceFromRun(run: { context: string }): string | null {
   }
 }
 
-function isPathSafe(base: string, requested: string): boolean {
+/** Sync lexical containment check — no filesystem access. */
+function isPathLexicallySafe(base: string, requested: string): boolean {
   const resolved = path.resolve(base, requested);
   return resolved.startsWith(base + path.sep) || resolved === base;
+}
+
+/**
+ * Async containment check that also resolves symlinks on both sides (M-7).
+ * A symlink inside the workspace pointing outside it would pass a pure
+ * lexical check; realpath resolves the link target so the test operates on
+ * the actual file location, closing the lexical TOCTOU.
+ *
+ * Fallback rules:
+ *  - requested does not exist (ENOENT) → lexical check (pre-write paths).
+ *  - base unreadable → lexical check.
+ *  - other realpath failure (EACCES, ELOOP, ...) → fail closed.
+ */
+export async function isPathSafe(base: string, requested: string): Promise<boolean> {
+  let realBase: string;
+  try {
+    realBase = await fs.promises.realpath(base);
+  } catch {
+    return isPathLexicallySafe(base, requested);
+  }
+
+  let realRequested: string;
+  try {
+    realRequested = await fs.promises.realpath(requested);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") return isPathLexicallySafe(base, requested);
+    return false;
+  }
+  return realRequested === realBase || realRequested.startsWith(realBase + path.sep);
 }
 
 function bareAgentName(scopedName: string): string {
@@ -1422,7 +1466,7 @@ function handleLeaderboardReport(
     const reportFile = AGENT_REPORT_MAP[agent];
     if (reportFile) {
       const reportPath = path.join(workspace, "reports", reportFile);
-      if (isPathSafe(workspace, path.join("reports", reportFile))) {
+      if (await isPathSafe(workspace, path.join("reports", reportFile))) {
         try {
           const content = await fs.promises.readFile(reportPath, "utf-8");
           jsonResponse(res, { content, filename: reportFile });
@@ -1514,7 +1558,7 @@ function handleLeaderboardScript(
       const resolvedArtifact = path.isAbsolute(artifactScript)
         ? artifactScript
         : path.join(workspace, artifactScript);
-      if (isPathSafe(workspace, resolvedArtifact)) {
+      if (await isPathSafe(workspace, resolvedArtifact)) {
         try {
           const realScript = await fs.promises.readFile(resolvedArtifact, "utf-8");
           if (realScript.trim().length > 0) {
@@ -1609,7 +1653,7 @@ function handleRunArtifact(
       return;
     }
 
-    if (!isPathSafe(workspace, relativePath)) {
+    if (!(await isPathSafe(workspace, relativePath))) {
       errorResponse(res, "Forbidden", 403);
       return;
     }
@@ -1714,7 +1758,7 @@ function handleRunAgentFigures(
     }> = [];
 
     for await (const entry of findFilesRec(workspace, IMAGE_GLOB_PATTERNS)) {
-      if (!isPathSafe(workspace, entry)) continue;
+      if (!(await isPathSafe(workspace, entry))) continue;
       const rel = path.relative(workspace, entry).replace(/\\/g, "/");
       const meta = inferFigureMetadata(rel);
       figures.push({
@@ -1728,13 +1772,38 @@ function handleRunAgentFigures(
   })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
 }
 
-async function* findFilesRec(dir: string, patterns: string[]): AsyncGenerator<string> {
+const MAX_RECURSE_DEPTH = 8;
+const MAX_RECURSIVE_ITEMS = 5000;
+/** Directories never descended into during workspace walks (M-6). */
+const SKIP_RECURSE_DIRS = new Set(["node_modules", ".git", "dist", "build", ".venv", "__pycache__"]);
+
+interface WalkCtx {
+  visited: number;
+}
+
+/**
+ * Recursively yield files matching the given extension patterns, bounded by
+ * a max depth and a total-item cap (M-6) so a pathological workspace cannot
+ * turn a request into an unbounded walk. `node_modules`/`.git` (and other
+ * dependency/build dirs) are never descended into. `ctx` is shared across the
+ * whole walk so the item budget is global, not per-subtree.
+ */
+async function* findFilesRec(
+  dir: string,
+  patterns: string[],
+  depth = 0,
+  ctx: WalkCtx = { visited: 0 },
+): AsyncGenerator<string> {
+  if (depth > MAX_RECURSE_DEPTH) return;
   try {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
+      ctx.visited += 1;
+      if (ctx.visited > MAX_RECURSIVE_ITEMS) return;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        yield* findFilesRec(full, patterns);
+        if (SKIP_RECURSE_DIRS.has(entry.name)) continue;
+        yield* findFilesRec(full, patterns, depth + 1, ctx);
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
         if (
@@ -1771,7 +1840,7 @@ function handleRunAgentDecisions(
 
     const decisions = artifacts.map((a) => ({
       key: a.artifact_key,
-      ...JSON.parse(a.content),
+      ...safeParseJson(a.content),
       loggedAt: (a.created_at ?? new Date()).toISOString(),
     }));
 
@@ -1798,7 +1867,7 @@ function handleRunAgentMetrics(
 
     const metrics = artifacts.map((a) => ({
       key: a.artifact_key,
-      ...JSON.parse(a.content),
+      ...safeParseJson(a.content),
       loggedAt: (a.created_at ?? new Date()).toISOString(),
     }));
 
@@ -1835,7 +1904,7 @@ function handleRunAgentLegacyFiles(
     for await (const entry of findFilesRec(workspace, [])) {
       const ext = path.extname(entry).toLowerCase();
       if (!legacyExts.has(ext)) continue;
-      if (!isPathSafe(workspace, entry)) continue;
+      if (!(await isPathSafe(workspace, entry))) continue;
       const rel = path.relative(workspace, entry).replace(/\\/g, "/");
       const stat = await fs.promises.stat(entry).catch(() => null);
       files.push({
@@ -2200,7 +2269,13 @@ async function handleChecklistPut(
     const prisma = getPrisma();
 
     const body = await readJsonBody<{ items?: unknown }>(req);
-    const items = Array.isArray(body?.items) ? body!.items : [];
+    // B-6: a PUT without an items array used to wipe the checklist (default []).
+    // Reject instead of silently clearing state the client may not have loaded.
+    if (!body || !Array.isArray(body.items)) {
+      errorResponse(res, 'Body must include an "items" array', 400);
+      return;
+    }
+    const items = body.items;
     const json = JSON.stringify(items);
     const now = new Date();
 
@@ -2221,7 +2296,9 @@ async function handleChecklistPut(
 
     jsonResponse(res, { runId, phase, items, updatedAt: row.updated_at.toISOString() });
   } catch (err) {
-    errorResponse(res, `Failed to update checklist: ${(err as Error).message}`);
+    // B-8: log server-side, reply generic.
+    logger.error("handleChecklistPut failed", { runId, phase, error: (err as Error).message });
+    errorResponse(res, "Internal server error");
   }
 }
 
@@ -2321,26 +2398,50 @@ const FALLBACK_PHASE_LABELS: Array<{ id: string; label: string }> = [
   { id: "complete", label: "Done" },
 ];
 
-async function derivePhaseLabelsFromRun(runId: string): Promise<Array<{ id: string; label: string }>> {
+/**
+ * Batch variant of the per-run label derivation (M-5): resolves the phase
+ * pipeline labels for many runs with a single `steps` query instead of one
+ * per run, so `/api/runs` does not N+1 on the label derivation either.
+ */
+async function derivePhaseLabelsFromRuns(
+  runIds: string[],
+): Promise<Map<string, Array<{ id: string; label: string }>>> {
+  const map = new Map<string, Array<{ id: string; label: string }>>();
+  if (runIds.length === 0) return map;
   const prisma = getPrisma();
+
   const steps = await prisma.step.findMany({
-    where: { run_id: runId },
+    where: { run_id: { in: runIds } },
     orderBy: { step_index: "asc" },
-    select: { step_id: true },
+    select: { run_id: true, step_id: true },
   });
 
-  if (steps.length === 0) return FALLBACK_PHASE_LABELS;
-
-  const seen = new Set<string>();
-  const labels: Array<{ id: string; label: string }> = [];
+  const byRun = new Map<string, Array<{ id: string; label: string }>>();
+  const seenByRun = new Map<string, Set<string>>();
   for (const step of steps) {
-    const id = step.step_id;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    labels.push({ id, label: STEP_LABEL_MAP[id] ?? id.charAt(0).toUpperCase() + id.slice(1) });
+    let seen = seenByRun.get(step.run_id);
+    if (!seen) {
+      seen = new Set<string>();
+      seenByRun.set(step.run_id, seen);
+    }
+    if (seen.has(step.step_id)) continue; // first occurrence wins (matches single-run logic)
+    seen.add(step.step_id);
+    let labels = byRun.get(step.run_id);
+    if (!labels) {
+      labels = [];
+      byRun.set(step.run_id, labels);
+    }
+    labels.push({
+      id: step.step_id,
+      label: STEP_LABEL_MAP[step.step_id] ?? step.step_id.charAt(0).toUpperCase() + step.step_id.slice(1),
+    });
   }
-  labels.push({ id: "complete", label: "Done" });
-  return labels;
+
+  for (const runId of runIds) {
+    const labels = byRun.get(runId) ?? [];
+    map.set(runId, labels.length === 0 ? FALLBACK_PHASE_LABELS : [...labels, { id: "complete", label: "Done" }]);
+  }
+  return map;
 }
 
 function derivePhases(
@@ -2483,10 +2584,16 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
 
     const STALE_THRESHOLD_MIN = parseInt(process.env.FORMIGA_RUN_MAX_DURATION_MINUTES ?? "120", 10) || 120;
 
-    const runs = await Promise.all(
-      allRuns.map(async (run) => {
-        const currentPhase = await getCurrentPhase(run.id);
-        const phaseLabels = await derivePhaseLabelsFromRun(run.id);
+    // M-5: resolve phases and phase-labels for every run in one batched pass
+    // instead of 3-4 + 1 queries per run (the /api/runs N+1).
+    const [currentPhases, phaseLabelsMap] = await Promise.all([
+      getCurrentPhases(runIds),
+      derivePhaseLabelsFromRuns(runIds),
+    ]);
+
+    const runs = allRuns.map((run) => {
+        const currentPhase = currentPhases.get(run.id) ?? "idle";
+        const phaseLabels = phaseLabelsMap.get(run.id) ?? FALLBACK_PHASE_LABELS;
         const stats = statsMap.get(run.id);
         const startMs = run.created_at?.getTime() ?? null;
         const endMs = run.updated_at?.getTime() ?? null;
@@ -2555,11 +2662,14 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
           no_hurry,
           staleness,
         };
-      }),
-    );
+    });
 
     jsonResponse(res, { runs });
-  })().catch((err) => errorResponse(res, `Failed to build runs snapshot: ${(err as Error).message}`));
+  })().catch((err) => {
+    // B-8: log server-side, reply generic.
+    logger.error("handleRuns failed", { error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 // ── Arena API Handlers ─────────────────────────────────────────────────
@@ -3298,7 +3408,7 @@ function route(req: http.IncomingMessage, res: http.ServerResponse, expectedSecr
   if (pathname.startsWith("/assets/")) {
     const rel = decodeURIComponent(pathname).replace(/^\/+/, "");
     const full = path.join(DASHBOARD_DIST, rel);
-    if (!isPathSafe(DASHBOARD_DIST, full)) {
+    if (!isPathLexicallySafe(DASHBOARD_DIST, full)) {
       errorResponse(res, "Forbidden", 403);
       return;
     }
