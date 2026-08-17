@@ -2,13 +2,41 @@
  * http-client.ts — Thin HTTP client for Formiga dashboard API
  *
  * Uses env vars injected by the formiga scheduler:
- *   - FORMIGA_API_URL  (default: http://localhost:3737)
+ *   - FORMIGA_API_URL  (default: http://localhost:3334 — same default as the
+ *     scheduler's resolveDashboardUrl; 3737 was an older experimental default
+ *     and is the source of `fetch failed` when nothing listens on it)
  *   - FORMIGA_RUN_ID
  *   - FORMIGA_STEP_ID
  *   - FORMIGA_AGENT_ID
  */
 
 const DEFAULT_TIMEOUT_MS = 5000;
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+
+/**
+ * Resolve the dashboard auth secret.
+ *
+ * The dashboard gate (src/server/dashboard.ts) requires the daemon secret on
+ * mutating /api/* routes via the `x-formiga-secret` header (or `formiga_ds`
+ * cookie). The scheduler does not inject it as an env var, so fall back to the
+ * daemon secret file that the rest of the codebase uses
+ * (src/server/control-server.ts:readDaemonSecret). Returns null when no secret
+ * can be resolved — requests then go out without the header.
+ */
+function resolveDashboardSecret(env: NodeJS.ProcessEnv = process.env): string | null {
+  const fromEnv = env.FORMIGA_API_SECRET?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const secretPath =
+      env.FORMIGA_DAEMON_SECRET_FILE?.trim() ||
+      `${env.HOME || os.homedir()}/.formiga/daemon-secret`;
+    return fs.readFileSync(secretPath, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
 
 export interface FormigaContext {
   apiUrl: string;
@@ -24,7 +52,7 @@ export interface FormigaContext {
  */
 export function readContext(env: NodeJS.ProcessEnv = process.env): FormigaContext {
   return {
-    apiUrl: env.FORMIGA_API_URL ?? "http://localhost:3737",
+    apiUrl: env.FORMIGA_API_URL ?? "http://localhost:3334",
     runId: env.FORMIGA_RUN_ID ?? "unknown",
     stepId: env.FORMIGA_STEP_ID ?? "unknown",
     agentId: env.FORMIGA_AGENT_ID ?? "unknown",
@@ -91,9 +119,12 @@ async function postJson<T>(
   opts: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<T> {
   return withTimeout(async (signal) => {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const secret = resolveDashboardSecret();
+    if (secret) headers["x-formiga-secret"] = secret;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body,
       signal,
     });
@@ -110,7 +141,10 @@ async function getJson<T>(
   opts: { signal?: AbortSignal; timeoutMs?: number },
 ): Promise<T> {
   return withTimeout(async (signal) => {
-    const res = await fetch(url, { signal });
+    const headers: Record<string, string> = {};
+    const secret = resolveDashboardSecret();
+    if (secret) headers["x-formiga-secret"] = secret;
+    const res = await fetch(url, { headers, signal });
     if (!res.ok) {
       const text = await safeReadText(res);
       throw new Error(`HTTP ${res.status}: ${text}`);
