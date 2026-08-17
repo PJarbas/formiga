@@ -1567,3 +1567,88 @@ describe("dashboard security (CR-1/2/3)", () => {
     }
   });
 });
+
+
+// ── B-9: /api/events limit clamp ───────────────────────────────────────
+
+describe("dashboard events limit clamp (B-9)", () => {
+  it("clamps a malformed limit param to the default 50 instead of reading the whole ledger", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-events-"));
+    const stateDir = path.join(root, "state");
+    const previousStateDir = process.env.FORMIGA_STATE_DIR;
+    process.env.FORMIGA_STATE_DIR = stateDir;
+
+    // Seed more events than the default 50 clamp.
+    for (let i = 0; i < 60; i++) {
+      appendGlobalEvent(stateDir, {
+        ts: `2026-05-01T10:${String(i).padStart(2, "0")}:00.000Z`,
+        event: "step.pending",
+        runId: `runlimit${i}`,
+        detail: `seed-${i}`,
+      });
+    }
+
+    const { server, baseUrl } = await startDashboard();
+    try {
+      const response = await fetch(`${baseUrl}/api/events?limit=abc`);
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { events: FormigaEvent[] };
+      assert.equal(payload.events.length, 50);
+    } finally {
+      await stopDashboard(server);
+      if (previousStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+      else process.env.FORMIGA_STATE_DIR = previousStateDir;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("honors a valid explicit limit within the clamp", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-dashboard-events-"));
+    const stateDir = path.join(root, "state");
+    const previousStateDir = process.env.FORMIGA_STATE_DIR;
+    process.env.FORMIGA_STATE_DIR = stateDir;
+
+    for (let i = 0; i < 60; i++) {
+      appendGlobalEvent(stateDir, {
+        ts: `2026-05-01T11:${String(i).padStart(2, "0")}:00.000Z`,
+        event: "step.pending",
+        runId: `runlimit${i}`,
+        detail: `seed-${i}`,
+      });
+    }
+
+    const { server, baseUrl } = await startDashboard();
+    try {
+      const response = await fetch(`${baseUrl}/api/events?limit=10`);
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { events: FormigaEvent[] };
+      assert.equal(payload.events.length, 10);
+    } finally {
+      await stopDashboard(server);
+      if (previousStateDir === undefined) delete process.env.FORMIGA_STATE_DIR;
+      else process.env.FORMIGA_STATE_DIR = previousStateDir;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+
+// ── B-6: checklist PUT guard ───────────────────────────────────────────
+
+describe("dashboard checklist PUT guard (B-6)", () => {
+  it("rejects a PUT without an items array with 400 instead of wiping state", async () => {
+    const { server, baseUrl } = await startDashboard();
+    try {
+      const response = await fetch(`${baseUrl}/api/checklist/runcheck/modeling`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", ...daemonAuthHeaders() },
+        body: JSON.stringify({}),
+      });
+      assert.equal(response.status, 400);
+      const payload = await response.json() as { error?: string };
+      assert.match(payload.error ?? "", /items/);
+    } finally {
+      await stopDashboard(server);
+    }
+  });
+});

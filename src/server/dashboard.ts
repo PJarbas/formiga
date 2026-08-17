@@ -1397,7 +1397,7 @@ function isPathLexicallySafe(base: string, requested: string): boolean {
  *  - base unreadable → lexical check.
  *  - other realpath failure (EACCES, ELOOP, ...) → fail closed.
  */
-async function isPathSafe(base: string, requested: string): Promise<boolean> {
+export async function isPathSafe(base: string, requested: string): Promise<boolean> {
   let realBase: string;
   try {
     realBase = await fs.promises.realpath(base);
