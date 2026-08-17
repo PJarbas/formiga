@@ -39,6 +39,7 @@ function toModel(session: ArenaSession) {
     total_crash: session.totalCrash,
     total_checks_failed: session.totalChecksFailed,
     consecutive_no_improve: session.consecutiveNoImprove,
+    state_json: session.stateJson ?? null,
     created_at: new Date(session.createdAt),
     updated_at: new Date(session.updatedAt),
   };
@@ -66,6 +67,7 @@ function fromModel(model: {
   total_crash: number;
   total_checks_failed: number;
   consecutive_no_improve: number;
+  state_json: string | null;
   created_at: Date;
   updated_at: Date;
 }): ArenaSession {
@@ -91,6 +93,7 @@ function fromModel(model: {
     totalCrash: model.total_crash,
     totalChecksFailed: model.total_checks_failed,
     consecutiveNoImprove: model.consecutive_no_improve,
+    stateJson: model.state_json ?? null,
     createdAt: model.created_at.toISOString(),
     updatedAt: model.updated_at.toISOString(),
   };
@@ -118,6 +121,11 @@ export interface ArenaRepository extends ArenaReadonly {
     id: string,
     decision: ArenaDecision,
   ): Promise<void>;
+  /**
+   * Persist the in-memory arena state checkpoint (AL-4). Called at the end of
+   * each round so a daemon restart can resume from the last completed round.
+   */
+  saveCheckpoint(id: string, stateJson: string): Promise<void>;
   finalize(id: string, status: ArenaStatus): Promise<void>;
   setBaseline(id: string, baselineMetric: number): Promise<void>;
   setNoiseFloor(id: string, noiseFloorMad: number): Promise<void>;
@@ -211,6 +219,13 @@ export class ArenaRepositoryImpl implements ArenaRepository {
     await this.prisma.arenaSession.update({
       where: { id },
       data,
+    });
+  }
+
+  async saveCheckpoint(id: string, stateJson: string): Promise<void> {
+    await this.prisma.arenaSession.update({
+      where: { id },
+      data: { state_json: stateJson },
     });
   }
 

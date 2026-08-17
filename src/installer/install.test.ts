@@ -145,70 +145,11 @@ describe("installWorkflow", () => {
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
-  it("installs do-now workflow successfully", async () => {
-    const result = await installWorkflow({ workflowId: "do-now" });
-
-    assert.equal(result.workflowId, "do-now");
-    assert.ok(result.workflowDir.includes("do-now"), "workflowDir should contain do-now");
-
-    // Verify workflow directory exists
-    assert.ok(fs.existsSync(result.workflowDir), "workflow dir should exist");
-
-    // Verify workflow.yml was copied
-    const ymlPath = path.join(result.workflowDir, "workflow.yml");
-    assert.ok(fs.existsSync(ymlPath), "workflow.yml should exist");
-
-    // Verify metadata.json was written
-    const metadataPath = path.join(result.workflowDir, "metadata.json");
-    assert.ok(fs.existsSync(metadataPath), "metadata.json should exist");
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8"));
-    assert.equal(metadata.workflowId, "do-now");
-    assert.ok(metadata.installedAt, "should have installedAt timestamp");
-
-    // Verify agents.json was created with the workflow agents
-    const agentsPath = path.join(tempHome, ".formiga", "agents.json");
-    assert.ok(fs.existsSync(agentsPath), "agents.json should exist");
-    const agentsList = JSON.parse(fs.readFileSync(agentsPath, "utf-8"));
-    assert.ok(Array.isArray(agentsList), "agents list should be an array");
-
-    // Should have at least the main agent plus the workflow agents
-    assert.ok(agentsList.length >= 2, `expected at least 2 agents, got ${agentsList.length}`);
-
-    // The main agent should be marked as default
-    const mainAgent = agentsList.find((a: Record<string, unknown>) => a.id === "main");
-    assert.ok(mainAgent, "main agent should exist");
-    assert.equal(mainAgent.default, true, "main agent should be default");
-
-    // Workflow agents should have workspace and agentDir
-    const wfAgents = agentsList.filter((a: Record<string, unknown>) =>
-      typeof a.id === "string" && a.id.startsWith("do-now_")
-    );
-    assert.ok(wfAgents.length > 0, "should have workflow agents");
-    for (const agent of wfAgents) {
-      assert.ok(agent.workspace, `agent ${agent.id} should have workspace`);
-      assert.ok(agent.agentDir, `agent ${agent.id} should have agentDir`);
-      assert.ok(agent.config, `agent ${agent.id} should have config`);
-    }
-  });
-
-  it("installs do-review-do-verify workflow successfully", async () => {
-    const result = await installWorkflow({ workflowId: "do-review-do-verify" });
-    assert.equal(result.workflowId, "do-review-do-verify");
-
-    const agentsPath = path.join(tempHome, ".formiga", "agents.json");
-    const agentsList = JSON.parse(fs.readFileSync(agentsPath, "utf-8"));
-
-    const wfAgents = agentsList.filter((a: Record<string, unknown>) =>
-      typeof a.id === "string" && a.id.startsWith("do-review-do-verify_")
-    );
-    assert.ok(wfAgents.length > 0, "do-review-do-verify should have agents");
-  });
-
   it("idempotent: reinstalling same workflow does not crash", async () => {
-    await installWorkflow({ workflowId: "do-now" });
+    await installWorkflow({ workflowId: "ml-pipeline" });
     // Second install of the same workflow should work (overwrite)
-    const result2 = await installWorkflow({ workflowId: "do-now" });
-    assert.equal(result2.workflowId, "do-now");
+    const result2 = await installWorkflow({ workflowId: "ml-pipeline" });
+    assert.equal(result2.workflowId, "ml-pipeline");
 
     // The workflow directory should still exist and have metadata
     const metadataPath = path.join(result2.workflowDir, "metadata.json");

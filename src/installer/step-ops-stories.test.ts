@@ -67,7 +67,7 @@ describe("parseAndInsertStories", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("parses STORIES_JSON and inserts stories into DB", () => {
+  it("parses STORIES_JSON and inserts stories into DB", async () => {
     const output = `SOME_KEY: value
 STORIES_JSON: [
   {
@@ -85,7 +85,7 @@ STORIES_JSON: [
 ]
 OTHER_KEY: after`;
 
-    parseAndInsertStories(output, "test-run-1");
+    await parseAndInsertStories(output, "test-run-1");
 
     const rows = db.prepare(
       "SELECT story_id, title, description, acceptance_criteria, status, story_index FROM stories WHERE run_id = ? ORDER BY story_index ASC"
@@ -101,62 +101,62 @@ OTHER_KEY: after`;
     assert.equal(rows[1]!.story_id, "US-002");
   });
 
-  it("returns early when no STORIES_JSON line exists", () => {
-    parseAndInsertStories("NO_STORIES: blah\n", "test-run-1");
+  it("returns early when no STORIES_JSON line exists", async () => {
+    await parseAndInsertStories("NO_STORIES: blah\n", "test-run-1");
     const row = db.prepare("SELECT COUNT(*) as cnt FROM stories WHERE run_id = ?").get("test-run-1") as { cnt: number };
     assert.equal(row.cnt, 0);
   });
 
-  it("throws on invalid JSON", () => {
-    assert.throws(
-      () => parseAndInsertStories("STORIES_JSON: not json\n", "test-run-1"),
+  it("throws on invalid JSON", async () => {
+    await assert.rejects(
+      parseAndInsertStories("STORIES_JSON: not json\n", "test-run-1"),
       /Failed to parse STORIES_JSON/,
     );
   });
 
-  it("throws when STORIES_JSON is not an array", () => {
-    assert.throws(
-      () => parseAndInsertStories('STORIES_JSON: {"id": "x"}\n', "test-run-1"),
+  it("throws when STORIES_JSON is not an array", async () => {
+    await assert.rejects(
+      parseAndInsertStories('STORIES_JSON: {"id": "x"}\n', "test-run-1"),
       /STORIES_JSON must be an array/,
     );
   });
 
-  it("throws when exceeding max 20 stories", () => {
+  it("throws when exceeding max 20 stories", async () => {
     const stories = Array.from({ length: 21 }, (_, i) => ({
       id: `US-${String(i).padStart(3, "0")}`,
       title: `S${i}`,
       description: `D${i}`,
       acceptanceCriteria: ["AC1"],
     }));
-    assert.throws(
-      () => parseAndInsertStories(`STORIES_JSON: ${JSON.stringify(stories)}\n`, "test-run-1"),
+    await assert.rejects(
+      parseAndInsertStories(`STORIES_JSON: ${JSON.stringify(stories)}\n`, "test-run-1"),
       /max is 20/,
     );
   });
 
-  it("throws on missing required story fields", () => {
-    assert.throws(
-      () => parseAndInsertStories('STORIES_JSON: [{"id": "US-001"}]\n', "test-run-1"),
+  it("throws on missing required story fields", async () => {
+    await assert.rejects(
+      parseAndInsertStories('STORIES_JSON: [{"id": "US-001"}]\n', "test-run-1"),
       /missing required fields/,
     );
   });
 
-  it("throws on duplicate story IDs", () => {
+  it("throws on duplicate story IDs", async () => {
     const output = 'STORIES_JSON: [{"id":"US-001","title":"A","description":"A","acceptanceCriteria":["AC1"]},{"id":"US-001","title":"B","description":"B","acceptanceCriteria":["AC2"]}]\n';
-    assert.throws(
-      () => parseAndInsertStories(output, "test-run-1"),
+    await assert.rejects(
+      parseAndInsertStories(output, "test-run-1"),
       /duplicate story id/,
     );
   });
 
-  it("handles multi-line STORIES_JSON with next KEY: boundary", () => {
+  it("handles multi-line STORIES_JSON with next KEY: boundary", async () => {
     const output = `STORIES_JSON:
 [
   {"id": "US-003", "title": "T", "description": "D", "acceptanceCriteria": ["AC1"]}
 ]
 NEXT_KEY: val`;
 
-    parseAndInsertStories(output, "test-run-1");
+    await parseAndInsertStories(output, "test-run-1");
     const row = db.prepare("SELECT story_id FROM stories WHERE run_id = ?").get("test-run-1") as { story_id: string } | undefined;
     assert.ok(row);
     assert.equal(row!.story_id, "US-003");

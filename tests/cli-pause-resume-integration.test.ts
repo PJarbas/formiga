@@ -144,18 +144,20 @@ function seedRunAndSteps(
   db.exec(`
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
+      run_number INTEGER,
       workflow_id TEXT NOT NULL,
       task TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'running',
       context TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      run_number INTEGER,
       tokens_spent INTEGER NOT NULL DEFAULT 0,
       notify_url TEXT,
       scheduling_status TEXT,
       scheduling_requested_at TEXT,
-      scheduling_error TEXT
+      scheduling_error TEXT,
+      max_duration_minutes INTEGER,
+      last_progress_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 
@@ -165,17 +167,26 @@ function seedRunAndSteps(
       run_id TEXT NOT NULL,
       step_id TEXT NOT NULL,
       agent_id TEXT NOT NULL,
-      step_index INTEGER NOT NULL,
+      step_index INTEGER NOT NULL DEFAULT 0,
       input_template TEXT NOT NULL DEFAULT '',
       expects TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'waiting',
       output TEXT,
-      retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 4,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 4,
       type TEXT NOT NULL DEFAULT 'single',
       loop_config TEXT,
       current_story_id TEXT,
-      abandoned_count INTEGER DEFAULT 0,
+      abandoned_count INTEGER NOT NULL DEFAULT 0,
+      parallel_group TEXT,
+      claim_job_id TEXT,
+      claim_pid INTEGER,
+      claim_pgid INTEGER,
+      claim_updated_at TEXT,
+      consecutive_heartbeats INTEGER NOT NULL DEFAULT 0,
+      spawn_count INTEGER NOT NULL DEFAULT 0,
+      last_outcome TEXT,
+      last_outcome_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
@@ -254,22 +265,22 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     fs.mkdirSync(formigaDir, { recursive: true });
 
     // Copy workflow directory so daemon can load the workflow spec
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
-    const dstWorkflowDir = path.join(formigaDir, "workflows", "do-review-do-verify");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "ml-pipeline");
+    const dstWorkflowDir = path.join(formigaDir, "workflows", "ml-pipeline");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
     const dbPath = path.join(formigaDir, "formiga.db");
 
     const runId = crypto.randomUUID();
-    // Create a run with all 4 steps from the do-review-do-verify workflow
+    // Create a run with all 4 steps from the ml-pipeline workflow
     const steps: SeedStep[] = [
-      { stepId: "do", agentId: "do-review-do-verify_doer" },
-      { stepId: "review", agentId: "do-review-do-verify_reviewer" },
-      { stepId: "do-again", agentId: "do-review-do-verify_doer" },
-      { stepId: "verify", agentId: "do-review-do-verify_verifier" },
+      { stepId: "do", agentId: "ml-pipeline_doer" },
+      { stepId: "review", agentId: "ml-pipeline_reviewer" },
+      { stepId: "do-again", agentId: "ml-pipeline_doer" },
+      { stepId: "verify", agentId: "ml-pipeline_verifier" },
     ];
-    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "ml-pipeline", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -380,9 +391,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const completedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
-    seedRunAndSteps(dbPath, completedRunId, "do-review-do-verify", "completed", null, steps);
+    seedRunAndSteps(dbPath, completedRunId, "ml-pipeline", "completed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -419,9 +430,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const failedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
-    seedRunAndSteps(dbPath, failedRunId, "do-review-do-verify", "failed", null, steps);
+    seedRunAndSteps(dbPath, failedRunId, "ml-pipeline", "failed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -459,9 +470,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const runningRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
-    seedRunAndSteps(dbPath, runningRunId, "do-review-do-verify", "running", null, steps);
+    seedRunAndSteps(dbPath, runningRunId, "ml-pipeline", "running", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -494,9 +505,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     const completedRunId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
-    seedRunAndSteps(dbPath, completedRunId, "do-review-do-verify", "completed", null, steps);
+    seedRunAndSteps(dbPath, completedRunId, "ml-pipeline", "completed", null, steps);
 
     try {
       const { stderr, exitCode } = await runCli(
@@ -534,8 +545,8 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     fs.mkdirSync(formigaDir, { recursive: true });
 
     // Copy workflow directory
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
-    const dstWorkflowDir = path.join(formigaDir, "workflows", "do-review-do-verify");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "ml-pipeline");
+    const dstWorkflowDir = path.join(formigaDir, "workflows", "ml-pipeline");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
@@ -543,11 +554,11 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
 
     const runId = crypto.randomUUID();
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
-      { stepId: "setup", agentId: "do-review-do-verify_setup" },
-      { stepId: "implement", agentId: "do-review-do-verify_doer" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
+      { stepId: "setup", agentId: "ml-pipeline_setup" },
+      { stepId: "implement", agentId: "ml-pipeline_doer" },
     ];
-    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "ml-pipeline", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -642,8 +653,8 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     fs.mkdirSync(formigaDir, { recursive: true });
 
     // Copy workflow directory so daemon can load the workflow spec
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
-    const dstWorkflowDir = path.join(formigaDir, "workflows", "do-review-do-verify");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "ml-pipeline");
+    const dstWorkflowDir = path.join(formigaDir, "workflows", "ml-pipeline");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
@@ -653,9 +664,9 @@ describe("CLI pause/resume one run (integration)", { concurrency: 1 }, () => {
     // Seed a run with one step set to status='running' to simulate
     // an in-flight agent that was killed by pause-without-drain.
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
-    seedRunAndSteps(dbPath, runId, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, runId, "ml-pipeline", "running", "pending_register", steps);
 
     // Override the first step's status to 'running' (simulating orphaned in-flight step)
     {

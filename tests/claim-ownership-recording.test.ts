@@ -135,13 +135,13 @@ describe("claimStep ownership recording", () => {
   });
 
   // ── Test 1: Ownership recording on single-step claim ──────────────────
-  it("records worker ownership metadata when claiming a single step", () => {
+  it("records worker ownership metadata when claiming a single step", async () => {
     const ownership: WorkerOwnership = {
       jobId: "formiga-test-123",
       pid: 12345,
     };
 
-    const result = claimStep(TEST_AGENT, singleRunId, ownership);
+    const result = await claimStep(TEST_AGENT, singleRunId, ownership);
     assert.ok(result.found, "should claim the step");
     assert.equal(result.stepId, singleStepId);
 
@@ -154,13 +154,13 @@ describe("claimStep ownership recording", () => {
   });
 
   // ── Test 2: Ownership recording on loop-step story claim ──────────────
-  it("records worker ownership metadata on loop step story claim", () => {
+  it("records worker ownership metadata on loop step story claim", async () => {
     const ownership: WorkerOwnership = {
       jobId: "formiga-loop-test-456",
       pid: 99999,
     };
 
-    const result = claimStep(TEST_LOOP_AGENT, loopRunId, ownership);
+    const result = await claimStep(TEST_LOOP_AGENT, loopRunId, ownership);
     assert.ok(result.found, "should claim the loop step with story");
     assert.equal(result.stepId, loopStepId);
 
@@ -173,8 +173,8 @@ describe("claimStep ownership recording", () => {
   });
 
   // ── Test 3: Backward compat — no WorkerOwnership leaves columns NULL ──
-  it("leaves ownership columns NULL when WorkerOwnership is omitted (backward compat)", () => {
-    const result = claimStep(TEST_AGENT, legacyRunId);
+  it("leaves ownership columns NULL when WorkerOwnership is omitted (backward compat)", async () => {
+    const result = await claimStep(TEST_AGENT, legacyRunId);
     assert.ok(result.found, "should claim the legacy step without ownership");
 
     const step = queryStep(legacyStepId);
@@ -186,14 +186,14 @@ describe("claimStep ownership recording", () => {
   });
 
   // ── Test 4: pgid is recorded when provided ────────────────────────────
-  it("records claim_pgid when provided in WorkerOwnership", () => {
+  it("records claim_pgid when provided in WorkerOwnership", async () => {
     const ownership: WorkerOwnership = {
       jobId: "formiga-test-pgid-789",
       pid: 42,
       pgid: 99,
     };
 
-    const result = claimStep(TEST_AGENT, withPgidRunId, ownership);
+    const result = await claimStep(TEST_AGENT, withPgidRunId, ownership);
     assert.ok(result.found, "should claim the step with pgid");
     assert.equal(result.stepId, withPgidStepId);
 
@@ -206,7 +206,7 @@ describe("claimStep ownership recording", () => {
   });
 
   // ── Test 5: Called without WorkerOwnership (2-arg form) still works ──
-  it("claimStep called with 2 args (no WorkerOwnership) does not error", () => {
+  it("claimStep called with 2 args (no WorkerOwnership) does not error", async () => {
     // The legacy test above already covers this, but let's explicitly
     // verify the call signature is backward-compatible
     const ownership: WorkerOwnership = {
@@ -215,12 +215,12 @@ describe("claimStep ownership recording", () => {
     };
 
     // With ownership works
-    const r1 = claimStep(TEST_AGENT, singleRunId, ownership);
+    const r1 = await claimStep(TEST_AGENT, singleRunId, ownership);
     // Step is already running from test 1, so this should not find work
     assert.equal(r1.found, false, "already-claimed step should not be re-claimed");
 
     // Without ownership works (same step, different run from legacy)
-    const r2 = claimStep(TEST_AGENT, legacyRunId);
+    const r2 = await claimStep(TEST_AGENT, legacyRunId);
     assert.equal(r2.found, false, "already-claimed legacy step should not be re-claimed");
   });
 });

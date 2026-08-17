@@ -160,16 +160,20 @@ function seedRunAndSteps(
   db.exec(`
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
+      run_number INTEGER,
       workflow_id TEXT NOT NULL,
       task TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'running',
       context TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      run_number INTEGER,
       tokens_spent INTEGER NOT NULL DEFAULT 0,
       notify_url TEXT,
-      scheduling_status TEXT
+      scheduling_status TEXT,
+      scheduling_requested_at TEXT,
+      scheduling_error TEXT,
+      max_duration_minutes INTEGER,
+      last_progress_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 
@@ -179,17 +183,26 @@ function seedRunAndSteps(
       run_id TEXT NOT NULL,
       step_id TEXT NOT NULL,
       agent_id TEXT NOT NULL,
-      step_index INTEGER NOT NULL,
+      step_index INTEGER NOT NULL DEFAULT 0,
       input_template TEXT NOT NULL DEFAULT '',
       expects TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'waiting',
       output TEXT,
-      retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 4,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 4,
       type TEXT NOT NULL DEFAULT 'single',
       loop_config TEXT,
       current_story_id TEXT,
-      abandoned_count INTEGER DEFAULT 0,
+      abandoned_count INTEGER NOT NULL DEFAULT 0,
+      parallel_group TEXT,
+      claim_job_id TEXT,
+      claim_pid INTEGER,
+      claim_pgid INTEGER,
+      claim_updated_at TEXT,
+      consecutive_heartbeats INTEGER NOT NULL DEFAULT 0,
+      spawn_count INTEGER NOT NULL DEFAULT 0,
+      last_outcome TEXT,
+      last_outcome_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
@@ -241,8 +254,8 @@ function readRunEvents(homeDir: string, runId: string): Array<Record<string, unk
  * Create workflow directory in the test HOME so the daemon can register runs.
  */
 function copyWorkflowDir(homeDir: string): void {
-  const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
-  const dstWorkflowDir = path.join(homeDir, ".formiga", "workflows", "do-review-do-verify");
+  const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "ml-pipeline");
+  const dstWorkflowDir = path.join(homeDir, ".formiga", "workflows", "ml-pipeline");
   fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
   fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 }
@@ -274,13 +287,13 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run3 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
-      { stepId: "setup", agentId: "do-review-do-verify_setup" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
+      { stepId: "setup", agentId: "ml-pipeline_setup" },
     ];
 
-    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, run3, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run1, "ml-pipeline", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run2, "ml-pipeline", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run3, "ml-pipeline", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -374,13 +387,13 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run3 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
 
     // Seed runs as paused
-    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "paused", "paused", steps);
-    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "paused", "paused", steps);
-    seedRunAndSteps(dbPath, run3, "do-review-do-verify", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run1, "ml-pipeline", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run2, "ml-pipeline", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run3, "ml-pipeline", "paused", "paused", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -465,11 +478,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run2 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
 
-    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run1, "ml-pipeline", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run2, "ml-pipeline", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -581,16 +594,20 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
       db.exec(`
         CREATE TABLE IF NOT EXISTS runs (
           id TEXT PRIMARY KEY,
+          run_number INTEGER,
           workflow_id TEXT NOT NULL,
           task TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'pending',
+          status TEXT NOT NULL DEFAULT 'running',
           context TEXT NOT NULL DEFAULT '{}',
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-          run_number INTEGER,
           tokens_spent INTEGER NOT NULL DEFAULT 0,
           notify_url TEXT,
-          scheduling_status TEXT
+          scheduling_status TEXT,
+          scheduling_requested_at TEXT,
+          scheduling_error TEXT,
+          max_duration_minutes INTEGER,
+          last_progress_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
       `);
 
@@ -600,17 +617,26 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
           run_id TEXT NOT NULL,
           step_id TEXT NOT NULL,
           agent_id TEXT NOT NULL,
-          step_index INTEGER NOT NULL,
+          step_index INTEGER NOT NULL DEFAULT 0,
           input_template TEXT NOT NULL DEFAULT '',
           expects TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL DEFAULT 'waiting',
           output TEXT,
-          retry_count INTEGER DEFAULT 0,
-          max_retries INTEGER DEFAULT 4,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          max_retries INTEGER NOT NULL DEFAULT 4,
           type TEXT NOT NULL DEFAULT 'single',
           loop_config TEXT,
           current_story_id TEXT,
-          abandoned_count INTEGER DEFAULT 0,
+          abandoned_count INTEGER NOT NULL DEFAULT 0,
+          parallel_group TEXT,
+          claim_job_id TEXT,
+          claim_pid INTEGER,
+          claim_pgid INTEGER,
+          claim_updated_at TEXT,
+          consecutive_heartbeats INTEGER NOT NULL DEFAULT 0,
+          spawn_count INTEGER NOT NULL DEFAULT 0,
+          last_outcome TEXT,
+          last_outcome_at TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
@@ -627,24 +653,24 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
       db.prepare(
         `INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, run_number, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 0, 'draining_pause', NULL, ?, ?)`,
-      ).run(runId, "do-review-do-verify", "Drain finalize test", "running", context, now, now);
+      ).run(runId, "ml-pipeline", "Drain finalize test", "running", context, now, now);
 
       // Step 0: done (already completed)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, loop_config, current_story_id, abandoned_count, created_at, updated_at)
-         VALUES (?, ?, 'plan', 'do-review-do-verify_planner', 0, 'test', 'STATUS: done', 'done', 4, 'single', NULL, NULL, 0, ?, ?)`,
+         VALUES (?, ?, 'plan', 'ml-pipeline_planner', 0, 'test', 'STATUS: done', 'done', 4, 'single', NULL, NULL, 0, ?, ?)`,
       ).run(stepId1, runId, now, now);
 
       // Step 1: running (in-flight)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, loop_config, current_story_id, abandoned_count, created_at, updated_at)
-         VALUES (?, ?, 'setup', 'do-review-do-verify_setup', 1, 'test', 'STATUS: done', 'running', 4, 'single', NULL, NULL, 0, ?, ?)`,
+         VALUES (?, ?, 'setup', 'ml-pipeline_setup', 1, 'test', 'STATUS: done', 'running', 4, 'single', NULL, NULL, 0, ?, ?)`,
       ).run(stepId2, runId, now, now);
 
       // Step 2: waiting (NOT the last step — completing step 1 should advance but NOT complete the run)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, loop_config, current_story_id, abandoned_count, created_at, updated_at)
-         VALUES (?, ?, 'implement', 'do-review-do-verify_doer', 2, 'test', 'STATUS: done', 'waiting', 4, 'single', NULL, NULL, 0, ?, ?)`,
+         VALUES (?, ?, 'implement', 'ml-pipeline_doer', 2, 'test', 'STATUS: done', 'waiting', 4, 'single', NULL, NULL, 0, ?, ?)`,
       ).run(stepId3, runId, now, now);
 
       db.close();
@@ -728,13 +754,13 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const canceledId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
 
-    seedRunAndSteps(dbPath, runningId, "do-review-do-verify", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, completedId, "do-review-do-verify", "completed", null, steps);
-    seedRunAndSteps(dbPath, failedId, "do-review-do-verify", "failed", null, steps);
-    seedRunAndSteps(dbPath, canceledId, "do-review-do-verify", "canceled", null, steps);
+    seedRunAndSteps(dbPath, runningId, "ml-pipeline", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, completedId, "ml-pipeline", "completed", null, steps);
+    seedRunAndSteps(dbPath, failedId, "ml-pipeline", "failed", null, steps);
+    seedRunAndSteps(dbPath, canceledId, "ml-pipeline", "canceled", null, steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -828,13 +854,13 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const failedId = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
 
-    seedRunAndSteps(dbPath, pausedId, "do-review-do-verify", "paused", "paused", steps);
-    seedRunAndSteps(dbPath, runningId, "do-review-do-verify", "running", null, steps);
-    seedRunAndSteps(dbPath, completedId, "do-review-do-verify", "completed", null, steps);
-    seedRunAndSteps(dbPath, failedId, "do-review-do-verify", "failed", null, steps);
+    seedRunAndSteps(dbPath, pausedId, "ml-pipeline", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, runningId, "ml-pipeline", "running", null, steps);
+    seedRunAndSteps(dbPath, completedId, "ml-pipeline", "completed", null, steps);
+    seedRunAndSteps(dbPath, failedId, "ml-pipeline", "failed", null, steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -921,11 +947,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run2 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
 
-    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "running", "pending_register", steps);
-    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run1, "ml-pipeline", "running", "pending_register", steps);
+    seedRunAndSteps(dbPath, run2, "ml-pipeline", "running", "pending_register", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -959,7 +985,7 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
         const pauseEvent = events.find((e) => e.event === "run.paused");
         assert.ok(pauseEvent, `Expected run.paused event for ${rid.slice(0, 8)}`);
         assert.equal(pauseEvent.runId, rid, "Event should have correct runId");
-        assert.equal(pauseEvent.workflowId, "do-review-do-verify", "Event should have correct workflowId");
+        assert.equal(pauseEvent.workflowId, "ml-pipeline", "Event should have correct workflowId");
         assert.ok(pauseEvent.ts, "Event should have a timestamp");
       }
 
@@ -1007,11 +1033,11 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
     const run2 = crypto.randomUUID();
 
     const steps: SeedStep[] = [
-      { stepId: "plan", agentId: "do-review-do-verify_planner" },
+      { stepId: "plan", agentId: "ml-pipeline_planner" },
     ];
 
-    seedRunAndSteps(dbPath, run1, "do-review-do-verify", "paused", "paused", steps);
-    seedRunAndSteps(dbPath, run2, "do-review-do-verify", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run1, "ml-pipeline", "paused", "paused", steps);
+    seedRunAndSteps(dbPath, run2, "ml-pipeline", "paused", "paused", steps);
 
     let daemon: ChildProcess | undefined;
 
@@ -1039,7 +1065,7 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
         const resumeEvent = events.find((e) => e.event === "run.resumed");
         assert.ok(resumeEvent, `Expected run.resumed event for ${rid.slice(0, 8)}`);
         assert.equal(resumeEvent.runId, rid, "Event should have correct runId");
-        assert.equal(resumeEvent.workflowId, "do-review-do-verify", "Event should have correct workflowId");
+        assert.equal(resumeEvent.workflowId, "ml-pipeline", "Event should have correct workflowId");
         assert.ok(resumeEvent.ts, "Event should have a timestamp");
       }
 
@@ -1094,16 +1120,20 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
       db.exec(`
         CREATE TABLE IF NOT EXISTS runs (
           id TEXT PRIMARY KEY,
+          run_number INTEGER,
           workflow_id TEXT NOT NULL,
           task TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'pending',
+          status TEXT NOT NULL DEFAULT 'running',
           context TEXT NOT NULL DEFAULT '{}',
-          created_at TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-          run_number INTEGER,
           tokens_spent INTEGER NOT NULL DEFAULT 0,
           notify_url TEXT,
-          scheduling_status TEXT
+          scheduling_status TEXT,
+          scheduling_requested_at TEXT,
+          scheduling_error TEXT,
+          max_duration_minutes INTEGER,
+          last_progress_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
       `);
 
@@ -1113,14 +1143,26 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
           run_id TEXT NOT NULL,
           step_id TEXT NOT NULL,
           agent_id TEXT NOT NULL,
-          step_index INTEGER NOT NULL,
+          step_index INTEGER NOT NULL DEFAULT 0,
           input_template TEXT NOT NULL DEFAULT '',
           expects TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL DEFAULT 'waiting',
           output TEXT,
-          retry_count INTEGER DEFAULT 0,
-          max_retries INTEGER DEFAULT 0,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          max_retries INTEGER NOT NULL DEFAULT 4,
           type TEXT NOT NULL DEFAULT 'single',
+          loop_config TEXT,
+          current_story_id TEXT,
+          abandoned_count INTEGER NOT NULL DEFAULT 0,
+          parallel_group TEXT,
+          claim_job_id TEXT,
+          claim_pid INTEGER,
+          claim_pgid INTEGER,
+          claim_updated_at TEXT,
+          consecutive_heartbeats INTEGER NOT NULL DEFAULT 0,
+          spawn_count INTEGER NOT NULL DEFAULT 0,
+          last_outcome TEXT,
+          last_outcome_at TEXT,
           created_at TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
@@ -1137,18 +1179,18 @@ describe("pause-all / resume-all integration", { concurrency: 1 }, () => {
       db.prepare(
         `INSERT INTO runs (id, workflow_id, task, status, context, tokens_spent, scheduling_status, run_number, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 0, NULL, NULL, ?, ?)`,
-      ).run(runId, "do-review-do-verify", "Drain no-spawn test", "running", context, now, now);
+      ).run(runId, "ml-pipeline", "Drain no-spawn test", "running", context, now, now);
 
       // Step 0: running (in-flight)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, created_at, updated_at)
-         VALUES (?, ?, 'plan', 'do-review-do-verify_planner', 0, 'test', 'STATUS: done', 'running', 0, 'single', ?, ?)`,
+         VALUES (?, ?, 'plan', 'ml-pipeline_planner', 0, 'test', 'STATUS: done', 'running', 0, 'single', ?, ?)`,
       ).run(stepIdRunning, runId, now, now);
 
       // Step 1: waiting (should NOT be claimed while draining)
       db.prepare(
         `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, max_retries, type, created_at, updated_at)
-         VALUES (?, ?, 'setup', 'do-review-do-verify_setup', 1, 'test', 'STATUS: done', 'waiting', 0, 'single', ?, ?)`,
+         VALUES (?, ?, 'setup', 'ml-pipeline_setup', 1, 'test', 'STATUS: done', 'waiting', 0, 'single', ?, ?)`,
       ).run(crypto.randomUUID(), runId, now, now);
 
       db.close();

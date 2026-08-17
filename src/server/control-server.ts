@@ -978,16 +978,22 @@ export function startReconciler(): { stop: () => void } {
 
       await admitQueuedRuns();
 
-      // ── Arena Step Stuck Detection ──────────────────────────────────
+      // ── Arena Step Stuck Detection & Re-admission ──────────────────
       // Arena steps don't use claim_pid (they run in-process via launchArenaFromStep).
       // If an arena step is "running" but has no claim_pid and hasn't updated in
-      // 30 minutes, it's likely stuck (buildArenaConfig returned null silently,
-      // or runArena threw without marking the step failed).
+      // ARENA_STUCK_THRESHOLD_MINUTES, it's likely stuck — most commonly because
+      // the daemon died mid-run (the step and session survive in the DB).
       // IMPORTANT: We must also check arena_sessions.updated_at since the arena
       // engine updates the session on every round, not the step itself.
+      //
+      // Re-admission (AL-4): a session still "running" with a persisted
+      // checkpoint is resumable — re-launch the engine so runArena restores the
+      // checkpoint and continues from the last completed round, instead of
+      // killing the run. Only sessions with NO checkpoint fall through to the
+      // mark-failed path below.
       try {
         const ARENA_STUCK_THRESHOLD_MINUTES = parseInt(process.env.FORMIGA_ARENA_STUCK_THRESHOLD_MINUTES ?? "10", 10) || 10;
-        const ARENA_STUCK_THRESHOLD_MS = ARENA_STUCK_THRESHOLD_MINUTES * 60 * 1000; // default 30 minutes
+        const ARENA_STUCK_THRESHOLD_MS = ARENA_STUCK_THRESHOLD_MINUTES * 60 * 1000;
         const arenaCutoff = new Date(Date.now() - ARENA_STUCK_THRESHOLD_MS);
         const stuckArenaSteps = await prisma.step.findMany({
           where: {
@@ -1004,7 +1010,7 @@ export function startReconciler(): { stop: () => void } {
           // Check if there's an active arena session with recent activity
           const arenaSession = await prisma.arenaSession.findUnique({
             where: { run_id: step.run_id },
-            select: { updated_at: true, status: true },
+            select: { updated_at: true, status: true, state_json: true },
           });
 
           // Skip if arena session exists and was updated recently (arena is still active)
@@ -1015,13 +1021,35 @@ export function startReconciler(): { stop: () => void } {
             continue;
           }
 
+          // AL-4 re-admission: a session still "running" with a persisted
+          // checkpoint means the daemon restarted mid-run. The engine is gone
+          // (updated_at is stale) but the run is resumable — re-launch
+          // launchArenaFromStep, whose runArena restores the checkpoint and
+          // continues from the last completed round. Fire-and-forget: the
+          // launch can run for hours and must not block the reconciler tick.
+          // launchArenaFromStep's activeArenaRuns guard makes concurrent
+          // re-admission of the same run a no-op.
+          if (arenaSession && arenaSession.status === "running" && arenaSession.state_json) {
+            logger.warn(
+              `control-server: arena step ${step.id} (run ${step.run_id.slice(0, 8)}) has a resumable checkpoint — re-admitting via launchArenaFromStep`,
+            );
+            const { launchArenaFromStep } = await import("../arena/arena-workflow.js");
+            launchArenaFromStep(step.run_id, step.id).catch((err) => {
+              logger.warn(
+                `control-server: arena re-admission for run ${step.run_id.slice(0, 8)} failed`,
+                { error: String(err) },
+              );
+            });
+            continue;
+          }
+
           logger.warn(
             `control-server: arena step ${step.id} (run ${step.run_id.slice(0, 8)}) stuck in 'running' with no claim_pid since ${step.updated_at.toISOString()} — marking failed`,
           );
           const now = new Date();
           await prisma.step.update({
             where: { id: step.id },
-            data: { status: "failed", output: "Arena step stuck: no claim_pid and no update for 5 minutes. Reconciler auto-recovery.", updated_at: now },
+            data: { status: "failed", output: `Arena step stuck: no claim_pid and no update for ${ARENA_STUCK_THRESHOLD_MINUTES} minutes. Reconciler auto-recovery.`, updated_at: now },
           });
           await prisma.run.update({
             where: { id: step.run_id },

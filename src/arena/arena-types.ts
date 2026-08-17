@@ -60,6 +60,13 @@ export interface ArenaSession {
   totalCrash: number;
   totalChecksFailed: number;
   consecutiveNoImprove: number;
+  /**
+   * JSON checkpoint persisted at the end of each round (AL-4). Holds the
+   * in-memory arena state (results, best fold scores, per-team ledger, dedup
+   * signatures) so a daemon restart can resume from the last completed round
+   * instead of losing the run. Parsed by the engine on resume.
+   */
+  stateJson?: string | null;
   createdAt: string;
   updatedAt: string;
 }

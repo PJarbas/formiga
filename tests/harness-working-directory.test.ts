@@ -111,6 +111,11 @@ describe("working-directory-for-harness", () => {
           }
 
           try {
+            // getPrisma() does not run migrate(); runWorkflow queries the DB
+            // (nextRunNumber) before validating the working directory. An
+            // explicit getDb() bootstraps the canonical schema on the temp
+            // DB first.
+            getDb();
             const started = await runWorkflow({
               workflowId: "${workflowId}",
               taskTitle: "Use explicit harness cwd",
@@ -169,6 +174,10 @@ describe("working-directory-for-harness", () => {
           import { stopDaemon } from "./dist/server/daemonctl.js";
 
           try {
+            // Bootstrap the canonical schema before runWorkflow — getPrisma()
+            // does not migrate, so without getDb() the first call throws
+            // TableDoesNotExist (main.runs does not exist).
+            getDb();
             const started = await runWorkflow({
               workflowId: "${workflowId}",
               taskTitle: "Use default harness cwd",

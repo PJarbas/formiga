@@ -54,6 +54,19 @@ function makeWorkflow(overrides: Partial<WorkflowSpec> = {}): WorkflowSpec {
   };
 }
 
+/**
+ * Seeds a pending step for the polling job's agent (test-wf_test-agent).
+ * executePollingRound's RF-5 no-pending-work gate queries `steps` for
+ * pending/waiting rows before dispatching a harness — without one, the
+ * round returns before ever spawning the mock binary.
+ */
+function insertPendingStep(db: ReturnType<typeof getDb>, runId: string, stepId: string, now: string): void {
+  db.prepare(
+    `INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, created_at, updated_at)
+     VALUES (?, ?, ?, 'test-wf_test-agent', 0, 'do work', 'STATUS', 'pending', ?, ?)`,
+  ).run(`${runId}-${stepId}`, runId, stepId, now, now);
+}
+
 describe("buildPollingRoundContext harnessType", () => {
   it("includes harnessType in returned context", () => {
     const job: CronJobInfo = {
@@ -163,27 +176,22 @@ describe("executePollingRound harness dispatch", () => {
     }), nowPiDispatch, nowPiDispatch);
 
     const workflow = makeWorkflow();
-    const result = await createAgentCronJob({
-      workflowId: "test-wf",
-      runId,
-      agent: makeAgent(),
-      workflow,
-      workingDirectoryForHarness: workdir,
-    });
-
-    assert.ok(result.ok);
+    // Seed a pending step so the RF-5 no-pending-work gate lets the round
+    // reach harness dispatch. We drive executePollingRound directly instead
+    // of via createAgentCronJob: the latter fires an immediate fire-and-
+    // forget round that races the manual call (in-flight marker), making the
+    // dispatch non-deterministic.
+    insertPendingStep(db, runId, "step-1", nowPiDispatch);
 
     // executePollingRound should use pi binary (FORMIGA_PI_BINARY mock)
     const piLog = path.join(tempHome, "pi-args.log");
-    const piDispatchJob = { id: result.id!, workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "pi" as const, workingDirectoryForHarness: workdir, createdAt: "" };
+    const piDispatchJob = { id: "dispatch-pi", workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "pi" as const, workingDirectoryForHarness: workdir, createdAt: "" };
     await executePollingRound(piDispatchJob, makeAgent(), workflow);
 
     // Verify pi was invoked (log file should contain --print args)
     const piArgs = fs.readFileSync(piLog, "utf-8");
     assert.ok(piArgs.includes("--print"), "pi should be invoked with --print");
     assert.ok(piArgs.includes("--mode"), "pi should be invoked with --mode");
-
-    await removeRunCrons(runId);
   });
 
   it("dispatches to runHermes when harnessType is 'hermes'", async () => {
@@ -207,18 +215,10 @@ describe("executePollingRound harness dispatch", () => {
     }), nowHermes, nowHermes);
 
     const workflow = makeWorkflow();
-    const result = await createAgentCronJob({
-      workflowId: "test-wf",
-      runId,
-      agent: makeAgent(),
-      workflow,
-      workingDirectoryForHarness: workdir,
-    });
-
-    assert.ok(result.ok);
+    insertPendingStep(db, runId, "step-1", nowHermes);
 
     // executePollingRound should use hermes binary
-    const hermesDispatchJob = { id: result.id!, workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "hermes" as const, workingDirectoryForHarness: workdir, createdAt: "" };
+    const hermesDispatchJob = { id: "dispatch-hermes", workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "hermes" as const, workingDirectoryForHarness: workdir, createdAt: "" };
     await executePollingRound(hermesDispatchJob, makeAgent(), workflow);
 
     // Verify hermes was invoked (log file should contain chat subcommand)
@@ -226,8 +226,6 @@ describe("executePollingRound harness dispatch", () => {
     assert.ok(hermesArgs.includes("chat"), "hermes should be invoked with chat");
     assert.ok(hermesArgs.includes("--max-turns"), "hermes should have --max-turns");
     assert.ok(hermesArgs.includes("--yolo"), "hermes should have --yolo");
-
-    await removeRunCrons(runId);
   });
 
   it("dispatches to runPi when harnessType is missing (defaults to pi)", async () => {
@@ -245,19 +243,11 @@ describe("executePollingRound harness dispatch", () => {
     }), nowDefault, nowDefault);
 
     const workflow = makeWorkflow();
-    const result = await createAgentCronJob({
-      workflowId: "test-wf",
-      runId,
-      agent: makeAgent(),
-      workflow,
-      workingDirectoryForHarness: workdir,
-    });
-
-    assert.ok(result.ok);
+    insertPendingStep(db, runId, "step-1", nowDefault);
 
     const piLog = path.join(tempHome, "pi-args.log");
     await executePollingRound(
-      { id: result.id!, workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: undefined, workingDirectoryForHarness: workdir, createdAt: "" },
+      { id: "dispatch-default", workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: undefined, workingDirectoryForHarness: workdir, createdAt: "" },
       makeAgent(),
       workflow,
     );
@@ -265,8 +255,6 @@ describe("executePollingRound harness dispatch", () => {
     // Verify pi was invoked (not hermes)
     const piArgs = fs.readFileSync(piLog, "utf-8");
     assert.ok(piArgs.includes("--print"), "pi should be invoked by default");
-
-    await removeRunCrons(runId);
   });
 
   it("passes FORMIGA_HERMES_BINARY to child env when dispatching to runHermes", async () => {
@@ -290,17 +278,9 @@ describe("executePollingRound harness dispatch", () => {
     }), nowHermesEnv, nowHermesEnv);
 
     const workflow = makeWorkflow();
-    const result = await createAgentCronJob({
-      workflowId: "test-wf",
-      runId,
-      agent: makeAgent(),
-      workflow,
-      workingDirectoryForHarness: workdir,
-    });
+    insertPendingStep(db, runId, "step-1", nowHermesEnv);
 
-    assert.ok(result.ok);
-
-    const hermesEnvDispatchJob = { id: result.id!, workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "hermes" as const, workingDirectoryForHarness: workdir, createdAt: "" };
+    const hermesEnvDispatchJob = { id: "dispatch-hermes-env", workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "hermes" as const, workingDirectoryForHarness: workdir, createdAt: "" };
     await executePollingRound(hermesEnvDispatchJob, makeAgent(), workflow);
 
     // Verify FORMIGA_HERMES_BINARY was passed to child env
@@ -309,8 +289,6 @@ describe("executePollingRound harness dispatch", () => {
       envOutput.includes("FORMIGA_HERMES_BINARY"),
       "child env should contain FORMIGA_HERMES_BINARY",
     );
-
-    await removeRunCrons(runId);
   });
 });
 

@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
+import { migrate } from "../dist/database/migrations.js";
 
 const cliPath = path.resolve(process.cwd(), "dist", "cli", "cli.js");
 
@@ -53,36 +54,14 @@ function seedDb(dbPath: string, runs: Array<{
 }>) {
   const db = new DatabaseSync(dbPath);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS runs (
-      id TEXT PRIMARY KEY,
-      workflow_id TEXT NOT NULL,
-      task TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      context TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      run_number INTEGER,
-      tokens_spent INTEGER NOT NULL DEFAULT 0,
-      notify_url TEXT
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS steps (
-      step_id TEXT NOT NULL,
-      run_id TEXT NOT NULL,
-      agent_id TEXT NOT NULL,
-      step_index INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'waiting',
-      type TEXT NOT NULL DEFAULT 'single',
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      output TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (step_id, run_id)
-    )
-  `);
+  // Build the canonical schema instead of a legacy subset. The CLI reads
+  // runs/steps through Prisma (status.ts), which selects canonical columns
+  // (steps.id, input_template, expects, …). The old hand-rolled `steps`
+  // table (PRIMARY KEY (step_id, run_id), no id column) made every status
+  // query throw "column main.steps.id does not exist". migrate() is
+  // idempotent and also creates stories/experiments/etc. that the CLI's
+  // other paths may touch.
+  migrate(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS events (
@@ -101,10 +80,10 @@ function seedDb(dbPath: string, runs: Array<{
     stmt.run(r.id, r.workflowId, r.task, r.status, r.tokensSpent);
     if (r.steps) {
       const stepStmt = db.prepare(
-        "INSERT INTO steps (step_id, run_id, agent_id, step_index, status, type, retry_count) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, input_template, expects, status, type, retry_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, '', '', ?, ?, ?, datetime('now'), datetime('now'))"
       );
       for (const s of r.steps) {
-        stepStmt.run(s.stepId, r.id, s.agentId, s.stepIndex, s.status, s.type, s.retryCount);
+        stepStmt.run(`${r.id}-${s.stepId}`, r.id, s.stepId, s.agentId, s.stepIndex, s.status, s.type, s.retryCount);
       }
     }
   }

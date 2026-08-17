@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { runWorkflow } from "../../dist/installer/run.js";
 import { getPidFile, getPortFile, stopDaemon } from "../../dist/server/daemonctl.js";
 import { reserveRandomPort } from "../../tests/helpers/test-env.ts";
+import { getDb } from "../../dist/db.js";
 
 // ── Helpers ──
 
@@ -90,6 +91,12 @@ describe("runWorkflow", () => {
     process.env.FORMIGA_CONTROL_PORT = String(controlPort);
     process.env.FORMIGA_DB_PATH = path.join(formigaDir, "formiga.db");
     process.env.FORMIGA_STATE_DIR = formigaDir;
+
+    // Bootstrap the canonical schema on the temp DB before any runWorkflow
+    // call. runWorkflow uses getPrisma(), which does NOT run migrate() —
+    // without an explicit getDb() the first call fails with
+    // TableDoesNotExist (main.runs does not exist).
+    getDb();
   });
 
   after(async () => {

@@ -54,7 +54,7 @@ describe("formiga_stats migration", () => {
 
           const db = getDb();
           const cols = db.prepare("PRAGMA table_info(formiga_stats)").all();
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
           console.log(JSON.stringify({ cols, systemTokens }));
         `,
         { HOME: temp.homeDir },
@@ -215,7 +215,7 @@ describe("formiga_stats migration", () => {
           const db = getDb();
           const cols = db.prepare("PRAGMA table_info(formiga_stats)").all();
           const rows = db.prepare("SELECT id, system_tokens_spent FROM formiga_stats").all();
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
           console.log(JSON.stringify({ cols, rows, systemTokens }));
         `,
         { HOME: temp.homeDir },
@@ -241,8 +241,9 @@ describe("getSystemTokenSpend and incrementSystemTokenSpend", () => {
     try {
       const result = runNodeScript(
         `
-          import { getSystemTokenSpend } from "./dist/db.js";
-          console.log(JSON.stringify({ value: getSystemTokenSpend() }));
+          import { getDb, getSystemTokenSpend } from "./dist/db.js";
+          getDb();
+          console.log(JSON.stringify({ value: await getSystemTokenSpend() }));
         `,
         { HOME: temp.homeDir },
       );
@@ -258,8 +259,9 @@ describe("getSystemTokenSpend and incrementSystemTokenSpend", () => {
     try {
       const result = runNodeScript(
         `
-          import { incrementSystemTokenSpend } from "./dist/db.js";
-          const val = incrementSystemTokenSpend(100);
+          import { getDb, incrementSystemTokenSpend } from "./dist/db.js";
+          getDb();
+          const val = await incrementSystemTokenSpend(100);
           console.log(JSON.stringify({ value: val }));
         `,
         { HOME: temp.homeDir },
@@ -276,11 +278,12 @@ describe("getSystemTokenSpend and incrementSystemTokenSpend", () => {
     try {
       const result = runNodeScript(
         `
-          import { getSystemTokenSpend, incrementSystemTokenSpend } from "./dist/db.js";
-          let v1 = incrementSystemTokenSpend(50);
-          let v2 = incrementSystemTokenSpend(25);
-          let v3 = incrementSystemTokenSpend(25);
-          let total = getSystemTokenSpend();
+          import { getDb, getSystemTokenSpend, incrementSystemTokenSpend } from "./dist/db.js";
+          getDb();
+          let v1 = await incrementSystemTokenSpend(50);
+          let v2 = await incrementSystemTokenSpend(25);
+          let v3 = await incrementSystemTokenSpend(25);
+          let total = await getSystemTokenSpend();
           console.log(JSON.stringify({ v1, v2, v3, total }));
         `,
         { HOME: temp.homeDir },
@@ -301,8 +304,9 @@ describe("getSystemTokenSpend and incrementSystemTokenSpend", () => {
       // Process 1: increment by 50
       runNodeScript(
         `
-          import { incrementSystemTokenSpend } from "./dist/db.js";
-          const val = incrementSystemTokenSpend(50);
+          import { getDb, incrementSystemTokenSpend } from "./dist/db.js";
+          getDb();
+          const val = await incrementSystemTokenSpend(50);
           console.log(JSON.stringify({ value: val }));
         `,
         { HOME: temp.homeDir },
@@ -311,9 +315,10 @@ describe("getSystemTokenSpend and incrementSystemTokenSpend", () => {
       // Process 2: read and increment by 30 (should see 50, then get 80)
       const result = runNodeScript(
         `
-          import { getSystemTokenSpend, incrementSystemTokenSpend } from "./dist/db.js";
-          const before = getSystemTokenSpend();
-          const after = incrementSystemTokenSpend(30);
+          import { getDb, getSystemTokenSpend, incrementSystemTokenSpend } from "./dist/db.js";
+          getDb();
+          const before = await getSystemTokenSpend();
+          const after = await incrementSystemTokenSpend(30);
           console.log(JSON.stringify({ before, after }));
         `,
         { HOME: temp.homeDir },

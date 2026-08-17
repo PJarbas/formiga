@@ -115,6 +115,11 @@ describe("peekStep - lightweight work check", () => {
     tmpDbPath = path.join(os.tmpdir(), `formiga-test-peek-${crypto.randomUUID()}.db`);
     originalDbPath = process.env.FORMIGA_DB_PATH;
     process.env.FORMIGA_DB_PATH = tmpDbPath;
+    // peekStep queries via Prisma, which needs the canonical schema in the
+    // temp DB. getDb() runs migrate() on FORMIGA_DB_PATH — call it so the
+    // tables exist before peekStep() runs.
+    const { getDb } = await import("../dist/db.js");
+    getDb();
   });
 
   after(async () => {
@@ -132,7 +137,7 @@ describe("peekStep - lightweight work check", () => {
   it("returns NO_WORK when agent has no steps at all", async () => {
     // Fresh import to pick up new DB path
     const { peekStep } = await import("../dist/installer/step-ops.js");
-    const result = peekStep("nonexistent-agent", crypto.randomUUID());
+    const result = await peekStep("nonexistent-agent", crypto.randomUUID());
     assert.equal(result, "NO_WORK");
   });
 });

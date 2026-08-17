@@ -26,7 +26,6 @@ const documentedCommands: [string, string][] = [
   ["formiga workflow resume", "workflow resume"],
   ["formiga workflow resume-all", "workflow resume-all"],
   ["formiga workflow stop", "workflow stop"],
-  ["formiga workflow autoresearch", "workflow autoresearch"],
 
   // Section 2.2: logs
   ["formiga logs", "logs command"],
@@ -37,22 +36,11 @@ const documentedCommands: [string, string][] = [
   ["formiga dashboard stop", "dashboard stop"],
   ["formiga dashboard status", "dashboard status"],
 
-  // Section 2.3: MCP
-  ["formiga mcp start", "mcp start"],
-  ["formiga mcp stop", "mcp stop"],
-  ["formiga mcp status", "mcp status"],
-
   // Section 2.4: get-ready
   ["formiga get-ready", "get-ready command"],
 
   // Section 2.6: system status
   ["formiga status", "status command"],
-
-  // Section 2.7: worktree
-  ["formiga worktree list", "worktree list"],
-  ["formiga worktree status", "worktree status"],
-  ["formiga worktree remove", "worktree remove"],
-  ["formiga worktree prune", "worktree prune"],
 
   // Section 2.8: control-plane
   ["formiga control-plane start", "control-plane start"],
@@ -61,21 +49,6 @@ const documentedCommands: [string, string][] = [
 
   // Section 2.9: uninstall
   ["formiga uninstall", "uninstall command"],
-
-  // Section 2.10: autoresearch core
-  ["formiga autoresearch init", "autoresearch init"],
-  ["formiga autoresearch run-experiment", "autoresearch run-experiment"],
-  ["formiga autoresearch log-experiment", "autoresearch log-experiment"],
-
-  // Section 2.11: autoresearch loop
-  ["formiga autoresearch loop", "autoresearch loop"],
-  ["formiga autoresearch run-loop-iteration", "autoresearch run-loop-iteration"],
-
-  // Section 2.12: autoresearch monitoring and setup
-  ["formiga autoresearch status", "autoresearch status"],
-  ["formiga autoresearch next", "autoresearch next"],
-  ["formiga autoresearch prune", "autoresearch prune"],
-  ["formiga autoresearch wizard", "autoresearch wizard"],
 
   // Section 2: update
   ["formiga update", "update command"],
@@ -108,26 +81,10 @@ const actualCommands: string[] = [
   "formiga dashboard stop",
   "formiga dashboard status",
 
-  // mcp
-  "formiga mcp start",
-  "formiga mcp stop",
-  "formiga mcp status",
-
   // control-plane
   "formiga control-plane start",
   "formiga control-plane stop",
   "formiga control-plane status",
-
-  // autoresearch
-  "formiga autoresearch init",
-  "formiga autoresearch run-experiment",
-  "formiga autoresearch log-experiment",
-  "formiga autoresearch loop",
-  "formiga autoresearch run-loop-iteration",
-  "formiga autoresearch status",
-  "formiga autoresearch next",
-  "formiga autoresearch prune",
-  "formiga autoresearch wizard",
 
   // step
   "formiga step peek",
@@ -144,17 +101,10 @@ const actualCommands: string[] = [
   "formiga workflow run",
   "formiga workflow status",
   "formiga workflow stop",
-  "formiga workflow autoresearch",
   "formiga workflow pause",
   "formiga workflow resume",
   "formiga workflow pause-all",
   "formiga workflow resume-all",
-
-  // worktree
-  "formiga worktree list",
-  "formiga worktree status",
-  "formiga worktree remove",
-  "formiga worktree prune",
 ];
 
 // Commands intentionally not documented in SKILL.md (easter eggs, etc.)
@@ -254,35 +204,11 @@ describe("SKILL.md step command accuracy", () => {
   });
 });
 
-describe("SKILL.md dashboard and MCP command accuracy", () => {
+describe("SKILL.md dashboard command accuracy", () => {
   it("dashboard start, stop, status are all documented", () => {
     assert.ok(skillContent.includes("dashboard start"), "dashboard start must be documented");
     assert.ok(skillContent.includes("dashboard stop"), "dashboard stop must be documented");
     assert.ok(skillContent.includes("dashboard status"), "dashboard status must be documented");
-  });
-
-  it("dashboard status mentions MCP status too", () => {
-    assert.ok(
-      skillContent.match(/dashboard status.*MCP|MCP.*dashboard status/i),
-      "SKILL.md must note dashboard status reports MCP status"
-    );
-  });
-
-  it("mcp start, stop, status are all documented", () => {
-    assert.ok(skillContent.includes("mcp start"), "mcp start must be documented");
-    assert.ok(skillContent.includes("mcp stop"), "mcp stop must be documented");
-    assert.ok(skillContent.includes("mcp status"), "mcp status must be documented");
-  });
-
-  it("dashboard and mcp have separate sections with distinct port info", () => {
-    assert.ok(
-      skillContent.includes("3334"),
-      "SKILL.md must mention dashboard default port 3334"
-    );
-    assert.ok(
-      skillContent.includes("3338"),
-      "SKILL.md must mention MCP default port 3338"
-    );
   });
 });
 
@@ -343,36 +269,6 @@ describe("SKILL.md workflow run command completeness", () => {
     assert.ok(
       skillContent.includes("--no-relaunch-upon-rugpull"),
       "SKILL.md must document --no-relaunch-upon-rugpull flag"
-    );
-  });
-});
-
-describe("SKILL.md worktree commands documented", () => {
-  it("documents worktree list", () => {
-    assert.ok(
-      skillContent.includes("worktree list"),
-      "SKILL.md must document worktree list"
-    );
-  });
-
-  it("documents worktree status", () => {
-    assert.ok(
-      skillContent.includes("worktree status"),
-      "SKILL.md must document worktree status"
-    );
-  });
-
-  it("documents worktree remove", () => {
-    assert.ok(
-      skillContent.includes("worktree remove"),
-      "SKILL.md must document worktree remove"
-    );
-  });
-
-  it("documents worktree prune", () => {
-    assert.ok(
-      skillContent.includes("worktree prune"),
-      "SKILL.md must document worktree prune"
     );
   });
 });
@@ -513,157 +409,3 @@ describe("SKILL.md output format accuracy", () => {
   });
 });
 
-describe("SKILL.md autoresearch commands documented", () => {
-  it("documents autoresearch init with required options", () => {
-    assert.ok(skillContent.includes("autoresearch init"), "SKILL.md must document autoresearch init");
-    assert.ok(skillContent.includes("--goal"), "SKILL.md must document --goal option");
-    assert.ok(skillContent.includes("--metric"), "SKILL.md must document --metric option");
-    assert.ok(skillContent.includes("--direction"), "SKILL.md must document --direction option");
-    assert.ok(skillContent.includes("--command"), "SKILL.md must document --command option");
-  });
-
-  it("documents autoresearch run-experiment", () => {
-    assert.ok(skillContent.includes("autoresearch run-experiment"), "SKILL.md must document autoresearch run-experiment");
-    assert.ok(skillContent.includes("--timeout-seconds"), "SKILL.md must document --timeout-seconds option");
-  });
-
-  it("documents autoresearch log-experiment", () => {
-    assert.ok(skillContent.includes("autoresearch log-experiment"), "SKILL.md must document autoresearch log-experiment");
-    assert.ok(skillContent.includes("--status"), "SKILL.md must document --status option");
-    assert.ok(skillContent.includes("--description"), "SKILL.md must document --description option");
-    assert.ok(skillContent.includes("--learned"), "SKILL.md must document --learned option");
-    assert.ok(skillContent.includes("--next-focus"), "SKILL.md must document --next-focus option");
-  });
-
-  it("includes at least one usage example for each subcommand", () => {
-    // Each subcommand should have a usage example showing the command in context
-    const initExample = skillContent.includes("autoresearch init \\");
-    const runExample = skillContent.includes("autoresearch run-experiment");
-    const logExample = skillContent.includes("autoresearch log-experiment \\");
-    assert.ok(initExample, "SKILL.md must have a usage example for autoresearch init");
-    assert.ok(runExample, "SKILL.md must reference autoresearch run-experiment");
-    assert.ok(logExample, "SKILL.md must have a usage example for autoresearch log-experiment");
-  });
-
-  it("autoresearch section uses section 2.10 numbering", () => {
-    assert.ok(
-      skillContent.includes("### 2.10) AutoResearch experiment commands"),
-      "SKILL.md must use section 2.10 for autoresearch commands"
-    );
-  });
-});
-
-describe("SKILL.md autoresearch loop commands documented", () => {
-  it("documents autoresearch loop with action modes", () => {
-    assert.ok(skillContent.includes("autoresearch loop"), "SKILL.md must document autoresearch loop");
-    assert.ok(skillContent.includes("--measure-only"), "SKILL.md must document --measure-only action mode");
-    assert.ok(skillContent.includes("--prompt"), "SKILL.md must document --prompt action mode");
-  });
-
-  it("documents loop stop conditions", () => {
-    assert.ok(skillContent.includes("--target-metric"), "SKILL.md must document --target-metric option");
-    assert.ok(skillContent.includes("--max-iterations"), "SKILL.md must document --max-iterations option");
-    assert.ok(skillContent.includes("--max-consecutive-failures"), "SKILL.md must document --max-consecutive-failures option");
-    assert.ok(skillContent.includes("Ctrl-C") || skillContent.includes("SIGINT"), "SKILL.md must document Ctrl-C/SIGINT stop condition");
-  });
-
-  it("documents loop progress display", () => {
-    assert.ok(skillContent.match(/\[measure-only\]/), "SKILL.md must show measure-only label in progress display");
-    assert.ok(skillContent.match(/\[prompt\]/), "SKILL.md must show prompt label in progress display");
-  });
-
-  it("documents autoresearch run-loop-iteration", () => {
-    assert.ok(skillContent.includes("autoresearch run-loop-iteration"), "SKILL.md must document autoresearch run-loop-iteration");
-    assert.ok(skillContent.includes("--iteration"), "SKILL.md must document --iteration option");
-    assert.ok(skillContent.includes("--description"), "SKILL.md must document --description option");
-  });
-
-  it("documents run-loop-iteration transactional lifecycle", () => {
-    assert.ok(
-      skillContent.match(/committed.*reverted|reverted.*committed/i),
-      "SKILL.md must describe commit on keep, revert on discard/crash"
-    );
-    assert.ok(skillContent.includes("keep") && skillContent.includes("baseline"),
-      "SKILL.md must mention keep/baseline results behavior");
-    assert.ok(skillContent.includes("discard") || skillContent.includes("reverted"),
-      "SKILL.md must mention discard revert behavior");
-  });
-
-  it("loop section uses section 2.11 numbering", () => {
-    assert.ok(
-      skillContent.includes("### 2.11) AutoResearch loop and iteration commands"),
-      "SKILL.md must use section 2.11 for autoresearch loop commands"
-    );
-  });
-});
-
-describe("SKILL.md autoresearch monitoring and setup commands documented", () => {
-  it("documents autoresearch status", () => {
-    assert.ok(skillContent.includes("autoresearch status"), "SKILL.md must document autoresearch status");
-    assert.ok(skillContent.includes("Baseline") || skillContent.includes("baseline"), "SKILL.md must document baseline in status output");
-    assert.ok(skillContent.includes("Best result") || skillContent.includes("best result"), "SKILL.md must document best result in status output");
-    assert.ok(skillContent.includes("Ratchet prompt") || skillContent.includes("ratchet prompt"), "SKILL.md must document ratchet prompt in status output");
-  });
-
-  it("documents autoresearch next", () => {
-    assert.ok(skillContent.includes("autoresearch next"), "SKILL.md must document autoresearch next");
-    assert.ok(skillContent.match(/evidence.driven|ratchet prompt/), "SKILL.md must describe next as evidence-driven or ratchet prompt");
-  });
-
-  it("documents autoresearch prune with duration format", () => {
-    assert.ok(skillContent.includes("autoresearch prune"), "SKILL.md must document autoresearch prune");
-    assert.ok(skillContent.includes("--older-than"), "SKILL.md must document --older-than option");
-    assert.ok(skillContent.includes("--missing"), "SKILL.md must document --missing option");
-    assert.ok(skillContent.includes("--dry-run"), "SKILL.md must document --dry-run option");
-    assert.ok(skillContent.includes("30d") || (skillContent.includes("d") && skillContent.includes("days")), "SKILL.md must document duration format with d for days");
-    assert.ok(skillContent.includes("h") && skillContent.includes("hours"), "SKILL.md must document duration format with h for hours");
-    assert.ok(skillContent.includes("m") && skillContent.includes("minutes"), "SKILL.md must document duration format with m for minutes");
-  });
-
-  it("documents autoresearch wizard interactive setup", () => {
-    assert.ok(skillContent.includes("autoresearch wizard"), "SKILL.md must document autoresearch wizard");
-    assert.ok(skillContent.match(/interactive/i), "SKILL.md must describe wizard as interactive");
-    assert.ok(skillContent.includes("Goal") || skillContent.includes("goal"), "SKILL.md must document wizard asks about goal");
-  });
-
-  it("monitoring section uses section 2.12 numbering", () => {
-    assert.ok(
-      skillContent.includes("### 2.12) AutoResearch monitoring and setup commands"),
-      "SKILL.md must use section 2.12 for autoresearch monitoring commands"
-    );
-  });
-
-  it("autoresearch prune explicitly states it does not touch project files", () => {
-    assert.ok(
-      skillContent.match(/does not touch|never touches|safe on disk|remain safe/i),
-      "SKILL.md must state prune does not remove project-local files"
-    );
-  });
-});
-
-describe("SKILL.md workflow autoresearch command documented", () => {
-  it("documents workflow autoresearch", () => {
-    assert.ok(
-      skillContent.includes("workflow autoresearch"),
-      "SKILL.md must document workflow autoresearch"
-    );
-  });
-
-  it("describes that it resolves harness working directory", () => {
-    assert.ok(
-      skillContent.match(/harness working directory/i),
-      "SKILL.md must explain workflow autoresearch resolves harness working directory"
-    );
-  });
-
-  it("describes reading autoresearch config and jsonl", () => {
-    assert.ok(
-      skillContent.includes("autoresearch.config.json"),
-      "SKILL.md must mention autoresearch.config.json"
-    );
-    assert.ok(
-      skillContent.includes("autoresearch.jsonl"),
-      "SKILL.md must mention autoresearch.jsonl"
-    );
-  });
-});

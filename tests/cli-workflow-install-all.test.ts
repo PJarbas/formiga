@@ -221,7 +221,7 @@ describe("formiga workflow install --all", () => {
     const tempHome = createTempHome();
     try {
       const { stdout, stderr, exitCode } = await runCli(
-        ["workflow", "install", "do-review-do-verify"],
+        ["workflow", "install", "ml-pipeline"],
         tempHome,
       );
 
@@ -236,8 +236,8 @@ describe("formiga workflow install --all", () => {
         `Expected "Installed workflow:" in output, got: ${stdout}`,
       );
       assert.ok(
-        stdout.includes("do-review-do-verify"),
-        `Expected "do-review-do-verify" in output, got: ${stdout}`,
+        stdout.includes("ml-pipeline"),
+        `Expected "ml-pipeline" in output, got: ${stdout}`,
       );
 
       // Should NOT have the --all message
@@ -249,11 +249,11 @@ describe("formiga workflow install --all", () => {
       // Verify agents.json has only the single workflow's agents (plus main)
       const agents = readAgentsList(tempHome);
       const workflowAgents = agents.filter(
-        (a) => typeof a.id === "string" && a.id.startsWith("do-review-do-verify_"),
+        (a) => typeof a.id === "string" && a.id.startsWith("ml-pipeline_"),
       );
       assert.ok(
         workflowAgents.length > 0,
-        `Expected do-review-do-verify_ agents, got: ${agents.map((a) => a.id).join(", ")}`,
+        `Expected ml-pipeline_ agents, got: ${agents.map((a) => a.id).join(", ")}`,
       );
 
       // Should NOT have agents from other workflows
@@ -261,7 +261,7 @@ describe("formiga workflow install --all", () => {
         (a) =>
           typeof a.id === "string" &&
           a.id.includes("_") &&
-          !a.id.startsWith("do-review-do-verify_"),
+          !a.id.startsWith("ml-pipeline_"),
       );
       assert.equal(
         otherAgents.length,
@@ -298,7 +298,7 @@ describe("formiga workflow install --all", () => {
       );
 
       // Check a few known workflows exist
-      const sampleWorkflows = ["do-now", "do-review-do-verify", "just-do-it"];
+      const sampleWorkflows = ["ml-autoresearch", "ml-pipeline"];
       for (const wf of sampleWorkflows) {
         const wfDir = path.join(workflowsRoot, wf);
         assert.ok(

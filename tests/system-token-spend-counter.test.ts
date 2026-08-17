@@ -64,15 +64,20 @@ describe("system token spend counter — e2e integration", () => {
     try {
       const result = runNodeScript(
         `
-          import { getSystemTokenSpend, incrementSystemTokenSpend } from "./dist/db.js";
+          import { getDb, getSystemTokenSpend, incrementSystemTokenSpend } from "./dist/db.js";
 
-          const initial = getSystemTokenSpend();
+          // getSystemTokenSpend()/incrementSystemTokenSpend() are async Prisma
+          // calls, and Prisma does not run migrate() — getDb() creates the
+          // canonical schema so the formiga_stats singleton row exists here.
+          getDb();
+
+          const initial = await getSystemTokenSpend();
           if (initial !== 0) throw new Error("Expected initial system_tokens_spent to be 0");
 
-          const v1 = incrementSystemTokenSpend(100);
-          const v2 = incrementSystemTokenSpend(250);
-          const v3 = incrementSystemTokenSpend(3);
-          const final = getSystemTokenSpend();
+          const v1 = await incrementSystemTokenSpend(100);
+          const v2 = await incrementSystemTokenSpend(250);
+          const v3 = await incrementSystemTokenSpend(3);
+          const final = await getSystemTokenSpend();
 
           console.log(JSON.stringify({ initial, v1, v2, v3, final }));
         `,
@@ -142,7 +147,7 @@ describe("system token spend counter — e2e integration", () => {
           await executePollingRound(job, agent);
 
           const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
 
           console.log(JSON.stringify({
             runTokensSpent: runRow.tokens_spent,
@@ -235,7 +240,7 @@ describe("system token spend counter — e2e integration", () => {
           await executePollingRound(job, agent);
 
           const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
 
           console.log(JSON.stringify({
             runTokensSpent: runRow.tokens_spent,
@@ -281,9 +286,9 @@ describe("system token spend counter — e2e integration", () => {
           ).run("run-e2e-3", now, now);
 
           // Add system tokens
-          incrementSystemTokenSpend(125);
+          await incrementSystemTokenSpend(125);
 
-          const server = createDashboardServer(0);
+          const server = await createDashboardServer(0);
           if (!server.listening) {
             await once(server, "listening");
           }
@@ -371,7 +376,7 @@ describe("system token spend counter — e2e integration", () => {
           await executePollingRound(job, agent);
 
           const runRow = db.prepare("SELECT tokens_spent FROM runs WHERE id = ?").get(runId);
-          const systemTokens = getSystemTokenSpend();
+          const systemTokens = await getSystemTokenSpend();
 
           console.log(JSON.stringify({
             runTokensSpent: runRow.tokens_spent,
@@ -449,7 +454,7 @@ describe("system token spend counter — e2e integration", () => {
           ).run("${crypto.randomUUID()}", now, now);
 
           // Start dashboard server on random port
-          const server = createDashboardServer(0);
+          const server = await createDashboardServer(0);
           if (!server.listening) {
             await once(server, "listening");
           }

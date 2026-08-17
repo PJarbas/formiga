@@ -12,13 +12,13 @@ import {
 describe("workflow-fetch", () => {
   describe("getWorkflowShortDescription", () => {
     it("extracts the first sentence from a real bundled workflow description", async () => {
-      const desc = await getWorkflowShortDescription("do-now");
+      const desc = await getWorkflowShortDescription("ml-pipeline");
       assert.ok(desc.length > 0);
       assert.ok(!desc.includes("\n"), "should be a single line");
     });
 
     it("extracts the first sentence ending with sentence-ending punctuation", async () => {
-      const desc = await getWorkflowShortDescription("do-review-do-verify");
+      const desc = await getWorkflowShortDescription("ml-pipeline");
       assert.ok(
         desc.endsWith(".") || desc.endsWith("!") || desc.endsWith("?"),
         `expected sentence-ending punctuation, got: ${desc}`,
@@ -27,7 +27,7 @@ describe("workflow-fetch", () => {
     });
 
     it("returns a trimmed one-liner without newlines", async () => {
-      for (const id of ["do-now", "just-do-it"]) {
+      for (const id of ["ml-autoresearch", "ml-pipeline"]) {
         const desc = await getWorkflowShortDescription(id);
         assert.ok(desc.length > 0);
         assert.ok(!desc.includes("\n"), `description for ${id} contains newline: ${desc}`);
@@ -79,9 +79,8 @@ describe("workflow-fetch", () => {
 
     it("contains the surviving bundled workflows", async () => {
       const workflows = await listBundledWorkflows();
-      assert.ok(workflows.includes("do-now"));
-      assert.ok(workflows.includes("do-review-do-verify"));
-      assert.ok(workflows.includes("just-do-it"));
+      assert.ok(workflows.includes("ml-autoresearch"));
+      assert.ok(workflows.includes("ml-pipeline"));
     });
   });
 
@@ -98,7 +97,7 @@ describe("workflow-fetch", () => {
       const orig = process.env.FORMIGA_STATE_DIR;
       try {
         process.env.FORMIGA_STATE_DIR = tmpDir;
-        const result = await fetchWorkflow("do-now");
+        const result = await fetchWorkflow("ml-pipeline");
         assert.ok(result.workflowDir.length > 0);
         assert.ok(result.bundledSourceDir.length > 0);
         assert.ok(existsSync(result.workflowDir), "target workflow dir should exist");
@@ -121,7 +120,7 @@ describe("workflow-fetch", () => {
     });
 
     it("returns first sentence ending with sentence-ending punctuation", async () => {
-      const desc = await getWorkflowShortDescription("do-now");
+      const desc = await getWorkflowShortDescription("ml-pipeline");
       assert.ok(desc.length > 0);
       const lastChar = desc[desc.length - 1];
       assert.ok(

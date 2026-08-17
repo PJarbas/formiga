@@ -238,6 +238,7 @@ export function migrate(db: DatabaseSync): void {
       total_crash INTEGER NOT NULL DEFAULT 0,
       total_checks_failed INTEGER NOT NULL DEFAULT 0,
       consecutive_no_improve INTEGER NOT NULL DEFAULT 0,
+      state_json TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
@@ -245,6 +246,14 @@ export function migrate(db: DatabaseSync): void {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_arena_sessions_run_id ON arena_sessions(run_id)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_arena_sessions_status ON arena_sessions(status)");
+
+  // arena_sessions.state_json — arena resume checkpoint (AL-4). Idempotent
+  // ALTER for existing physical DBs that predate the column.
+  const arenaSessionCols = db.prepare("PRAGMA table_info(arena_sessions)").all() as Array<{ name: string }>;
+  const arenaSessionColNames = new Set(arenaSessionCols.map((c) => c.name));
+  if (!arenaSessionColNames.has("state_json")) {
+    db.exec("ALTER TABLE arena_sessions ADD COLUMN state_json TEXT");
+  }
 
   // ── Leaderboard experiments table ──
   initLeaderboardSchema(db);

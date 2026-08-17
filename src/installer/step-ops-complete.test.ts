@@ -267,7 +267,7 @@ describe("completeStep basic paths", () => {
     assert.equal(step.status, "running");
   });
 
-  it("blocks completion for draining_pause runs (M-2)", async () => {
+  it("completes in-flight step during draining_pause and finalizes to paused", async () => {
     db.prepare(
       "INSERT INTO runs (id, workflow_id, task, status, scheduling_status) VALUES (?, ?, ?, ?, ?)"
     ).run("run-drain", "wf", "test", "running", "draining_pause");
@@ -276,11 +276,19 @@ describe("completeStep basic paths", () => {
       "INSERT INTO steps (id, run_id, step_id, agent_id, step_index, status) VALUES (?, ?, ?, ?, ?, ?)"
     ).run("step-drain-id", "run-drain", "plan", "dev", 0, "running");
 
+    // Completing the in-flight step during drain must be allowed — that is the
+    // drain working. advancePipeline still refuses to start new work, and
+    // finalizeDrainingPause transitions the run to paused once nothing is
+    // in-flight (M-2 kept the advance/complete guards for paused runs).
     const result = await completeStep("step-drain-id", "output");
-    assert.equal(result.status, "blocked");
+    assert.equal(result.status, "advanced");
 
     const step = db.prepare("SELECT status FROM steps WHERE id = ?").get("step-drain-id") as { status: string };
-    assert.equal(step.status, "running");
+    assert.equal(step.status, "done");
+
+    const run = db.prepare("SELECT status, scheduling_status FROM runs WHERE id = ?").get("run-drain") as { status: string; scheduling_status: string };
+    assert.equal(run.status, "paused");
+    assert.equal(run.scheduling_status, "paused");
   });
 
   it("advancePipeline does not advance paused runs (M-2)", async () => {
