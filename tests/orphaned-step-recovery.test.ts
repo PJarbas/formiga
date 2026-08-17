@@ -110,8 +110,8 @@ describe("recoverOrphanedStepsForAgent", () => {
   });
 
   // ── AC 1: SIGKILL recovery — reset to pending, bump retry_count ──
-  it("resets a running step to pending and bumps retry_count after SIGKILL", () => {
-    const result = recoverOrphanedStepsForAgent(TEST_AGENT_1, testRunId);
+  it("resets a running step to pending and bumps retry_count after SIGKILL", async () => {
+    const result = await recoverOrphanedStepsForAgent(TEST_AGENT_1, testRunId);
 
     assert.equal(result.recovered, 1, "should recover 1 step");
     assert.equal(result.failed, 0, "should not fail any steps");
@@ -131,8 +131,8 @@ describe("recoverOrphanedStepsForAgent", () => {
   });
 
   // ── AC 2: Exhausted retries → mark failed ────────────────────────
-  it("marks step as failed when retry_count exceeds max_retries", () => {
-    const result = recoverOrphanedStepsForAgent(TEST_AGENT_3, testRun2Id);
+  it("marks step as failed when retry_count exceeds max_retries", async () => {
+    const result = await recoverOrphanedStepsForAgent(TEST_AGENT_3, testRun2Id);
 
     assert.equal(result.failed, 1, "should fail 1 step");
     assert.equal(result.recovered, 0, "should not recover any steps");
@@ -154,7 +154,7 @@ describe("recoverOrphanedStepsForAgent", () => {
   });
 
   // ── AC 3: Stale-claim sweeper — only recovers old-enough steps ────
-  it("stale-threshold: recovers old running step, ignores fresh one", () => {
+  it("stale-threshold: recovers old running step, ignores fresh one", async () => {
     // Reset the previously-recovered step back to running so the sweeper
     // test has a real target
     const db = getDb();
@@ -165,7 +165,7 @@ describe("recoverOrphanedStepsForAgent", () => {
 
     // Stale threshold: 5 minutes (300,000 ms). The old step (10 min ago) should
     // be recovered, but the fresh step (updated just now) should not.
-    const result = recoverOrphanedStepsForAgent(TEST_AGENT_1, testRunId, 5 * 60 * 1000);
+    const result = await recoverOrphanedStepsForAgent(TEST_AGENT_1, testRunId, 5 * 60 * 1000);
 
     assert.equal(result.recovered, 1, "should recover the stale step");
 
@@ -177,22 +177,22 @@ describe("recoverOrphanedStepsForAgent", () => {
     assert.equal(step.retry_count, 2, "retry_count should be bumped again");
 
     // Verify the fresh step was NOT touched
-    const freshResult = recoverOrphanedStepsForAgent(TEST_AGENT_2, testRunId, 5 * 60 * 1000);
+    const freshResult = await recoverOrphanedStepsForAgent(TEST_AGENT_2, testRunId, 5 * 60 * 1000);
     assert.equal(freshResult.recovered, 0, "fresh step should NOT be recovered");
     assert.equal(freshResult.failed, 0);
     assert.equal(freshResult.skipped, 0);
   });
 
   // ── AC 4: No-op for agents with no running steps ─────────────────
-  it("returns zero counts for agent with no running steps", () => {
-    const result = recoverOrphanedStepsForAgent("nonexistent-agent-xyz", crypto.randomUUID());
+  it("returns zero counts for agent with no running steps", async () => {
+    const result = await recoverOrphanedStepsForAgent("nonexistent-agent-xyz", crypto.randomUUID());
     assert.equal(result.recovered, 0);
     assert.equal(result.failed, 0);
     assert.equal(result.skipped, 0);
   });
 
   // ── AC 5: Calling without staleThreshold recovers ALL running steps
-  it("recovers all running steps when staleThreshold is omitted (post-exit path)", () => {
+  it("recovers all running steps when staleThreshold is omitted (post-exit path)", async () => {
     const db = getDb();
 
     // NOTE: freshStepId (from before()) is also running for this agent.
@@ -216,7 +216,7 @@ describe("recoverOrphanedStepsForAgent", () => {
     try {
       // Without staleThreshold, ALL running steps for this (agent, run) tuple
       // are recovered regardless of how recently they were updated.
-      const result = recoverOrphanedStepsForAgent(TEST_AGENT_2, testRunId);
+      const result = await recoverOrphanedStepsForAgent(TEST_AGENT_2, testRunId);
       assert.equal(result.recovered, 2, "should recover both running steps");
       assert.equal(result.failed, 0);
     } finally {
@@ -228,7 +228,7 @@ describe("recoverOrphanedStepsForAgent", () => {
   // When recoverOrphanedStepsForAgent is called with a timeoutRetryReason,
   // the run's context must carry `timeout_retry` so the retry prompt includes
   // a signal that the agent's previous attempt was interrupted.
-  it("records timeout_retry in run context when timeoutRetryReason is provided", () => {
+  it("records timeout_retry in run context when timeoutRetryReason is provided", async () => {
     const db = getDb();
     const agent = "test_timeout-context-recorder";
 
@@ -253,7 +253,7 @@ describe("recoverOrphanedStepsForAgent", () => {
     try {
       // Execute recovery with a timeout reason
       const timeoutReason = "pi timed out after 1800000ms";
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, timeoutReason);
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, timeoutReason);
 
       assert.equal(result.recovered, 1, "should recover 1 step");
       assert.equal(result.failed, 0);
@@ -272,7 +272,7 @@ describe("recoverOrphanedStepsForAgent", () => {
       assert.equal(step.retry_count, 1);
 
       // ── Sub-test: claimStep sees timeout_retry in the resolved input ──
-      const claim = claimStep(agent, runId);
+      const claim = await claimStep(agent, runId);
       assert.ok(claim.found, "step should be claimable after recovery");
       assert.ok(claim.resolvedInput?.includes(timeoutReason),
         `resolved input should include timeout reason, got: ${claim.resolvedInput?.slice(0, 300)}`);
@@ -292,7 +292,7 @@ describe("recoverOrphanedStepsForAgent", () => {
   });
 
   // ── AC 7: No stale timeout_retry leakage between different retries ──
-  it("does NOT set timeout_retry when timeoutRetryReason is omitted (non-timeout exit)", () => {
+  it("does NOT set timeout_retry when timeoutRetryReason is omitted (non-timeout exit)", async () => {
     const db = getDb();
     const agent = "test_no-context-pollution";
     const runId = crypto.randomUUID();
@@ -312,7 +312,7 @@ describe("recoverOrphanedStepsForAgent", () => {
 
     try {
       // Recovery WITHOUT a timeout reason (simulates non-timeout exit, e.g. SIGTERM)
-      const result = recoverOrphanedStepsForAgent(agent, runId);
+      const result = await recoverOrphanedStepsForAgent(agent, runId);
       assert.equal(result.recovered, 1, "should recover the step");
 
       // Context should NOT contain timeout_retry
@@ -337,7 +337,7 @@ import { classifyPollingRoundOutcome } from "../dist/installer/agent-scheduler.j
 
 describe("other_output recovery (clean pi exit without STATUS)", () => {
   // ── AC 1: other_output triggers recovery of running step ───────
-  it("resets running step to pending when other_output occurs (recoverOrphanedStepsForAgent)", () => {
+  it("resets running step to pending when other_output occurs (recoverOrphanedStepsForAgent)", async () => {
     const db = getDb();
     const agent = "test_other-output-recovery";
     const runId = crypto.randomUUID();
@@ -357,7 +357,7 @@ describe("other_output recovery (clean pi exit without STATUS)", () => {
     try {
       // Simulate the other_output handler: call recoverOrphanedStepsForAgent
       // without staleThreshold or timeoutRetryReason (clean exit, not a timeout)
-      const result = recoverOrphanedStepsForAgent(agent, runId);
+      const result = await recoverOrphanedStepsForAgent(agent, runId);
 
       assert.equal(result.recovered, 1, "should recover 1 running step");
       assert.equal(result.failed, 0, "should not fail any steps");
@@ -432,8 +432,8 @@ describe("other_output recovery (clean pi exit without STATUS)", () => {
   });
 
   // ── AC 4: other_output with no running step is a no-op ─────────
-  it("recoverOrphanedStepsForAgent is a no-op when no running steps exist", () => {
-    const result = recoverOrphanedStepsForAgent("agent_with_no_claims_xyz", crypto.randomUUID());
+  it("recoverOrphanedStepsForAgent is a no-op when no running steps exist", async () => {
+    const result = await recoverOrphanedStepsForAgent("agent_with_no_claims_xyz", crypto.randomUUID());
 
     assert.equal(result.recovered, 0, "should recover 0 steps");
     assert.equal(result.failed, 0, "should fail 0 steps");
@@ -456,7 +456,7 @@ describe("autoCompleteStepIfRunning recovers wedged step on completeStep throw",
 
 describe("US-003: Ownership-aware orphan recovery", () => {
   // AC 1: workerJobId skips steps claimed by a different worker
-  it("skips steps claimed by a different worker (claim_job_id mismatch)", () => {
+  it("skips steps claimed by a different worker (claim_job_id mismatch)", async () => {
     const db = getDb();
     const agent = "test_ownership-skip-other-worker";
     const runId = crypto.randomUUID();
@@ -476,7 +476,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
 
     try {
       // Worker-A (job-A) tries to recover — should SKIP because step is claimed by job-B
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
 
       assert.equal(result.recovered, 0, "should recover 0 steps (different worker)");
       assert.equal(result.failed, 0, "should not fail any steps");
@@ -493,7 +493,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
   });
 
   // AC 2: workerJobId recovers steps claimed by the SAME worker
-  it("recovers steps claimed by the same worker (claim_job_id match)", () => {
+  it("recovers steps claimed by the same worker (claim_job_id match)", async () => {
     const db = getDb();
     const agent = "test_ownership-recover-same-worker";
     const runId = crypto.randomUUID();
@@ -513,7 +513,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
 
     try {
       // Worker-A (job-A) exits — should RECOVER because step is claimed by same worker
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
 
       assert.equal(result.recovered, 1, "should recover the step (same worker)");
       assert.equal(result.failed, 0, "should not fail any steps");
@@ -538,7 +538,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
   });
 
   // AC 2b: workerJobId recovers steps with NULL claim_job_id (legacy)
-  it("recovers steps with NULL claim_job_id regardless of workerJobId", () => {
+  it("recovers steps with NULL claim_job_id regardless of workerJobId", async () => {
     const db = getDb();
     const agent = "test_ownership-recover-null-legacy";
     const runId = crypto.randomUUID();
@@ -558,7 +558,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
 
     try {
       // Any worker should be able to recover legacy (NULL) steps
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-X");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-X");
 
       assert.equal(result.recovered, 1, "should recover step with NULL claim_job_id");
       assert.equal(result.failed, 0);
@@ -580,7 +580,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
   });
 
   // AC 3: No workerJobId = backward compat — recover all running steps
-  it("recovers all running steps when no workerJobId (backward compat)", () => {
+  it("recovers all running steps when no workerJobId (backward compat)", async () => {
     const db = getDb();
     const agent = "test_ownership-backward-compat";
     const runId = crypto.randomUUID();
@@ -608,7 +608,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
 
     try {
       // No workerJobId = backward compat — recover ALL running steps regardless of owner
-      const result = recoverOrphanedStepsForAgent(agent, runId);
+      const result = await recoverOrphanedStepsForAgent(agent, runId);
 
       assert.equal(result.recovered, 2, "should recover both steps (backward compat)");
       assert.equal(result.failed, 0);
@@ -626,7 +626,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
   });
 
   // AC 4: step.worker_lost event distinct from step.timeout
-  it("emits step.worker_lost (not step.timeout) when recovery is worker-exit", () => {
+  it("emits step.worker_lost (not step.timeout) when recovery is worker-exit", async () => {
     const db = getDb();
     const agent = "test_ownership-worker-lost-event";
     const runId = crypto.randomUUID();
@@ -645,7 +645,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
 
     try {
       // Worker exit with workerJobId
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-wl");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-wl");
       assert.equal(result.recovered, 1);
 
       const events = getRunEvents(runId);
@@ -668,7 +668,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
   });
 
   // AC 4b: stale sweeper (no workerJobId) emits step.timeout, not step.worker_lost
-  it("stale sweeper (no workerJobId) emits step.timeout, not step.worker_lost", () => {
+  it("stale sweeper (no workerJobId) emits step.timeout, not step.worker_lost", async () => {
     const db = getDb();
     const agent = "test_ownership-stale-sweeper-event";
     const runId = crypto.randomUUID();
@@ -690,7 +690,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
 
     try {
       // Stale sweeper — no workerJobId
-      const result = recoverOrphanedStepsForAgent(agent, runId, 5 * 60 * 1000);
+      const result = await recoverOrphanedStepsForAgent(agent, runId, 5 * 60 * 1000);
       assert.equal(result.recovered, 1);
 
       const events = getRunEvents(runId);
@@ -706,7 +706,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
   });
 
   // AC 5: ownership-aware with both same-worker and different-worker steps
-  it("handles mixed ownership: recovers own, skips others", () => {
+  it("handles mixed ownership: recovers own, skips others", async () => {
     const db = getDb();
     const agent = "test_ownership-mixed";
     const runId = crypto.randomUUID();
@@ -742,7 +742,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
 
     try {
       // Worker-A (job-A) exits
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
 
       assert.equal(result.recovered, 2, "should recover my-step and legacy-step");
       assert.equal(result.failed, 0);
@@ -760,7 +760,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
       assert.equal(legacyStep.status, "pending");
 
       // Now verify that job-B can still recover the other-step
-      const resultB = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-B");
+      const resultB = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-B");
       assert.equal(resultB.recovered, 1, "job-B should recover its own step");
       const otherStepAfterB = db.prepare("SELECT status FROM steps WHERE id = ?").get(otherStepId) as { status: string };
       assert.equal(otherStepAfterB.status, "pending");
@@ -771,7 +771,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
   });
 
   // AC: skipped count for loop verify_each mid-iteration pause
-  it("skips loop step waiting on verify_each even with workerJobId", () => {
+  it("skips loop step waiting on verify_each even with workerJobId", async () => {
     const db = getDb();
     const agent = "test_ownership-loop-verify-skip";
     const runId = crypto.randomUUID();
@@ -800,7 +800,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
     ).run(verifyStepUuid, runId, now, now);
 
     try {
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-loop");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-loop");
 
       assert.equal(result.recovered, 0, "should recover 0 (waiting on verify)");
       assert.equal(result.failed, 0);
@@ -821,7 +821,7 @@ describe("US-003: Ownership-aware orphan recovery", () => {
 
 describe("US-004: Worker-lifecycle recovery regression tests", () => {
   // ── Test 1: Claim single step with worker A, simulate worker exit, verify recovery ──
-  it("claim single step → worker exit → step recovered with step.worker_lost event", () => {
+  it("claim single step → worker exit → step recovered with step.worker_lost event", async () => {
     const db = getDb();
     const agent = "test_us004-single-step-recovery";
     const runId = crypto.randomUUID();
@@ -841,7 +841,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
 
     try {
       // Claim with worker ownership
-      const claim = claimStep(agent, runId, { jobId: "job-A", pid: 12345 });
+      const claim = await claimStep(agent, runId, { jobId: "job-A", pid: 12345 });
       assert.ok(claim.found, "step should be claimed");
 
       // Verify ownership columns were set
@@ -854,7 +854,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
       assert.ok(stepAfterClaim.claim_updated_at, "claim_updated_at should be set");
 
       // Simulate worker A exit: recover with same workerJobId
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
       assert.equal(result.recovered, 1, "should recover 1 step");
       assert.equal(result.failed, 0, "should not fail");
       assert.equal(result.skipped, 0, "should not skip");
@@ -881,7 +881,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
   });
 
   // ── Test 2: Claim loop story with worker A, simulate worker exit, verify story recovery ──
-  it("claim loop story → worker exit → story recovered with step.worker_lost event", () => {
+  it("claim loop story → worker exit → story recovered with step.worker_lost event", async () => {
     const db = getDb();
     const agent = "test_us004-loop-story-recovery";
     const runId = crypto.randomUUID();
@@ -909,7 +909,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
 
     try {
       // Claim loop step with worker ownership
-      const claim = claimStep(agent, runId, { jobId: "job-A", pid: 12345 });
+      const claim = await claimStep(agent, runId, { jobId: "job-A", pid: 12345 });
       assert.ok(claim.found, "loop step should be claimed");
 
       // Verify ownership and current_story_id
@@ -927,7 +927,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
       assert.equal(storyAfterClaim.status, "running");
 
       // Simulate worker A exit: recover with same workerJobId
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
       assert.equal(result.recovered, 1, "should recover 1 (story)");
       assert.equal(result.failed, 0, "should not fail");
       assert.equal(result.skipped, 0, "should not skip");
@@ -960,7 +960,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
   });
 
   // ── Test 3: Worker A claims step, then worker B reclaims, worker A exit skips ──
-  it("worker A claims → worker B reclaims → worker A exit does NOT recover", () => {
+  it("worker A claims → worker B reclaims → worker A exit does NOT recover", async () => {
     const db = getDb();
     const agent = "test_us004-worker-reclaim";
     const runId = crypto.randomUUID();
@@ -980,7 +980,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
 
     try {
       // Worker A claims the step
-      const claimA = claimStep(agent, runId, { jobId: "job-A", pid: 11111 });
+      const claimA = await claimStep(agent, runId, { jobId: "job-A", pid: 11111 });
       assert.ok(claimA.found, "worker A should claim step");
 
       // Verify A's ownership
@@ -996,7 +996,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
         "UPDATE steps SET status = 'pending', claim_job_id = NULL, claim_pid = NULL, claim_updated_at = NULL WHERE id = ?"
       ).run(stepUuid);
 
-      const claimB = claimStep(agent, runId, { jobId: "job-B", pid: 22222 });
+      const claimB = await claimStep(agent, runId, { jobId: "job-B", pid: 22222 });
       assert.ok(claimB.found, "worker B should claim step after recovery");
 
       // Verify B's ownership
@@ -1008,7 +1008,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
 
       // Now worker A's exit handler runs (stale recovery) — should skip because
       // step now belongs to B (claim_job_id != 'job-A')
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
       assert.equal(result.recovered, 0, "worker A should recover 0 steps (step belongs to B)");
       assert.equal(result.failed, 0, "should fail 0");
       assert.equal(result.skipped, 0, "should skip 0");
@@ -1031,7 +1031,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
   });
 
   // ── Test 4: Normal completion — claim → complete → no recovery, step stays done ──
-  it("normal completion: claim → complete → step stays done, no recovery", () => {
+  it("normal completion: claim → complete → step stays done, no recovery", async () => {
     const db = getDb();
     const agent = "test_us004-normal-completion";
     const runId = crypto.randomUUID();
@@ -1051,12 +1051,12 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
 
     try {
       // Claim with worker ownership
-      const claim = claimStep(agent, runId, { jobId: "job-A", pid: 12345 });
+      const claim = await claimStep(agent, runId, { jobId: "job-A", pid: 12345 });
       assert.ok(claim.found, "step should be claimed");
       assert.ok(claim.stepId, "stepId should be returned");
 
       // Complete normally
-      const completeResult = completeStep(claim.stepId!, "STATUS: done\nCHANGES: implemented feature\nTESTS: all pass");
+      const completeResult = await completeStep(claim.stepId!, "STATUS: done\nCHANGES: implemented feature\nTESTS: all pass");
       assert.ok(completeResult.status === "completed" || completeResult.status === "advanced", `complete should succeed, got ${completeResult.status}`);
 
       // Verify step is done
@@ -1070,7 +1070,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
       const workerLostBefore = eventsBeforeRecovery.filter((e) => e.event === "step.worker_lost").length;
 
       // Try recovery — should not touch the done step
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, "job-A");
       assert.equal(result.recovered, 0, "should recover 0 steps (step already done)");
       assert.equal(result.failed, 0, "should fail 0");
       assert.equal(result.skipped, 0, "should skip 0");
@@ -1092,7 +1092,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
   });
 
   // ── Test 5: step.worker_lost event detail fields are correct ──
-  it("step.worker_lost event has correct detail fields", () => {
+  it("step.worker_lost event has correct detail fields", async () => {
     const db = getDb();
     const agent = "test_us004-event-fields";
     const runId = crypto.randomUUID();
@@ -1113,10 +1113,10 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
 
     try {
       // Claim with explicit workerJobId
-      claimStep(agent, runId, { jobId: workerJobId, pid: 99999 });
+      await claimStep(agent, runId, { jobId: workerJobId, pid: 99999 });
 
       // Recover
-      const result = recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, workerJobId);
+      const result = await recoverOrphanedStepsForAgent(agent, runId, undefined, undefined, undefined, workerJobId);
       assert.equal(result.recovered, 1);
 
       // Verify event structure
@@ -1240,7 +1240,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
       // claimStep populates context.retry_feedback from step.output when
       // retry_count > 0, then resolves it into the input template — verify
       // the contract end-to-end by claiming and inspecting resolvedInput.
-      const claim = claimStep(agent, runId);
+      const claim = await claimStep(agent, runId);
       assert.ok(claim.found, "step must be re-claimable after recovery");
       assert.ok(claim.resolvedInput, "resolved input must be present");
       assert.match(

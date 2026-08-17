@@ -68,35 +68,51 @@ function seedRunDb(dbPath: string, runs: Array<{
   db.exec(`
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
+      run_number INTEGER,
       workflow_id TEXT NOT NULL,
       task TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'running',
       context TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      run_number INTEGER,
       tokens_spent INTEGER NOT NULL DEFAULT 0,
       notify_url TEXT,
-      scheduling_status TEXT
+      scheduling_status TEXT,
+      scheduling_requested_at TEXT,
+      scheduling_error TEXT,
+      max_duration_minutes INTEGER,
+      last_progress_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS steps (
-      step_id TEXT NOT NULL,
+      id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
       agent_id TEXT NOT NULL,
       step_index INTEGER NOT NULL DEFAULT 0,
+      input_template TEXT NOT NULL DEFAULT '',
+      expects TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'waiting',
-      type TEXT NOT NULL DEFAULT 'single',
-      retry_count INTEGER NOT NULL DEFAULT 0,
       output TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 4,
+      type TEXT NOT NULL DEFAULT 'single',
+      loop_config TEXT,
+      current_story_id TEXT,
+      abandoned_count INTEGER NOT NULL DEFAULT 0,
+      parallel_group TEXT,
+      claim_job_id TEXT,
+      claim_pid INTEGER,
+      claim_pgid INTEGER,
+      claim_updated_at TEXT,
+      consecutive_heartbeats INTEGER NOT NULL DEFAULT 0,
+      spawn_count INTEGER NOT NULL DEFAULT 0,
+      last_outcome TEXT,
+      last_outcome_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      worker_job_id TEXT,
-      worker_pid INTEGER,
-      worker_pgid INTEGER,
-      PRIMARY KEY (step_id, run_id)
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 
@@ -128,35 +144,51 @@ function seedRunWithStepsDb(dbPath: string, runs: Array<{
   db.exec(`
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
+      run_number INTEGER,
       workflow_id TEXT NOT NULL,
       task TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'running',
       context TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      run_number INTEGER,
       tokens_spent INTEGER NOT NULL DEFAULT 0,
       notify_url TEXT,
-      scheduling_status TEXT
+      scheduling_status TEXT,
+      scheduling_requested_at TEXT,
+      scheduling_error TEXT,
+      max_duration_minutes INTEGER,
+      last_progress_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS steps (
       id TEXT PRIMARY KEY,
-      step_id TEXT NOT NULL,
       run_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
       agent_id TEXT NOT NULL,
       step_index INTEGER NOT NULL DEFAULT 0,
+      input_template TEXT NOT NULL DEFAULT '',
+      expects TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'waiting',
-      type TEXT NOT NULL DEFAULT 'single',
-      retry_count INTEGER NOT NULL DEFAULT 0,
       output TEXT,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      max_retries INTEGER NOT NULL DEFAULT 4,
+      type TEXT NOT NULL DEFAULT 'single',
+      loop_config TEXT,
+      current_story_id TEXT,
+      abandoned_count INTEGER NOT NULL DEFAULT 0,
+      parallel_group TEXT,
+      claim_job_id TEXT,
+      claim_pid INTEGER,
+      claim_pgid INTEGER,
+      claim_updated_at TEXT,
+      consecutive_heartbeats INTEGER NOT NULL DEFAULT 0,
+      spawn_count INTEGER NOT NULL DEFAULT 0,
+      last_outcome TEXT,
+      last_outcome_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      worker_job_id TEXT,
-      worker_pid INTEGER,
-      worker_pgid INTEGER
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 
@@ -229,9 +261,9 @@ describe("formiga workflow pause-all CLI", { concurrency: 1 }, () => {
 
     // Only terminal runs, no running runs
     seedRunDb(dbPath, [
-      { id: "aaaa1111-1111-1111-1111-111111111111", workflowId: "do-review-do-verify", task: "Completed run", status: "completed" },
-      { id: "bbbb2222-2222-2222-2222-222222222222", workflowId: "do-review-do-verify", task: "Failed run", status: "failed" },
-      { id: "cccc3333-3333-3333-3333-333333333333", workflowId: "do-review-do-verify", task: "Paused run", status: "paused" },
+      { id: "aaaa1111-1111-1111-1111-111111111111", workflowId: "ml-pipeline", task: "Completed run", status: "completed" },
+      { id: "bbbb2222-2222-2222-2222-222222222222", workflowId: "ml-pipeline", task: "Failed run", status: "failed" },
+      { id: "cccc3333-3333-3333-3333-333333333333", workflowId: "ml-pipeline", task: "Paused run", status: "paused" },
     ]);
 
     try {
@@ -273,10 +305,10 @@ describe("formiga workflow pause-all CLI", { concurrency: 1 }, () => {
     const completedRun = "cccc1111-cccc-cccc-cccc-cccccccccccc";
 
     seedRunDb(dbPath, [
-      { id: running1, workflowId: "do-review-do-verify", task: "Running 1", status: "running" },
-      { id: running2, workflowId: "do-review-do-verify", task: "Running 2", status: "running" },
-      { id: running3, workflowId: "do-review-do-verify", task: "Running 3", status: "running" },
-      { id: completedRun, workflowId: "do-review-do-verify", task: "Already done", status: "completed" },
+      { id: running1, workflowId: "ml-pipeline", task: "Running 1", status: "running" },
+      { id: running2, workflowId: "ml-pipeline", task: "Running 2", status: "running" },
+      { id: running3, workflowId: "ml-pipeline", task: "Running 3", status: "running" },
+      { id: completedRun, workflowId: "ml-pipeline", task: "Already done", status: "completed" },
     ]);
 
     let daemon: ChildProcess | undefined;
@@ -346,15 +378,15 @@ describe("formiga workflow pause-all CLI", { concurrency: 1 }, () => {
     const running2 = "drrr2222-2222-2222-2222-222222222222";
 
     seedRunDb(dbPath, [
-      { id: running1, workflowId: "do-review-do-verify", task: "Drainable 1", status: "running" },
-      { id: running2, workflowId: "do-review-do-verify", task: "Drainable 2", status: "running" },
+      { id: running1, workflowId: "ml-pipeline", task: "Drainable 1", status: "running" },
+      { id: running2, workflowId: "ml-pipeline", task: "Drainable 2", status: "running" },
     ]);
     {
       const db = new DatabaseSync(dbPath);
       const now = new Date().toISOString();
       const insertRunningStep = db.prepare(
         `INSERT INTO steps (step_id, run_id, agent_id, step_index, status, type, retry_count, created_at, updated_at)
-         VALUES ('impl', ?, 'do-review-do-verify_doer', 0, 'running', 'single', 0, ?, ?)`,
+         VALUES ('impl', ?, 'ml-pipeline_doer', 0, 'running', 'single', 0, ?, ?)`,
       );
       insertRunningStep.run(running1, now, now);
       insertRunningStep.run(running2, now, now);
@@ -421,8 +453,8 @@ describe("formiga workflow resume-all CLI", { concurrency: 1 }, () => {
     const dbPath = path.join(formigaDir, "formiga.db");
 
     seedRunDb(dbPath, [
-      { id: "xxxx1111-1111-1111-1111-111111111111", workflowId: "do-review-do-verify", task: "Running run", status: "running" },
-      { id: "xxxx2222-2222-2222-2222-222222222222", workflowId: "do-review-do-verify", task: "Completed run", status: "completed" },
+      { id: "xxxx1111-1111-1111-1111-111111111111", workflowId: "ml-pipeline", task: "Running run", status: "running" },
+      { id: "xxxx2222-2222-2222-2222-222222222222", workflowId: "ml-pipeline", task: "Completed run", status: "completed" },
     ]);
 
     try {
@@ -464,14 +496,14 @@ describe("formiga workflow resume-all CLI", { concurrency: 1 }, () => {
 
     // Need steps table too for resume (admitOrQueueRun checks steps)
     seedRunWithStepsDb(dbPath, [
-      { id: paused1, workflowId: "do-review-do-verify", task: "Paused 1", status: "paused" },
-      { id: paused2, workflowId: "do-review-do-verify", task: "Paused 2", status: "paused" },
-      { id: completedRun, workflowId: "do-review-do-verify", task: "Already done", status: "completed" },
+      { id: paused1, workflowId: "ml-pipeline", task: "Paused 1", status: "paused" },
+      { id: paused2, workflowId: "ml-pipeline", task: "Paused 2", status: "paused" },
+      { id: completedRun, workflowId: "ml-pipeline", task: "Already done", status: "completed" },
     ]);
 
     // Copy the workflow directory so the daemon can register the run on resume
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
-    const dstWorkflowDir = path.join(formigaDir, "workflows", "do-review-do-verify");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "ml-pipeline");
+    const dstWorkflowDir = path.join(formigaDir, "workflows", "ml-pipeline");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 
@@ -537,8 +569,8 @@ describe("formiga workflow resume-all CLI", { concurrency: 1 }, () => {
     const dbPath = path.join(formigaDir, "formiga.db");
 
     seedRunDb(dbPath, [
-      { id: "noda1111-1111-1111-1111-111111111111", workflowId: "do-review-do-verify", task: "Paused no daemon", status: "paused" },
-      { id: "noda2222-2222-2222-2222-222222222222", workflowId: "do-review-do-verify", task: "Another paused", status: "paused" },
+      { id: "noda1111-1111-1111-1111-111111111111", workflowId: "ml-pipeline", task: "Paused no daemon", status: "paused" },
+      { id: "noda2222-2222-2222-2222-222222222222", workflowId: "ml-pipeline", task: "Another paused", status: "paused" },
     ]);
 
     try {
@@ -586,10 +618,10 @@ describe("formiga workflow pause-all / resume-all terminal protection", { concur
     const canceled = "term4444-4444-4444-4444-444444444444";
 
     seedRunDb(dbPath, [
-      { id: running, workflowId: "do-review-do-verify", task: "Running", status: "running" },
-      { id: completed, workflowId: "do-review-do-verify", task: "Completed", status: "completed" },
-      { id: failed, workflowId: "do-review-do-verify", task: "Failed", status: "failed" },
-      { id: canceled, workflowId: "do-review-do-verify", task: "Canceled", status: "canceled" },
+      { id: running, workflowId: "ml-pipeline", task: "Running", status: "running" },
+      { id: completed, workflowId: "ml-pipeline", task: "Completed", status: "completed" },
+      { id: failed, workflowId: "ml-pipeline", task: "Failed", status: "failed" },
+      { id: canceled, workflowId: "ml-pipeline", task: "Canceled", status: "canceled" },
     ]);
 
     let daemon: ChildProcess | undefined;
@@ -661,15 +693,15 @@ describe("formiga workflow pause-all / resume-all terminal protection", { concur
 
     // Need steps table for resume
     seedRunWithStepsDb(dbPath, [
-      { id: paused, workflowId: "do-review-do-verify", task: "Paused", status: "paused" },
-      { id: completed, workflowId: "do-review-do-verify", task: "Completed", status: "completed" },
-      { id: failed, workflowId: "do-review-do-verify", task: "Failed", status: "failed" },
-      { id: canceled, workflowId: "do-review-do-verify", task: "Canceled", status: "canceled" },
+      { id: paused, workflowId: "ml-pipeline", task: "Paused", status: "paused" },
+      { id: completed, workflowId: "ml-pipeline", task: "Completed", status: "completed" },
+      { id: failed, workflowId: "ml-pipeline", task: "Failed", status: "failed" },
+      { id: canceled, workflowId: "ml-pipeline", task: "Canceled", status: "canceled" },
     ]);
 
     // Copy the workflow directory so the daemon can register the run on resume
-    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "do-review-do-verify");
-    const dstWorkflowDir = path.join(formigaDir, "workflows", "do-review-do-verify");
+    const srcWorkflowDir = path.resolve(__dirname, "..", "workflows", "ml-pipeline");
+    const dstWorkflowDir = path.join(formigaDir, "workflows", "ml-pipeline");
     fs.mkdirSync(path.dirname(dstWorkflowDir), { recursive: true });
     fs.cpSync(srcWorkflowDir, dstWorkflowDir, { recursive: true });
 

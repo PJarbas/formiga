@@ -265,12 +265,12 @@ describe("ml-pipeline workflow E2E", () => {
       });
     });
 
-    it("claims and completes the eda step (non-leaderboard agent → no experiment)", () => {
-      const claim = claimStep("ml-pipeline_data-analyst", RUN_ID);
+    it("claims and completes the eda step (non-leaderboard agent → no experiment)", async () => {
+      const claim = await claimStep("ml-pipeline_data-analyst", RUN_ID);
       assert.equal(claim.found, true);
       assert.equal(claim.stepId, "step-eda");
 
-      const result = completeStep("step-eda", EDA_OUTPUT);
+      const result = await completeStep("step-eda", EDA_OUTPUT);
       assert.equal(result.status, "advanced");
 
       // No leaderboard row from data-analyst (non-leaderboard agent).
@@ -280,12 +280,12 @@ describe("ml-pipeline workflow E2E", () => {
       assert.equal(cnt.c, 0);
     });
 
-    it("claims and completes the features step (feature-engineer is in leaderboard suffix → 1 experiment)", () => {
-      const claim = claimStep("ml-pipeline_feature-engineer", RUN_ID);
+    it("claims and completes the features step (feature-engineer is in leaderboard suffix → 1 experiment)", async () => {
+      const claim = await claimStep("ml-pipeline_feature-engineer", RUN_ID);
       assert.equal(claim.found, true);
       assert.equal(claim.stepId, "step-features");
 
-      const result = completeStep("step-features", FEATURES_OUTPUT);
+      const result = await completeStep("step-features", FEATURES_OUTPUT);
       assert.equal(result.status, "advanced");
 
       const rows = getDb()
@@ -307,42 +307,42 @@ describe("ml-pipeline workflow E2E", () => {
       assert.equal(rows[0].artifact_path, "artifacts/baseline.pkl");
     });
 
-    it("claims BOTH modeler steps concurrently via the parallel_group exception", () => {
+    it("claims BOTH modeler steps concurrently via the parallel_group exception", async () => {
       // After features completed, advancePipeline promoted both modeler steps
       // (step_index 2 and 3) from 'waiting' to 'pending' because of how
       // advancePipeline walks waiting steps — but importantly, even if only
       // step 2 was promoted, the parallel_group exception in claim.ts must
       // let step 3 be claimed while step 2 is still running.
       // Verify both are claimable right after step 1 completed.
-      const classicClaim = claimStep("ml-pipeline_modeler-classic", RUN_ID);
+      const classicClaim = await claimStep("ml-pipeline_modeler-classic", RUN_ID);
       assert.equal(classicClaim.found, true);
       assert.equal(classicClaim.stepId, "step-classic");
 
       // step-classic is now 'running'. Without parallel_group, this would
       // block step-advanced. With it, step-advanced is claimable.
-      const advancedClaim = claimStep("ml-pipeline_modeler-advanced", RUN_ID);
+      const advancedClaim = await claimStep("ml-pipeline_modeler-advanced", RUN_ID);
       assert.equal(advancedClaim.found, true);
       assert.equal(advancedClaim.stepId, "step-advanced");
     });
 
-    it("blocks the audit step while either modeler sibling is still running", () => {
+    it("blocks the audit step while either modeler sibling is still running", async () => {
       // Both modelers are 'running' now. The post-group step (audit) must
       // wait, because its parallel_group is NULL → the exception does not
       // apply, and the prev-step filter sees running siblings as upstream
       // blockers.
-      const auditClaim = claimStep("ml-pipeline_ml-critic", RUN_ID);
+      const auditClaim = await claimStep("ml-pipeline_ml-critic", RUN_ID);
       assert.equal(auditClaim.found, false);
     });
 
-    it("registers a leaderboard experiment for each modeler upon completion", () => {
-      const classicResult = completeStep("step-classic", CLASSIC_OUTPUT);
+    it("registers a leaderboard experiment for each modeler upon completion", async () => {
+      const classicResult = await completeStep("step-classic", CLASSIC_OUTPUT);
       assert.equal(classicResult.status, "advanced");
 
       // Audit still blocked — advanced sibling still running.
-      const intermediateAudit = claimStep("ml-pipeline_ml-critic", RUN_ID);
+      const intermediateAudit = await claimStep("ml-pipeline_ml-critic", RUN_ID);
       assert.equal(intermediateAudit.found, false);
 
-      const advancedResult = completeStep("step-advanced", ADVANCED_OUTPUT);
+      const advancedResult = await completeStep("step-advanced", ADVANCED_OUTPUT);
       assert.equal(advancedResult.status, "advanced");
 
       const rows = getDb()
@@ -364,14 +364,14 @@ describe("ml-pipeline workflow E2E", () => {
       assert.equal(rows[2].val_metric, 0.85);
     });
 
-    it("unblocks the audit step once every modeler sibling is done", () => {
-      const auditClaim = claimStep("ml-pipeline_ml-critic", RUN_ID);
+    it("unblocks the audit step once every modeler sibling is done", async () => {
+      const auditClaim = await claimStep("ml-pipeline_ml-critic", RUN_ID);
       assert.equal(auditClaim.found, true);
       assert.equal(auditClaim.stepId, "step-audit");
     });
 
-    it("completes the audit step (ml-critic is non-leaderboard → no new experiments) and marks the run complete", () => {
-      const result = completeStep("step-audit", AUDIT_OUTPUT);
+    it("completes the audit step (ml-critic is non-leaderboard → no new experiments) and marks the run complete", async () => {
+      const result = await completeStep("step-audit", AUDIT_OUTPUT);
       // advancePipeline reports runCompleted=true when no more steps remain.
       assert.equal(result.status, "completed");
 
