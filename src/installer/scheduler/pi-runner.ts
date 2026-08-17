@@ -101,6 +101,13 @@ async function streamStdoutWithExtractor(
     writeStream.on("error", reject);
     writeStream.end();
   });
+
+  // M-4: drain the activity-recording batch queue at stream end so nothing
+  // buffered during this run is lost when the stream closes.
+  const { flushAgentEventQueue } = await import("../../server/routes/agent-activity.js");
+  await flushAgentEventQueue().catch(() => {
+    // Activity recording is best-effort — a failed drain must not fail the run.
+  });
 }
 
 /** Default temp output file path. */

@@ -53,7 +53,21 @@ function parseQuery(url: string): Record<string, string> {
   return result;
 }
 
-// ── Event Recording ─────────────────────────────────────────────────────
+/**
+ * Parse a stored JSON string, returning `undefined` for null/empty/malformed
+ * input instead of throwing (M-8). Stored tool_args/artifact content is
+ * written by agents and must never 500 a read route.
+ */
+function safeJsonParse<T>(raw: string | null | undefined): T | undefined {
+  if (raw == null || raw === "") return undefined;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+// ── Event Recording (batched) ──────────────────────────────────────────
 
 export interface RecordEventInput {
   runId: string;
@@ -69,24 +83,74 @@ export interface RecordEventInput {
   stepEvent?: "claimed" | "completed" | "failed" | "retrying";
 }
 
-export async function recordAgentEvent(input: RecordEventInput): Promise<number> {
-  const prisma = getPrisma();
-  const event = await prisma.agentEvent.create({
-    data: {
-      run_id: input.runId,
-      step_id: input.stepId,
-      agent_id: input.agentId,
-      event_type: input.eventType,
-      tool_name: input.toolName,
-      tool_args: input.toolArgs ? JSON.stringify(input.toolArgs) : null,
-      tool_result: input.toolResult,
-      tool_status: input.toolStatus,
-      duration_ms: input.durationMs,
-      thinking: input.thinking,
-      step_event: input.stepEvent,
-    },
-  });
-  return event.id;
+/**
+ * Activity events are buffered in memory and flushed together via a single
+ * `createMany` every EVENT_BATCH_INTERVAL_MS (and on explicit drain via
+ * flushAgentEventQueue). Previously every tool-call line issued its own
+ * `create` — synchronous SQLite under the hood — which serialized writes on
+ * the event loop during heavy streaming (AL-5 mitigation, M-4).
+ */
+const EVENT_BATCH_INTERVAL_MS = 500;
+const EVENT_QUEUE: RecordEventInput[] = [];
+let eventBatchTimer: NodeJS.Timeout | null = null;
+let eventFlushPromise: Promise<void> | null = null;
+
+function enqueueAgentEvent(input: RecordEventInput): void {
+  EVENT_QUEUE.push(input);
+  if (eventBatchTimer) return;
+  eventBatchTimer = setTimeout(() => {
+    eventBatchTimer = null;
+    void flushAgentEventQueue();
+  }, EVENT_BATCH_INTERVAL_MS);
+  // Unref so a pending batch never keeps the process alive on its own.
+  eventBatchTimer.unref?.();
+}
+
+/**
+ * Flush any buffered agent events as a single createMany batch.
+ * Fire-and-forget recording: a flush failure is logged and the batch is
+ * dropped (re-queueing could loop on a persistent DB failure). Safe to call
+ * repeatedly — concurrent callers share one in-flight flush.
+ */
+export async function flushAgentEventQueue(): Promise<void> {
+  if (eventFlushPromise) return eventFlushPromise;
+
+  const batch = EVENT_QUEUE.splice(0);
+  if (batch.length === 0) return;
+
+  eventFlushPromise = (async () => {
+    const prisma = getPrisma();
+    try {
+      await prisma.agentEvent.createMany({
+        data: batch.map((input) => ({
+          run_id: input.runId,
+          step_id: input.stepId,
+          agent_id: input.agentId,
+          event_type: input.eventType,
+          tool_name: input.toolName,
+          tool_args: input.toolArgs ? JSON.stringify(input.toolArgs) : null,
+          tool_result: input.toolResult,
+          tool_status: input.toolStatus,
+          duration_ms: input.durationMs,
+          thinking: input.thinking,
+          step_event: input.stepEvent,
+        })),
+      });
+    } catch (err) {
+      logger.error("Failed to flush agent event batch", {
+        count: batch.length,
+        error: String(err),
+      });
+    } finally {
+      eventFlushPromise = null;
+    }
+  })();
+  return eventFlushPromise;
+}
+
+export function recordAgentEvent(input: RecordEventInput): Promise<void> {
+  enqueueAgentEvent(input);
+  return Promise.resolve();
 }
 
 // ── Artifact Recording ──────────────────────────────────────────────────
@@ -188,7 +252,7 @@ export async function handleGetEvents(
       agentId: e.agent_id,
       eventType: e.event_type as AgentEventRow["eventType"],
       toolName: e.tool_name ?? undefined,
-      toolArgs: e.tool_args ? JSON.parse(e.tool_args) : undefined,
+      toolArgs: safeJsonParse<Record<string, unknown>>(e.tool_args),
       toolResult: e.tool_result ?? undefined,
       toolStatus: e.tool_status as AgentEventRow["toolStatus"],
       durationMs: e.duration_ms ?? undefined,
@@ -241,7 +305,7 @@ export async function handleGetArtifacts(
       agentId: a.agent_id,
       artifactKey: a.artifact_key,
       artifactPath: a.artifact_path ?? undefined,
-      content: JSON.parse(a.content),
+      content: safeJsonParse<Record<string, unknown>>(a.content) ?? {},
       contentType: a.content_type ?? "json",
       sizeBytes: a.size_bytes ?? undefined,
       checksum: a.checksum ?? undefined,
@@ -290,7 +354,7 @@ export async function handleGetArtifactByKey(
       agentId: artifact.agent_id,
       artifactKey: artifact.artifact_key,
       artifactPath: artifact.artifact_path ?? undefined,
-      content: JSON.parse(artifact.content),
+      content: safeJsonParse<Record<string, unknown>>(artifact.content) ?? {},
       contentType: artifact.content_type ?? "json",
       sizeBytes: artifact.size_bytes ?? undefined,
       checksum: artifact.checksum ?? undefined,
@@ -374,12 +438,30 @@ export async function handleSaveArtifact(
  * GET /api/runs/:runId/steps/:stepId/events (SSE stream)
  * Server-Sent Events for real-time activity
  */
+const MAX_ACTIVE_SSE = 20;
+const SSE_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+let activeSseConnections = 0;
+
+/** Number of currently-open SSE event streams (for tests/diagnostics). */
+export function getActiveSseConnectionCount(): number {
+  return activeSseConnections;
+}
+
 export async function handleEventStream(
   _req: IncomingMessage,
   res: ServerResponse,
   runId: string,
   stepId: string,
 ): Promise<void> {
+  // B-7: cap concurrent streams so a client that opens many (or never closes)
+  // cannot exhaust descriptors/CPU. A 503 rejects the new connection instead
+  // of silently degrading the existing ones.
+  if (activeSseConnections >= MAX_ACTIVE_SSE) {
+    sendError(res, "Too many active event streams", 503);
+    return;
+  }
+  activeSseConnections += 1;
+
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -388,13 +470,28 @@ export async function handleEventStream(
 
   let lastEventId = 0;
   let isRunning = true;
+  let lastActivityAt = Date.now();
 
   const sendEvent = (data: unknown) => {
+    lastActivityAt = Date.now();
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
   const poll = async () => {
     if (!isRunning) return;
+
+    // B-7: close streams that have sent no events for 5 minutes so abandoned
+    // connections don't linger (and hold a slot) forever.
+    if (Date.now() - lastActivityAt > SSE_IDLE_TIMEOUT_MS) {
+      try {
+        res.write(`data: ${JSON.stringify({ type: "stream_end", reason: "idle_timeout" })}\n\n`);
+      } catch {
+        // already gone
+      }
+      res.end();
+      isRunning = false;
+      return;
+    }
 
     try {
       const prisma = getPrisma();
@@ -431,7 +528,7 @@ export async function handleEventStream(
             id: e.id,
             eventType: e.event_type,
             toolName: e.tool_name,
-            toolArgs: e.tool_args ? JSON.parse(e.tool_args) : undefined,
+            toolArgs: safeJsonParse<Record<string, unknown>>(e.tool_args),
             toolResult: e.tool_result,
             toolStatus: e.tool_status,
             durationMs: e.duration_ms,
@@ -455,8 +552,9 @@ export async function handleEventStream(
   // Start polling
   poll();
 
-  // Handle client disconnect
+  // Handle client disconnect (and our own res.end()) — release the slot.
   res.on("close", () => {
     isRunning = false;
+    activeSseConnections = Math.max(0, activeSseConnections - 1);
   });
 }
