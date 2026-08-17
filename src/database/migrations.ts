@@ -284,4 +284,29 @@ export function migrate(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_agent_events_agent_run ON agent_events(agent_id, run_id);
     CREATE INDEX IF NOT EXISTS idx_agent_events_step_created ON agent_events(step_id, created_at);
   `);
+
+  // ── Agent artifacts (polling rounds) ──
+  // Artifacts written by agents during polling rounds (e.g. the ML critic
+  // report). Same pattern as agent_events: DDL here (idempotent) so
+  // isolated/test DBs have the table; in production it's also created by
+  // Prisma migrations (model AgentArtifact).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_artifacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+      step_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      artifact_key TEXT NOT NULL,
+      artifact_path TEXT,
+      content TEXT NOT NULL,
+      content_type TEXT DEFAULT 'json',
+      size_bytes INTEGER,
+      checksum TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_artifacts_run_key ON agent_artifacts(run_id, artifact_key);
+    CREATE INDEX IF NOT EXISTS idx_agent_artifacts_key ON agent_artifacts(artifact_key);
+    CREATE INDEX IF NOT EXISTS idx_agent_artifacts_run ON agent_artifacts(run_id);
+  `);
 }

@@ -629,57 +629,61 @@ export async function executePollingRound(
   // If this run is no longer 'running' (terminal/paused) tear down the
   // job and skip. Without this check, timers leaked from previous CLI
   // processes would keep polling pi for completed runs.
-  try {
-    const prisma = getPrisma();
-    const row = await prisma.run.findUnique({
-      where: { id: job.runId },
-      select: { status: true, scheduling_status: true },
-    });
-    if (!row || (row.status !== "running" && row.status !== "paused")) {
-      logger.info("Polling round skipped — run no longer running; tearing down job", {
-        ...context,
-        runStatus: row?.status ?? "missing",
-        reason: "run_not_running",
+  // Guarded by `job.runId`: jobs without a run (unit/e2e harness) have
+  // nothing to look up, and findUnique({ id: undefined }) would throw.
+  if (job.runId) {
+    try {
+      const prisma = getPrisma();
+      const row = await prisma.run.findUnique({
+        where: { id: job.runId },
+        select: { status: true, scheduling_status: true },
       });
-      const removed = teardownRunJobs(job.runId);
-      if (removed.length > 0) {
-        logger.info("Removed run-scoped crons", {
+      if (!row || (row.status !== "running" && row.status !== "paused")) {
+        logger.info("Polling round skipped — run no longer running; tearing down job", {
           ...context,
-          runId: job.runId,
-          count: removed.length,
-          jobIds: removed,
+          runStatus: row?.status ?? "missing",
+          reason: "run_not_running",
         });
+        const removed = teardownRunJobs(job.runId);
+        if (removed.length > 0) {
+          logger.info("Removed run-scoped crons", {
+            ...context,
+            runId: job.runId,
+            count: removed.length,
+            jobIds: removed,
+          });
+        }
+        return;
       }
-      return;
+      if (row.status === "paused") {
+        // AL-2: this branch returns before the try/finally that clears the
+        // marker — without an explicit delete the job is stuck in-flight and
+        // every later tick is skipped forever.
+        inFlightJobs.delete(job.id);
+        inFlightChildren.delete(job.id);
+        logger.debug("Polling round skipped — run paused", { ...context });
+        return;
+      }
+      if (row.scheduling_status === "draining_pause") {
+        // AL-1: the heartbeat path must also drive drain finalization. When a
+        // drain is requested and in-flight work finishes, only a step-completion
+        // event used to finalize the pause — a drain with no completing step
+        // could hang in draining_pause. finalizeDrainingPause re-checks in-flight
+        // steps and only flips to paused when it's safe.
+        const { finalizeDrainingPause } = await import("../step-ops.js");
+        await finalizeDrainingPause(job.runId);
+        // AL-2: clear the marker (see paused branch above).
+        inFlightJobs.delete(job.id);
+        inFlightChildren.delete(job.id);
+        logger.debug("Polling round skipped — run draining before pause (in-flight work can complete)", { ...context });
+        return;
+      }
+    } catch (err) {
+      logger.warn("Run status check failed; continuing polling round", {
+        ...context,
+        error: String(err),
+      });
     }
-    if (row.status === "paused") {
-      // AL-2: this branch returns before the try/finally that clears the
-      // marker — without an explicit delete the job is stuck in-flight and
-      // every later tick is skipped forever.
-      inFlightJobs.delete(job.id);
-      inFlightChildren.delete(job.id);
-      logger.debug("Polling round skipped — run paused", { ...context });
-      return;
-    }
-    if (row.scheduling_status === "draining_pause") {
-      // AL-1: the heartbeat path must also drive drain finalization. When a
-      // drain is requested and in-flight work finishes, only a step-completion
-      // event used to finalize the pause — a drain with no completing step
-      // could hang in draining_pause. finalizeDrainingPause re-checks in-flight
-      // steps and only flips to paused when it's safe.
-      const { finalizeDrainingPause } = await import("../step-ops.js");
-      await finalizeDrainingPause(job.runId);
-      // AL-2: clear the marker (see paused branch above).
-      inFlightJobs.delete(job.id);
-      inFlightChildren.delete(job.id);
-      logger.debug("Polling round skipped — run draining before pause (in-flight work can complete)", { ...context });
-      return;
-    }
-  } catch (err) {
-    logger.warn("Run status check failed; continuing polling round", {
-      ...context,
-      error: String(err),
-    });
   }
 
   // ── Stale-claim sweeper (run-scoped) ─────────────────────────────
