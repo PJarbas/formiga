@@ -17,6 +17,7 @@ import {
   upsertJobRegistry,
   softDeleteJobsByRun,
 } from "./job-registry-db.js";
+import { logger } from "../../lib/logger.js";
 
 // ════════════════════════════════════════════════════════════════════
 // In-memory state maps (with LRU-style bounds to prevent memory leaks)
@@ -27,17 +28,19 @@ import {
  *  the cap protects against leaks after crashes or cleanup failures. */
 const MAX_MAP_ENTRIES = 512;
 
-function evictIfFull<K, V>(map: Map<K, V>): void {
+function evictIfFull<K, V>(map: Map<K, V>, label?: string): void {
   if (map.size >= MAX_MAP_ENTRIES) {
+    // B-3: hitting the cap is a leak indicator for named maps (e.g.
+    // jobMetadata) — surface it before dropping an entry instead of evicting
+    // silently.
+    if (label) {
+      logger.warn("shared state map at capacity — evicting oldest entry", {
+        map: label,
+        size: map.size,
+      });
+    }
     const firstKey = map.keys().next().value;
     if (firstKey !== undefined) map.delete(firstKey);
-  }
-}
-
-function evictSetIfFull(set: Set<unknown>): void {
-  if (set.size >= MAX_MAP_ENTRIES) {
-    const firstValue = set.values().next().value;
-    if (firstValue !== undefined) set.delete(firstValue);
   }
 }
 
@@ -59,7 +62,16 @@ export const jobMetadata = new Map<string, CronJobInfo>();
 export const inFlightJobs: Set<string> & { addBounded(jobId: string): boolean } = Object.assign(new Set<string>(), {
   addBounded(jobId: string): boolean {
     if (inFlightJobs.has(jobId)) return false;
-    evictSetIfFull(inFlightJobs);
+    if (inFlightJobs.size >= MAX_MAP_ENTRIES) {
+      // B-3: every entry in inFlightJobs is a guard for a live harness —
+      // evicting one would let a duplicate round spawn. Refuse and surface
+      // the leak instead.
+      logger.warn("inFlightJobs at capacity — refusing to track new job", {
+        jobId,
+        size: inFlightJobs.size,
+      });
+      return false;
+    }
     inFlightJobs.add(jobId);
     return true;
   },
@@ -136,7 +148,7 @@ export function shouldFailForHeartbeatLoop(jobId: string): boolean {
  * Fire-and-forget write-through to job_registry for crash recovery.
  */
 export function setJobMetadata(id: string, info: CronJobInfo): void {
-  evictIfFull(jobMetadata);
+  evictIfFull(jobMetadata, "jobMetadata");
   jobMetadata.set(id, info);
 
   // Async write-through: eventual consistency is fine for crash recovery.
@@ -174,7 +186,28 @@ export function setPendingStartTimer(id: string, timer: ReturnType<typeof setTim
  * Bounded insert for inFlightChildren. Evicts the oldest entry when at capacity.
  */
 export function setInFlightChild(id: string, child: InFlightChild): void {
-  evictIfFull(inFlightChildren);
+  if (inFlightChildren.has(id)) {
+    inFlightChildren.set(id, child);
+    return;
+  }
+  if (inFlightChildren.size >= MAX_MAP_ENTRIES) {
+    // B-3: never evict a live (killed:false) child — its pgid is needed to
+    // terminate the harness at shutdown. Prefer dropping a stale entry; if
+    // every entry is still live, refuse to add and surface the leak.
+    for (const [key, c] of inFlightChildren) {
+      if (c.killed) {
+        inFlightChildren.delete(key);
+        break;
+      }
+    }
+    if (inFlightChildren.size >= MAX_MAP_ENTRIES) {
+      logger.warn("inFlightChildren at capacity with all live children — refusing insert", {
+        id,
+        size: inFlightChildren.size,
+      });
+      return;
+    }
+  }
   inFlightChildren.set(id, child);
 }
 
@@ -246,9 +279,7 @@ export interface SetupAgentCronsOptions {
  * first `await` inside `executePollingRound`.
  */
 export function tryMarkJobInFlight(jobId: string): boolean {
-  if (inFlightJobs.has(jobId)) return false;
-  inFlightJobs.addBounded(jobId);
-  return true;
+  return inFlightJobs.addBounded(jobId);
 }
 
 // ── Process group termination ──────────────────────────────────────────

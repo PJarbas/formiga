@@ -18,6 +18,9 @@ export interface ControlPlaneResponse {
 }
 
 const DEFAULT_TIMEOUT_MS = 1500;
+/** Hard cap on a control-plane response body (B-11) — a runaway response
+ *  must never be buffered unbounded in the client. */
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
 async function controlRequest(
   method: "GET" | "POST",
@@ -44,7 +47,18 @@ async function controlRequest(
   return await new Promise<ControlPlaneResponse | null>((resolve) => {
     const req = http.request(options, (res) => {
       const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      let bodyBytes = 0;
+      res.on("data", (chunk: Buffer) => {
+        bodyBytes += chunk.length;
+        if (bodyBytes > MAX_RESPONSE_BYTES) {
+          // B-11: abort and surface an explicit error instead of buffering an
+          // unbounded response. Later events (end/error) resolve a settled promise.
+          req.destroy();
+          resolve({ status: 0, body: { error: "response too large" } });
+          return;
+        }
+        chunks.push(chunk);
+      });
       res.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf-8");
         let parsed: Record<string, unknown> = {};

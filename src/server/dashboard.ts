@@ -202,7 +202,11 @@ function handleRunDetail(
     }
 
     jsonResponse(res, { run, steps, events, worktree, failure_reason, prompt: run.task });
-  })().catch((err) => errorResponse(res, `Failed to get run detail: ${(err as Error).message}`));
+  })().catch((err) => {
+    // B-8: log server-side, reply generic — don't leak internals to the client.
+    logger.error("handleRunDetail failed", { runId, error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 function handleEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -1237,7 +1241,11 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
       bestCvMean: bestRow?.val_metric ?? null,
       filters: { agentName: agentName || undefined, roundNumber: roundStr ? Number(roundStr) : undefined, status: statusFilter || undefined },
     });
-  })().catch((err) => errorResponse(res, `Failed to get leaderboard: ${(err as Error).message}`));
+  })().catch((err) => {
+    // B-8: log server-side, reply generic.
+    logger.error("handleLeaderboard failed", { error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 function safeParseJson(raw: string): Record<string, unknown> {
@@ -1372,9 +1380,40 @@ function resolveWorkspaceFromRun(run: { context: string }): string | null {
   }
 }
 
-function isPathSafe(base: string, requested: string): boolean {
+/** Sync lexical containment check — no filesystem access. */
+function isPathLexicallySafe(base: string, requested: string): boolean {
   const resolved = path.resolve(base, requested);
   return resolved.startsWith(base + path.sep) || resolved === base;
+}
+
+/**
+ * Async containment check that also resolves symlinks on both sides (M-7).
+ * A symlink inside the workspace pointing outside it would pass a pure
+ * lexical check; realpath resolves the link target so the test operates on
+ * the actual file location, closing the lexical TOCTOU.
+ *
+ * Fallback rules:
+ *  - requested does not exist (ENOENT) → lexical check (pre-write paths).
+ *  - base unreadable → lexical check.
+ *  - other realpath failure (EACCES, ELOOP, ...) → fail closed.
+ */
+async function isPathSafe(base: string, requested: string): Promise<boolean> {
+  let realBase: string;
+  try {
+    realBase = await fs.promises.realpath(base);
+  } catch {
+    return isPathLexicallySafe(base, requested);
+  }
+
+  let realRequested: string;
+  try {
+    realRequested = await fs.promises.realpath(requested);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") return isPathLexicallySafe(base, requested);
+    return false;
+  }
+  return realRequested === realBase || realRequested.startsWith(realBase + path.sep);
 }
 
 function bareAgentName(scopedName: string): string {
@@ -1427,7 +1466,7 @@ function handleLeaderboardReport(
     const reportFile = AGENT_REPORT_MAP[agent];
     if (reportFile) {
       const reportPath = path.join(workspace, "reports", reportFile);
-      if (isPathSafe(workspace, path.join("reports", reportFile))) {
+      if (await isPathSafe(workspace, path.join("reports", reportFile))) {
         try {
           const content = await fs.promises.readFile(reportPath, "utf-8");
           jsonResponse(res, { content, filename: reportFile });
@@ -1519,7 +1558,7 @@ function handleLeaderboardScript(
       const resolvedArtifact = path.isAbsolute(artifactScript)
         ? artifactScript
         : path.join(workspace, artifactScript);
-      if (isPathSafe(workspace, resolvedArtifact)) {
+      if (await isPathSafe(workspace, resolvedArtifact)) {
         try {
           const realScript = await fs.promises.readFile(resolvedArtifact, "utf-8");
           if (realScript.trim().length > 0) {
@@ -1614,7 +1653,7 @@ function handleRunArtifact(
       return;
     }
 
-    if (!isPathSafe(workspace, relativePath)) {
+    if (!(await isPathSafe(workspace, relativePath))) {
       errorResponse(res, "Forbidden", 403);
       return;
     }
@@ -1719,7 +1758,7 @@ function handleRunAgentFigures(
     }> = [];
 
     for await (const entry of findFilesRec(workspace, IMAGE_GLOB_PATTERNS)) {
-      if (!isPathSafe(workspace, entry)) continue;
+      if (!(await isPathSafe(workspace, entry))) continue;
       const rel = path.relative(workspace, entry).replace(/\\/g, "/");
       const meta = inferFigureMetadata(rel);
       figures.push({
@@ -1733,13 +1772,38 @@ function handleRunAgentFigures(
   })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
 }
 
-async function* findFilesRec(dir: string, patterns: string[]): AsyncGenerator<string> {
+const MAX_RECURSE_DEPTH = 8;
+const MAX_RECURSIVE_ITEMS = 5000;
+/** Directories never descended into during workspace walks (M-6). */
+const SKIP_RECURSE_DIRS = new Set(["node_modules", ".git", "dist", "build", ".venv", "__pycache__"]);
+
+interface WalkCtx {
+  visited: number;
+}
+
+/**
+ * Recursively yield files matching the given extension patterns, bounded by
+ * a max depth and a total-item cap (M-6) so a pathological workspace cannot
+ * turn a request into an unbounded walk. `node_modules`/`.git` (and other
+ * dependency/build dirs) are never descended into. `ctx` is shared across the
+ * whole walk so the item budget is global, not per-subtree.
+ */
+async function* findFilesRec(
+  dir: string,
+  patterns: string[],
+  depth = 0,
+  ctx: WalkCtx = { visited: 0 },
+): AsyncGenerator<string> {
+  if (depth > MAX_RECURSE_DEPTH) return;
   try {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
+      ctx.visited += 1;
+      if (ctx.visited > MAX_RECURSIVE_ITEMS) return;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        yield* findFilesRec(full, patterns);
+        if (SKIP_RECURSE_DIRS.has(entry.name)) continue;
+        yield* findFilesRec(full, patterns, depth + 1, ctx);
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
         if (
@@ -1776,7 +1840,7 @@ function handleRunAgentDecisions(
 
     const decisions = artifacts.map((a) => ({
       key: a.artifact_key,
-      ...JSON.parse(a.content),
+      ...safeParseJson(a.content),
       loggedAt: (a.created_at ?? new Date()).toISOString(),
     }));
 
@@ -1803,7 +1867,7 @@ function handleRunAgentMetrics(
 
     const metrics = artifacts.map((a) => ({
       key: a.artifact_key,
-      ...JSON.parse(a.content),
+      ...safeParseJson(a.content),
       loggedAt: (a.created_at ?? new Date()).toISOString(),
     }));
 
@@ -1840,7 +1904,7 @@ function handleRunAgentLegacyFiles(
     for await (const entry of findFilesRec(workspace, [])) {
       const ext = path.extname(entry).toLowerCase();
       if (!legacyExts.has(ext)) continue;
-      if (!isPathSafe(workspace, entry)) continue;
+      if (!(await isPathSafe(workspace, entry))) continue;
       const rel = path.relative(workspace, entry).replace(/\\/g, "/");
       const stat = await fs.promises.stat(entry).catch(() => null);
       files.push({
@@ -2205,7 +2269,13 @@ async function handleChecklistPut(
     const prisma = getPrisma();
 
     const body = await readJsonBody<{ items?: unknown }>(req);
-    const items = Array.isArray(body?.items) ? body!.items : [];
+    // B-6: a PUT without an items array used to wipe the checklist (default []).
+    // Reject instead of silently clearing state the client may not have loaded.
+    if (!body || !Array.isArray(body.items)) {
+      errorResponse(res, 'Body must include an "items" array', 400);
+      return;
+    }
+    const items = body.items;
     const json = JSON.stringify(items);
     const now = new Date();
 
@@ -2226,7 +2296,9 @@ async function handleChecklistPut(
 
     jsonResponse(res, { runId, phase, items, updatedAt: row.updated_at.toISOString() });
   } catch (err) {
-    errorResponse(res, `Failed to update checklist: ${(err as Error).message}`);
+    // B-8: log server-side, reply generic.
+    logger.error("handleChecklistPut failed", { runId, phase, error: (err as Error).message });
+    errorResponse(res, "Internal server error");
   }
 }
 
@@ -2593,7 +2665,11 @@ function handleRuns(_req: http.IncomingMessage, res: http.ServerResponse): void 
     });
 
     jsonResponse(res, { runs });
-  })().catch((err) => errorResponse(res, `Failed to build runs snapshot: ${(err as Error).message}`));
+  })().catch((err) => {
+    // B-8: log server-side, reply generic.
+    logger.error("handleRuns failed", { error: (err as Error).message });
+    errorResponse(res, "Internal server error");
+  });
 }
 
 // ── Arena API Handlers ─────────────────────────────────────────────────
@@ -3332,7 +3408,7 @@ function route(req: http.IncomingMessage, res: http.ServerResponse, expectedSecr
   if (pathname.startsWith("/assets/")) {
     const rel = decodeURIComponent(pathname).replace(/^\/+/, "");
     const full = path.join(DASHBOARD_DIST, rel);
-    if (!isPathSafe(DASHBOARD_DIST, full)) {
+    if (!isPathLexicallySafe(DASHBOARD_DIST, full)) {
       errorResponse(res, "Forbidden", 403);
       return;
     }
