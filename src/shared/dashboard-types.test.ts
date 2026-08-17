@@ -7,14 +7,17 @@ import assert from "node:assert/strict";
 import { AGENT_INFO_REGISTRY } from "./dashboard-types.js";
 
 describe("AGENT_INFO_REGISTRY", () => {
-  it("contains all 5 ML agent entries", () => {
+  it("contains all 8 ML agent entries (pipeline + autoresearch union)", () => {
     const names = Object.keys(AGENT_INFO_REGISTRY);
-    assert.equal(names.length, 5);
+    assert.equal(names.length, 8);
     assert.ok(names.includes("data-analyst"));
     assert.ok(names.includes("feature-engineer"));
     assert.ok(names.includes("modeler-classic"));
     assert.ok(names.includes("modeler-advanced"));
     assert.ok(names.includes("ml-critic"));
+    assert.ok(names.includes("arena-modeler-classic"));
+    assert.ok(names.includes("arena-modeler-advanced"));
+    assert.ok(names.includes("reporter"));
   });
 
   it("each agent has required fields", () => {

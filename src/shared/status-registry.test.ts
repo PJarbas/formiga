@@ -109,7 +109,7 @@ describe("resolveDashboardStatus", () => {
     assert.equal(resolveDashboardStatus("SUCCESS"), "completed");
     assert.equal(resolveDashboardStatus("FAILED"), "failed");
     assert.equal(resolveDashboardStatus("AUDITED"), "completed");
-    assert.equal(resolveDashboardStatus("OVERFITTED"), "failed");
+    assert.equal(resolveDashboardStatus("OVERFITTED"), "checks_failed");
   });
 
   it("maps Step statuses via Visual→Dashboard", () => {
