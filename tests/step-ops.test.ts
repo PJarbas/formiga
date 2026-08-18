@@ -228,7 +228,7 @@ describe("validateExpects", () => {
   });
 
   it("passes with valid HTTPS PR URL with number suffix", () => {
-    const output = "STATUS: done\nPR: https://github.com/igorhvr/formiga/pull/999";
+    const output = "STATUS: done\nPR: https://github.com/PJarbas/formiga/pull/999";
     const expects = "STATUS: done\nregex:PR:\\s*https?://github\\.com/[^/]+/[^/]+/pull/\\d+";
     const result = validateExpects(output, expects);
     assert.equal(result, null);

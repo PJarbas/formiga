@@ -25,6 +25,55 @@ Data scientists spend up to 80% of their time on repetitive tasks: exploring dat
 
 ---
 
+## Quick Start
+
+### 1. Install (one line)
+
+Install Formiga directly from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/PJarbas/formiga/main/scripts/install.sh | bash
+```
+
+The installer clones the repository into `~/.formiga/repo`, builds it, links the `formiga` CLI into `~/.local/bin`, and installs the bundled workflows. If `~/.local/bin` is missing from your PATH, it adds it to your shell configuration (`~/.zshrc`, `~/.bashrc`, or `~/.profile`) automatically.
+
+**Or let an AI agent do it** — Formiga ships a Claude Code Skill that teaches agents how to drive it:
+
+> "Clone github.com/PJarbas/formiga to my home dir, install it and learn the skill included inside it."
+
+### 2. Prerequisites
+
+* **Node.js 22+** (check with `node -v`)
+* **Coding-Agent Harness:** Formiga leverages an agent harness to run code. Install one of the supported harnesses:
+  * **pi-coding-agent** (Highly Recommended) — Follow the installation steps on [pi](https://github.com/mariozechner/pi-coding-agent)
+  * **hermes** — Excellent alternative for computer-use integrations: [hermes](https://github.com/nousresearch/hermes-agent)
+
+### 3. Manual Install (from source)
+
+Clone the repository and run the build-and-install script:
+
+```bash
+git clone https://github.com/PJarbas/formiga.git
+cd formiga
+./build-and-install
+```
+
+### 4. Run Your First AutoResearch
+
+Run your first automated research competition by providing a dataset and a target column:
+
+```bash
+# Start the competitive ML arena
+formiga autoresearch "dataset_path=data/classification.csv target_column=species"
+
+# In another terminal window, launch the interactive dashboard
+formiga dashboard start
+```
+
+Navigate to [http://localhost:3334](http://localhost:3334) to watch the agents execute in real-time.
+
+---
+
 ## How It Works
 
 Formiga structures agent execution in a 4-stage pipeline with a competitive Arena loop at its core:
@@ -112,40 +161,6 @@ Centralizes and ranks every model produced during the Arena rounds.
 Once the Arena converges or reaches the round limit, the winning model is crowned and the final report is compiled.
 
 <p align="center"><img src="docs/screenshots/image_6.png" alt="Arena Reporter Consolidation" width="820"></p>
-
----
-
-## Quick Start
-
-### 1. Prerequisites
-
-* **Node.js 22+** (check with `node -v`)
-* **Coding-Agent Harness:** Formiga leverages an agent harness to run code. Install one of the supported harnesses:
-  * **pi-coding-agent** (Highly Recommended) — Follow the installation steps on [pi](https://github.com/mariozechner/pi-coding-agent)
-  * **hermes** — Excellent alternative for computer-use integrations: [hermes](https://github.com/nousresearch/hermes-agent)
-
-### 2. Installation
-
-Clone the repository and run the global build and installation script:
-
-```bash
-git clone https://github.com/PJarbas/formiga.git
-cd formiga
-./build-and-install
-```
-
-### 3. Running AutoResearch
-
-Run your first automated research competition by providing a dataset and a target column:
-
-```bash
-# Start the competitive ML arena
-formiga autoresearch "dataset_path=data/classification.csv target_column=species"
-
-# In another terminal window, launch the interactive dashboard
-formiga dashboard start
-```
-Navigate to [http://localhost:3334](http://localhost:3334) to watch the agents execute in real-time.
 
 ---
 
