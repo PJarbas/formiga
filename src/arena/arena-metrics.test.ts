@@ -84,6 +84,16 @@ describe("validateRichMetrics — classification", () => {
     assert.ok(err);
     assert.match(err!, /log_loss/);
   });
+
+  it("treats multiclass_classification as classification", () => {
+    assert.equal(validateRichMetrics(classificationPayload(), "multiclass_classification"), null);
+    const p = classificationPayload();
+    delete p.roc_auc;
+    const err = validateRichMetrics(p, "multiclass_classification");
+    assert.ok(err);
+    assert.match(err!, /\[metrics_invalid\]/);
+    assert.match(err!, /roc_auc/);
+  });
 });
 
 describe("validateRichMetrics — regression", () => {

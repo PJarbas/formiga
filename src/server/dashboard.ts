@@ -47,6 +47,7 @@ import { logger } from "../lib/logger.js";
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
+import { getResultsContract } from "../arena/benchmark-config.js";
 import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse, LeaderboardEntry } from "../shared/dashboard-types.js";
 import { generateReproductionScript, buildReproductionPreamble } from "./script-templates.js";
 import { buildExperimentReportMarkdown } from "./report-builder.js";
@@ -1346,14 +1347,14 @@ function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
     learned: (r.learned as string | null) ?? null,
     metrics: {
       primary: { name: (r.metric_name as string) || "cv_mean", value: cvMean },
-      classification: problemType === "classification" ? {
+      classification: getResultsContract(problemType) === "classification" ? {
         f1: r.f1_score != null ? Number(r.f1_score) : undefined,
         precision: r.precision != null ? Number(r.precision) : undefined,
         recall: r.recall != null ? Number(r.recall) : undefined,
         rocAuc: r.roc_auc != null ? Number(r.roc_auc) : undefined,
         logLoss: r.log_loss != null ? Number(r.log_loss) : undefined,
       } : undefined,
-      regression: problemType === "regression" ? {
+      regression: getResultsContract(problemType) === "regression" ? {
         mae: r.mae != null ? Number(r.mae) : undefined,
         rmse: r.rmse != null ? Number(r.rmse) : undefined,
         r2Score: r.r2_score != null ? Number(r.r2_score) : undefined,

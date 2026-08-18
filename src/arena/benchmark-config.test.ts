@@ -8,6 +8,8 @@ import assert from "node:assert/strict";
 import {
   parseBenchmarkConfig,
   assertMetricProblemType,
+  normalizeProblemType,
+  getResultsContract,
   METRICS_BY_PROBLEM_TYPE,
 } from "./benchmark-config.js";
 
@@ -112,6 +114,59 @@ describe("assertMetricProblemType", () => {
     const msg = assertMetricProblemType("REGRESSION", "F1_SCORE");
     assert.ok(msg);
     assert.match(msg!, /\[metric_problem_mismatch\]/);
+  });
+
+  it("treats multiclass_classification as classification (G9 guard)", () => {
+    // Regression metric on a (multi)classification problem → warning.
+    const msg = assertMetricProblemType("multiclass_classification", "rmse");
+    assert.ok(msg);
+    assert.match(msg!, /\[metric_problem_mismatch\]/);
+    assert.match(msg!, /regression/);
+    // Classification metrics on the same problem → known-good pairing.
+    assert.equal(assertMetricProblemType("multiclass_classification", "roc_auc"), null);
+    assert.equal(assertMetricProblemType("multiclass_classification", "accuracy"), null);
+  });
+});
+
+// ── normalizeProblemType ────────────────────────────────────────────────
+
+describe("normalizeProblemType", () => {
+  it("maps classification-family spellings to classification", () => {
+    assert.equal(normalizeProblemType("classification"), "classification");
+    assert.equal(normalizeProblemType("multiclass_classification"), "classification");
+    assert.equal(normalizeProblemType("binary_classification"), "classification");
+    assert.equal(normalizeProblemType("multilabel_classification"), "classification");
+  });
+
+  it("is case-insensitive and separator-tolerant", () => {
+    assert.equal(normalizeProblemType("MultiClass_Classification"), "classification");
+    assert.equal(normalizeProblemType("REGRESSION"), "regression");
+  });
+
+  it("keeps regression and unknown types unchanged", () => {
+    assert.equal(normalizeProblemType("regression"), "regression");
+    assert.equal(normalizeProblemType("time_series"), "time_series");
+  });
+
+  it("returns null for nullish input", () => {
+    assert.equal(normalizeProblemType(null), null);
+    assert.equal(normalizeProblemType(undefined), null);
+  });
+});
+
+// ── getResultsContract ──────────────────────────────────────────────────
+
+describe("getResultsContract", () => {
+  it("maps classification-family problem types to the classification contract", () => {
+    assert.equal(getResultsContract("classification"), "classification");
+    assert.equal(getResultsContract("multiclass_classification"), "classification");
+    assert.equal(getResultsContract("binary_classification"), "classification");
+  });
+
+  it("maps regression and unknown types to the regression contract", () => {
+    assert.equal(getResultsContract("regression"), "regression");
+    assert.equal(getResultsContract("time_series"), "regression");
+    assert.equal(getResultsContract(null), "regression");
   });
 });
 
