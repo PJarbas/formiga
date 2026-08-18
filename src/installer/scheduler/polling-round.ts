@@ -876,9 +876,9 @@ export async function executePollingRound(
       // Resolve PI extension for the formiga-agent-tools. Missing extension
       // is not fatal (falls back to base pi tools), but we log a warning so
       // the operator can investigate. Only PiRunner uses this; HermesRunner
-      // ignores it.
+      // and OpencodeRunner ignore it.
       const extensionPath = resolveFormigaAgentToolsExtension();
-      if (!extensionPath && harnessType !== "hermes") {
+      if (!extensionPath && harnessType !== "hermes" && harnessType !== "opencode") {
         logger.warn(
           "formiga-agent-tools extension not found; agents will lack save_artifact tool",
           { agentId: job.agentId },

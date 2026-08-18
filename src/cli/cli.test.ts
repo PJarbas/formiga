@@ -185,6 +185,12 @@ describe("parseWorkflowRunArgs", () => {
     assert.equal(result.harnessAs, "hermes");
   });
 
+  it("parses --opencode-as-harness flag", () => {
+    const result = parseWorkflowRunArgs(["--opencode-as-harness", "do the task"]);
+    assert.equal(result.taskTitle, "do the task");
+    assert.equal(result.harnessAs, "opencode");
+  });
+
   it("does not set harnessAs when neither flag present", () => {
     const result = parseWorkflowRunArgs(["do the task"]);
     assert.equal(result.harnessAs, undefined);
@@ -193,15 +199,36 @@ describe("parseWorkflowRunArgs", () => {
   it("throws when both --pi-as-harness and --hermes-as-harness specified", () => {
     assert.throws(
       () => parseWorkflowRunArgs(["--pi-as-harness", "--hermes-as-harness", "task"]),
-      /Cannot specify both --pi-as-harness and --hermes-as-harness/,
+      /Cannot specify more than one of --pi-as-harness, --hermes-as-harness, --opencode-as-harness/,
     );
   });
 
   it("throws when both flags in reverse order", () => {
     assert.throws(
       () => parseWorkflowRunArgs(["--hermes-as-harness", "--pi-as-harness", "task"]),
-      /Cannot specify both --pi-as-harness and --hermes-as-harness/,
+      /Cannot specify more than one of --pi-as-harness, --hermes-as-harness, --opencode-as-harness/,
     );
+  });
+
+  it("throws when --opencode-as-harness combined with --pi-as-harness", () => {
+    assert.throws(
+      () => parseWorkflowRunArgs(["--opencode-as-harness", "--pi-as-harness", "task"]),
+      /Cannot specify more than one of --pi-as-harness, --hermes-as-harness, --opencode-as-harness/,
+    );
+  });
+
+  it("parses opencode harness alongside other flags", () => {
+    const result = parseWorkflowRunArgs([
+      "--opencode-as-harness",
+      "--no-hurry-please-save-tokens-mode",
+      "--working-directory-for-harness",
+      "/work",
+      "build feature",
+    ]);
+    assert.equal(result.taskTitle, "build feature");
+    assert.equal(result.harnessAs, "opencode");
+    assert.equal(result.noHurrySaveTokensMode, true);
+    assert.equal(result.workingDirectoryForHarness, "/work");
   });
 
   it("parses hermes harness alongside other flags", () => {

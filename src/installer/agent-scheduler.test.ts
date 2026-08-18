@@ -352,6 +352,25 @@ describe("createAgentCronJob harness type", () => {
     assert.equal(jobMetadata.get(res.id)?.harnessType, "hermes");
   });
 
+  it("reads harness_type 'opencode' from the run context", async () => {
+    const workflow = makeWorkflow();
+    const runId = "run-opencode-harness";
+    insertRun(runId, "running", '{"harness_type":"opencode"}');
+
+    const res = await createAgentCronJob({
+      workflowId: WORKFLOW_ID,
+      runId,
+      agent: workflow.agents[0],
+      workflow,
+      intervalMinutes: 2,
+      staggerOffsetMs: 60_000,
+      workingDirectoryForHarness: tempHome,
+    });
+
+    assert.equal(res.ok, true);
+    assert.equal(jobMetadata.get(res.id)?.harnessType, "opencode");
+  });
+
   it("defaults to 'pi' when the run context has no harness_type", async () => {
     const workflow = makeWorkflow();
     const runId = "run-pi-harness";

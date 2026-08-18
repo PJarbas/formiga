@@ -34,6 +34,7 @@ const STATUS_STYLES: Record<string, { border: string; bg: string; dot: string; l
 const HARNESS_LABELS: Record<string, { text: string; color: string }> = {
   pi: { text: "pi", color: "var(--accent-blue)" },
   hermes: { text: "hermes", color: "var(--accent-orange)" },
+  opencode: { text: "opencode", color: "var(--accent-purple)" },
   unknown: { text: "?", color: "var(--text-muted)" },
 };
 

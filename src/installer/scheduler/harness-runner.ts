@@ -79,15 +79,17 @@ export interface HarnessRunnerConfig {
 
 import { PiRunner } from "./harness-pi-runner.js";
 import { HermesRunner } from "./harness-hermes-runner.js";
+import { OpencodeRunner } from "./harness-opencode-runner.js";
 
 /**
  * Create a HarnessRunner for the given harness type.
  *
  * Supported types:
- *   "pi"     → PiRunner     (wraps runPi from pi-runner.ts)
- *   "hermes" → HermesRunner (wraps runHermes from hermes-runner.ts)
+ *   "pi"       → PiRunner       (wraps runPi from pi-runner.ts)
+ *   "hermes"   → HermesRunner   (wraps runHermes from hermes-runner.ts)
+ *   "opencode" → OpencodeRunner (wraps runOpencode from opencode-runner.ts)
  *
- * Static imports are safe because PiRunner and HermesRunner only import
+ * Static imports are safe because the runner classes only import
  * TypeScript types from this module — those are erased at compile time,
  * so there is no runtime circular dependency.
  */
@@ -100,9 +102,11 @@ export function createHarnessRunner(
       return new PiRunner(config);
     case "hermes":
       return new HermesRunner(config);
+    case "opencode":
+      return new OpencodeRunner(config);
     default:
       throw new Error(
-        `Unknown harness type: "${type}". Supported: pi, hermes.`,
+        `Unknown harness type: "${type}". Supported: pi, hermes, opencode.`,
       );
   }
 }

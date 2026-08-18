@@ -22,6 +22,7 @@ import type { WorkflowAgent, WorkflowSpec } from "../../dist/installer/types.js"
  *   - buildPollingRoundContext includes harnessType
  *   - executePollingRound dispatches to runPi when harnessType="pi" or missing
  *   - executePollingRound dispatches to runHermes when harnessType="hermes"
+ *   - executePollingRound dispatches to runOpencode when harnessType="opencode"
  *   - runHermes receives FORMIGA_HERMES_BINARY in child env
  *   - Polling round context logs include harnessType
  */
@@ -130,11 +131,13 @@ describe("executePollingRound harness dispatch", () => {
   let tempHome: string;
   let savedPiBinary: string | undefined;
   let savedHermesBinary: string | undefined;
+  let savedOpencodeBinary: string | undefined;
 
   beforeEach(() => {
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-test-routing-"));
     savedPiBinary = process.env.FORMIGA_PI_BINARY;
     savedHermesBinary = process.env.FORMIGA_HERMES_BINARY;
+    savedOpencodeBinary = process.env.FORMIGA_OPENCODE_BINARY;
 
     const homeDir = path.join(tempHome, "home");
     const stateDir = path.join(homeDir, ".formiga");
@@ -156,6 +159,8 @@ describe("executePollingRound harness dispatch", () => {
     else process.env.FORMIGA_PI_BINARY = savedPiBinary;
     if (savedHermesBinary === undefined) delete process.env.FORMIGA_HERMES_BINARY;
     else process.env.FORMIGA_HERMES_BINARY = savedHermesBinary;
+    if (savedOpencodeBinary === undefined) delete process.env.FORMIGA_OPENCODE_BINARY;
+    else process.env.FORMIGA_OPENCODE_BINARY = savedOpencodeBinary;
     shutdownAllCrons();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
@@ -226,6 +231,40 @@ describe("executePollingRound harness dispatch", () => {
     assert.ok(hermesArgs.includes("chat"), "hermes should be invoked with chat");
     assert.ok(hermesArgs.includes("--max-turns"), "hermes should have --max-turns");
     assert.ok(hermesArgs.includes("--yolo"), "hermes should have --yolo");
+  });
+
+  it("dispatches to runOpencode when harnessType is 'opencode'", async () => {
+    const workdir = path.join(tempHome, "work");
+    fs.mkdirSync(workdir, { recursive: true });
+
+    // Create mock opencode binary that logs its args
+    const opencodePath = path.join(tempHome, "opencode-mock");
+    const opencodeLog = path.join(tempHome, "opencode-args.log");
+    makeMockBinary(opencodePath, `echo "$@" >> "${opencodeLog}"; echo "HEARTBEAT_OK"`);
+    process.env.FORMIGA_OPENCODE_BINARY = opencodePath;
+
+    const runId = "run-opencode-dispatch";
+    const db = getDb();
+    const nowOpencode = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO runs (id, workflow_id, task, status, context, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(runId, "test-wf", "test task", "running", JSON.stringify({
+      harness_type: "opencode",
+      working_directory_for_harness: workdir,
+    }), nowOpencode, nowOpencode);
+
+    const workflow = makeWorkflow();
+    insertPendingStep(db, runId, "step-1", nowOpencode);
+
+    // executePollingRound should use the opencode binary
+    const opencodeDispatchJob = { id: "dispatch-opencode", workflowId: "test-wf", runId, agentId: "test-wf_test-agent", intervalMinutes: 5, harnessType: "opencode" as const, workingDirectoryForHarness: workdir, createdAt: "" };
+    await executePollingRound(opencodeDispatchJob, makeAgent(), workflow);
+
+    // Verify opencode was invoked (log file should contain run subcommand)
+    const opencodeArgs = fs.readFileSync(opencodeLog, "utf-8");
+    assert.ok(opencodeArgs.includes("run"), "opencode should be invoked with run subcommand");
+    assert.ok(opencodeArgs.includes("--pure"), "opencode should have --pure");
+    assert.ok(opencodeArgs.includes("--auto"), "opencode should have --auto");
   });
 
   it("dispatches to runPi when harnessType is missing (defaults to pi)", async () => {

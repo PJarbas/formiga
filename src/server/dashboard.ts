@@ -689,7 +689,7 @@ function handlePipelineFlow(req: http.IncomingMessage, res: http.ServerResponse)
 
     // Determine workflow type from run
     let workflowType: "ml-autoresearch" | "ml-pipeline" = "ml-pipeline";
-    let runHarnessType: "pi" | "hermes" | "unknown" = "pi";
+    let runHarnessType: "pi" | "hermes" | "opencode" | "unknown" = "pi";
     if (runId) {
       run = await getPrisma().run.findUnique({ where: { id: runId } });
       if (run) {
@@ -700,6 +700,7 @@ function handlePipelineFlow(req: http.IncomingMessage, res: http.ServerResponse)
           try {
             const ctx = JSON.parse(run.context);
             if (ctx.harness_type === "hermes") runHarnessType = "hermes";
+            else if (ctx.harness_type === "opencode") runHarnessType = "opencode";
           } catch { /* ignore parse errors */ }
         }
       }
