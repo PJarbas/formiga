@@ -22,6 +22,27 @@ function normalizeDirection(dir: unknown): "lower" | "higher" | null {
 }
 
 /**
+ * Collapse the classification-family spellings (`multiclass_classification`,
+ * `binary_classification`, `multilabel_classification`, case/separator
+ * variants) into the canonical `"classification"`. Regression and unknown
+ * problem types pass through unchanged; nullish input returns null.
+ */
+export function normalizeProblemType(problemType: string | null | undefined): string | null {
+  if (!problemType) return null;
+  const pt = problemType.toLowerCase().replace(/[^a-z0-9_]/g, "");
+  if (pt.includes("classif")) return "classification";
+  if (pt === "regression") return "regression";
+  return problemType;
+}
+
+/** Map any problem type onto the _results.json contract to emit. */
+export function getResultsContract(
+  problemType: string | null | undefined,
+): "classification" | "regression" {
+  return normalizeProblemType(problemType) === "classification" ? "classification" : "regression";
+}
+
+/**
  * Parse a parsed benchmark_config.json into the arena contract.
  *
  * Normalizes the two legacy shapes for `metric` (string `"rmse"` vs object
@@ -111,7 +132,7 @@ export function assertMetricProblemType(
 ): string | null {
   if (!problemType || !metricName) return null;
 
-  const pt = problemType.toLowerCase();
+  const pt = normalizeProblemType(problemType)?.toLowerCase() ?? "";
   const mn = metricName.toLowerCase().replace(/[^a-z0-9_]/g, "");
 
   const own = METRICS_BY_PROBLEM_TYPE[pt];

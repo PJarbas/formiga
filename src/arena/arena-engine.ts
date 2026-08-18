@@ -12,6 +12,7 @@ import type { ArenaRepository } from "./arena-repository.js";
 import type { ArenaExperiment } from "../leaderboard/repository.js";
 import { makeDecision, isImprovement } from "./arena-decision.js";
 import { extractMetric } from "./arena-benchmark.js";
+import { getResultsContract, normalizeProblemType } from "./benchmark-config.js";
 import { readDatasetContext, formatDatasetContextForPrompt, type DatasetContext, type ComputeBudget, deriveComputeBudget } from "./dataset-context.js";
 import { auditExperiment, dedupSignature, invariant, type ComplexityTier, type AuditInput } from "./audit.js";
 import { buildAgentPersonaInstructions } from "../installer/scheduler/prompts.js";
@@ -1037,7 +1038,7 @@ function buildPromptsForRound(
     prompt += `- Salve o script em: artifacts/models/${agent.id}_round${session.currentRound}.py\n`;
     prompt += `- Salve também um arquivo JSON com informações detalhadas do modelo e métricas ricas de validação cruzada em: artifacts/models/${agent.id}_round${session.currentRound}_results.json\n`;
     prompt += `  **CRÍTICO**: O seu script Python DEVE salvar o arquivo JSON de métricas ricas com a estrutura exata abaixo. Se você não criar o arquivo JSON ou salvá-lo com formato incorreto, sua rodada falhará no dashboard. Calcule e salve as métricas usando validação cruzada (média entre os folds).\n\n`;
-    if (datasetCtx.problemType === "classification") {
+    if (getResultsContract(datasetCtx.problemType) === "classification") {
       prompt += `  O JSON deve ter EXATAMENTE esta estrutura:\n`;
       prompt += `  {\n`;
       prompt += `    "model": "<classe_do_algoritmo_ex_XGBClassifier_ou_SVC>",\n`;
@@ -1260,6 +1261,8 @@ export function validateRichMetrics(
   json: Record<string, unknown>,
   problemType: string | null,
 ): string | null {
+  const pt = normalizeProblemType(problemType);
+
   const num = (keys: string[]): number | undefined => {
     for (const k of keys) {
       const v = json[k];
@@ -1285,7 +1288,7 @@ export function validateRichMetrics(
     return "[metrics_invalid] train_score é obrigatório (número finito)";
   }
 
-  if (problemType === "classification") {
+  if (pt === "classification") {
     const required: Record<string, string[]> = {
       roc_auc: ["roc_auc", "auc", "cv_auc", "val_auc"],
       f1_score: ["f1_score", "f1", "cv_f1", "val_f1"],
@@ -1301,7 +1304,7 @@ export function validateRichMetrics(
     if (!("log_loss" in json) && !("cv_log_loss" in json) && !("val_log_loss" in json)) {
       return "[metrics_invalid] classificação exige log_loss (número ou null)";
     }
-  } else if (problemType === "regression") {
+  } else if (pt === "regression") {
     const required: Record<string, string[]> = {
       rmse: ["rmse", "root_mean_squared_error", "cv_rmse", "val_rmse"],
       mae: ["mae", "mean_absolute_error", "cv_mae", "val_mae"],
