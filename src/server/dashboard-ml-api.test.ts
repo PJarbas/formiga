@@ -567,6 +567,67 @@ describe("ML Dashboard API", () => {
     }
   });
 
+  // ── /api/pipeline/flow run-scoping ─────────────────────────────
+
+  it("GET /api/pipeline/flow respects ?run= and falls back to the active run", async () => {
+    // Regression for #128: the flow endpoint previously always used
+    // findActivePipelineRunId() and ignored the URL param. Navigating to an
+    // earlier/completed run showed the active run's flow instead.
+    const root4 = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-ml-api-flow-run-"));
+    const homeDir4 = path.join(root4, "home");
+    const dbPath4 = path.join(homeDir4, ".formiga", "formiga.db");
+    fs.mkdirSync(path.dirname(dbPath4), { recursive: true });
+
+    const prevHome = process.env.HOME;
+    const prevDb = process.env.FORMIGA_DB_PATH;
+    process.env.HOME = homeDir4;
+    process.env.FORMIGA_DB_PATH = dbPath4;
+
+    try {
+      const db4 = new DatabaseSync(dbPath4);
+      db4.exec(`
+        CREATE TABLE IF NOT EXISTS runs (
+          id TEXT PRIMARY KEY,
+          run_number INTEGER,
+          workflow_id TEXT NOT NULL,
+          task TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          context TEXT NOT NULL DEFAULT '{}',
+          tokens_spent INTEGER NOT NULL DEFAULT 0,
+          notify_url TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+      initLeaderboardSchema(db4);
+      const insertRun = db4.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+        VALUES (?, ?, 'ml-autoresearch', ?, ?, '{}', 0, ?, ?)
+      `);
+      // Requested (completed, older) and active (running, newer).
+      insertRun.run("run-flow-requested", 1, "Requested Run", "completed", "2026-08-01T10:00:00.000Z", "2026-08-01T10:00:00.000Z");
+      insertRun.run("run-flow-active", 2, "Active Run", "running", "2026-08-18T10:00:00.000Z", "2026-08-18T10:00:00.000Z");
+      db4.close();
+
+      const { server: svr, baseUrl: url } = await startDashboard();
+      try {
+        // No param → the active (running) run wins via findActivePipelineRunId.
+        const noParam = await fetchJSON(`${url}/api/pipeline/flow`) as { runId?: string | null };
+        assert.equal(noParam.runId, "run-flow-active");
+
+        // ?run= points at a specific run — even a completed, older one.
+        const requested = await fetchJSON(`${url}/api/pipeline/flow?run=run-flow-requested`) as { runId?: string | null };
+        assert.equal(requested.runId, "run-flow-requested");
+      } finally {
+        await stopDashboard(svr);
+      }
+    } finally {
+      process.env.HOME = prevHome;
+      process.env.FORMIGA_DB_PATH = prevDb;
+      fs.rmSync(root4, { recursive: true, force: true });
+    }
+  });
+
   // ── /api/pipeline/flow arena counters ──────────────────────────
 
   it("GET /api/pipeline/flow populates arena-modeler counters from unprefixed experiments", async () => {

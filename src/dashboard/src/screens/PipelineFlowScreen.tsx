@@ -5,17 +5,23 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import type { PipelineFlowResponse } from "@shared/dashboard-types";
 import DagCanvas from "../components/PipelineFlow/DagCanvas";
 import { AgentSidePanel } from "../components/PipelineFlow/AgentSidePanel";
 
 export default function PipelineFlowScreen() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  // #128: the flow follows the ?run= in the URL (set by /kanban?run=<id>),
+  // falling back to the active run when no selection is present.
+  const [searchParams] = useSearchParams();
+  const runParam = searchParams.get("run")?.trim() || undefined;
 
   const { data, isLoading } = useQuery<PipelineFlowResponse>({
-    queryKey: ["pipeline-flow"],
+    queryKey: ["pipeline-flow", runParam ?? "active"],
     queryFn: async () => {
-      const res = await fetch("/api/pipeline/flow");
+      const suffix = runParam ? `?run=${encodeURIComponent(runParam)}` : "";
+      const res = await fetch(`/api/pipeline/flow${suffix}`);
       if (!res.ok) throw new Error("Failed to fetch pipeline flow");
       return res.json();
     },
@@ -87,7 +93,7 @@ export default function PipelineFlowScreen() {
       {selectedAgent && (
         <AgentSidePanel
           agentId={selectedAgent}
-          runId={data?.runId}
+          runId={data?.runId ?? undefined}
           onClose={() => setSelectedAgent(null)}
         />
       )}
