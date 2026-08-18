@@ -34,7 +34,27 @@ const AGENT_GRADIENTS: Record<string, string> = {
   "reporter": "from-emerald-500 to-teal-400",
 };
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, experiments }: { status: string; experiments?: PipelineFlowNode["experiments"] }) {
+  // Arena modelers: summarize the pass rate instead of the latest-step glyph.
+  // A single red ✗ (latest experiment rejected/crashed) hides the models that
+  // did pass — "3/5" shows the pass count at a glance.
+  if (experiments && experiments.total > 0) {
+    const color =
+      experiments.kept === experiments.total
+        ? "var(--accent-green)"
+        : experiments.kept === 0
+          ? "var(--accent-red)"
+          : "var(--accent-amber)";
+    return (
+      <span
+        className="text-[11px] leading-none font-mono font-bold tabular-nums"
+        style={{ color }}
+        title={`${experiments.kept}/${experiments.total} passaram (✓${experiments.kept} ⚠${experiments.rejected} ✗${experiments.crashed})`}
+      >
+        {experiments.kept}/{experiments.total}
+      </span>
+    );
+  }
   switch (status) {
     case "running":
       return (
@@ -114,7 +134,7 @@ export default function PipelineAgentNode({ data }: { data: PipelineAgentNodeDat
             <span className="text-[13px] font-medium text-white truncate">
               {node.label}
             </span>
-            <StatusBadge status={node.status} />
+            <StatusBadge status={node.status} experiments={node.experiments} />
           </div>
 
           {/* Bottom row: subtitle (status text, counters, or best model) */}
