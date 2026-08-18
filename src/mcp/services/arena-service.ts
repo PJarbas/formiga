@@ -54,7 +54,9 @@ export class ArenaService implements IArenaService {
         experimentId: r.experiment_id,
         agentName: r.agent_name,
         modelType: r.model_type,
-        metric: r.measured_metric ?? r.val_metric,
+        // Mirror the dashboard rounds endpoint: no val_metric fallback (crashed
+        // runs carry a 0-filled val_metric that would look like a real score).
+        metric: r.measured_metric,
         decision: r.decision,
         confidenceScore: r.confidence_score,
         confidenceBand: r.confidence_band,

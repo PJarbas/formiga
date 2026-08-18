@@ -47,6 +47,9 @@ export default function Leaderboard() {
     runId: runIdFromUrl,
     sortBy,
     sortDir,
+    // Ranking screen: hide crashed/failed arena runs whose metrics are 0-filled.
+    // AgentExperiments keeps FAILED/OVERFITTED rows via its own unfiltered call.
+    status: "SUCCESS,AUDITED",
   });
 
   // Arena session (for metric name)
@@ -264,7 +267,7 @@ export default function Leaderboard() {
                         if (col.key === "cvStd") {
                           return (
                             <td key={col.key} className="px-4 py-3 font-mono text-xs text-right tabular-nums text-[var(--text-muted)]">
-                              {entry.cvStd.toFixed(4)}
+                              {entry.cvStd != null ? entry.cvStd.toFixed(4) : "—"}
                             </td>
                           );
                         }
