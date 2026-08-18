@@ -97,12 +97,8 @@ Formiga's interactive dashboard allows you to monitor and audit agent activity a
 A live graphical representation of agent execution. Clicking on any agent node reveals its insights, generated code, and diagnostic logs in the side panel.
 
 * **Exploratory Data Analysis (EDA) Phase:**
-  <p align="center"><img src="docs/screenshots/image_3.png" alt="Pipeline Flow - Data Analyst Panel" width="820"></p>
+  <p align="center"><img src="docs/screenshots/eda.png" alt="Pipeline Flow - Data Analyst Panel" width="820"></p>
   - The Data Analyst's side panel lists data dimensions, quality flags (missing/duplicate rows), feature importances against the target, and recommendations.
-
-* **Arena Reporter:**
-  <p align="center"><img src="docs/screenshots/image_5.png" alt="Feature Engineer Panel" width="400"></p>
-  - The Arena Reporter's side panel outlines the winner, absolute and percentage gains over the baseline, and structural insights learned during modeling.
 
 ### 2. Leaderboard
 Centralizes and ranks every model produced during the Arena rounds.
