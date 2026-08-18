@@ -576,31 +576,37 @@ export async function runArena(
     roundImproved = false;
     for (const agent of activeAgents) {
       const output = agentOutputs[agent.id];
-      // Guard 1 — agent never responded (LLM timeout / runner failure).
-      if (!output) {
-        const reason = "[agent_no_response] agente não respondeu dentro do timeout";
-        const r = createCrashResult(agent.id, reason, SCRIPT_MISSING_EXIT_CODE);
-        r.benchmarkStderr = reason;
-        // Registered as FAILED with benchmark_exit_code = -2 so the
-        // leaderboard distinguishes a dead agent from a real runtime crash.
-        await registerFailedArena({
-          agent,
-          round,
-          config,
-          datasetCtx,
-          result: r,
-          errorMessage: reason,
-          sessionContentHash,
-        });
-        roundResults.push(r);
-        await repo.updateStats(session.id, "crash");
-        continue;
+      const scriptPath = path.join(config.workspacePath, SCRIPT_DIR, `${agent.id}_round${round}.py`);
+
+      // Resolve the runnable script. Precedence:
+      //   1. parsed from the agent's response text (output.script)
+      //   2. the file the agent wrote to the canonical path. pi --mode json
+      //      streams scripts through bash toolCalls, so the response text the
+      //      extractor rebuilds rarely contains them — the on-disk file (the
+      //      path the prompt mandates the agent save to) is the reliable
+      //      source of truth, including when the run timed out mid-stream
+      //      after the file was already written.
+      let script = output?.script?.trim() ?? "";
+      if (!script) {
+        try {
+          if (fs.existsSync(scriptPath)) {
+            const onDisk = fs.readFileSync(scriptPath, "utf-8").trim();
+            if (onDisk.length > 0) script = onDisk;
+          }
+        } catch {
+          // best effort — fall through to the guard below
+        }
       }
-      // Guard 2 — contract broken: agent returned no runnable script.
-      // Prevents the misleading 0-byte-file → benchmark_exit_code=0 FAILED
-      // signature that previously flooded the leaderboard for dead agents.
-      if (!output.script || output.script.trim().length === 0) {
-        const reason = "[script_missing] agente não retornou script executável no JSON de resposta";
+
+      // Guard — no runnable script anywhere: neither in the response text nor
+      // on disk. Distinguish a runner failure (never responded) from a
+      // contract break (responded without a script). Registered as FAILED
+      // with benchmark_exit_code = -2 so the leaderboard distinguishes a dead
+      // agent from a real runtime crash.
+      if (!script) {
+        const reason = output
+          ? "[script_missing] agente não retornou script executável no JSON de resposta"
+          : "[agent_no_response] agente não respondeu dentro do timeout";
         const r = createCrashResult(agent.id, reason, SCRIPT_MISSING_EXIT_CODE);
         r.benchmarkStderr = reason;
         await registerFailedArena({
@@ -617,8 +623,8 @@ export async function runArena(
         continue;
       }
 
-      const scriptPath = path.join(config.workspacePath, SCRIPT_DIR, `${agent.id}_round${round}.py`);
-      fs.writeFileSync(scriptPath, output.script, "utf-8");
+      // Canonicalize the resolved script (idempotent when read from disk).
+      fs.writeFileSync(scriptPath, script, "utf-8");
 
       // Execute the agent's script directly — it trains, evaluates, and prints metric
       const exec = await trainScript(scriptPath, config.workspacePath, budget);
@@ -637,9 +643,11 @@ export async function runArena(
 
       const result: AgentRoundResult = {
         agentId: agent.id,
-        hypothesis: output.hypothesis,
-        learned: output.learned ?? "",
-        nextFocus: output.nextFocus ?? "",
+        // output may be null here when the script was rescued from disk after
+        // a runner timeout — fall back to empty text fields.
+        hypothesis: output?.hypothesis ?? "",
+        learned: output?.learned ?? "",
+        nextFocus: output?.nextFocus ?? "",
         metric: bench.metric,
         decision,
         durationMs: bench.durationMs,
@@ -779,9 +787,9 @@ export async function runArena(
             model_type: agent.modelType ?? agent.id,
             model_algorithm: richMetrics.modelAlgorithm ?? agent.modelType ?? agent.id,
             hyperparameters: richMetrics.hyperparameters ?? {},
-            hypothesis: output.hypothesis,
-            learned: output.learned,
-            next_focus: output.nextFocus,
+            hypothesis: output?.hypothesis ?? "",
+            learned: output?.learned ?? "",
+            next_focus: output?.nextFocus ?? "",
             measured_metric: metric,
             benchmark_stdout: bench.stdout,
             benchmark_stderr: bench.stderr,
