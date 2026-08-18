@@ -1198,7 +1198,12 @@ function handleLeaderboard(req: http.IncomingMessage, res: http.ServerResponse):
     const whereClause: Record<string, unknown> = { run_id: runId };
     if (agentName) whereClause.agent_name = { endsWith: `_${agentName}` };
     if (roundStr) whereClause.round_number = Number(roundStr);
-    if (statusFilter) whereClause.status = statusFilter;
+    if (statusFilter) {
+      // Comma-separated (e.g. "SUCCESS,AUDITED") → IN query so the leaderboard
+      // screen can hide failed/crashed arena runs whose metrics are 0-filled.
+      const statuses = statusFilter.split(",").map((s) => s.trim()).filter(Boolean);
+      whereClause.status = { in: statuses };
+    }
 
     // Map sortBy field
     const sortOrderBy: Record<string, string> = {};
@@ -1253,6 +1258,28 @@ function safeParseJson(raw: string): Record<string, unknown> {
 }
 
 /**
+ * Compute the standard deviation of the per-fold scores from the raw
+ * JSON-encoded `fold_scores` column. Returns `null` when folds are missing or
+ * degenerate (< 2 usable scores) — the UI renders "—" instead of a fabricated
+ * 0.0000. Sample standard deviation (n−1) to match the report's ± CV spread.
+ */
+function computeCvStd(foldScoresRaw: unknown): number | null {
+  if (typeof foldScoresRaw !== "string") return null;
+  let folds: unknown;
+  try {
+    folds = JSON.parse(foldScoresRaw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(folds) || folds.length < 2) return null;
+  const scores = folds.filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  if (scores.length < 2) return null;
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const variance = scores.reduce((acc, s) => acc + (s - mean) ** 2, 0) / (scores.length - 1);
+  return Math.sqrt(variance);
+}
+
+/**
  * Maps a raw `experiments` row to the LeaderboardEntry shape returned by
  * GET /api/leaderboard, /api/leaderboard/:id, and /api/leaderboard/compare.
  * Fields that the schema does not yet persist (feature importances, timings)
@@ -1260,6 +1287,11 @@ function safeParseJson(raw: string): Record<string, unknown> {
  */
 function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
   const problemType = (r.problem_type as "classification" | "regression" | "multilabel" | "unknown" | null) ?? "unknown";
+  // Prefer the arena's measured_metric over val_metric: val_metric is coerced
+  // to 0 on crash/failure (NOT NULL schema), so it would surface a fabricated
+  // 0.0000. measured_metric stays null on failure → honest "—" downstream.
+  const cvMean = Number(r.measured_metric ?? r.val_metric);
+  const trainMean = Number(r.train_metric);
   return {
     id: String(r.experiment_id),
     runId: r.run_id as string,
@@ -1270,10 +1302,10 @@ function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
     modelAlgorithm: (r.model_algorithm as string | null) ?? null,
     problemType,
     status: r.status as string,
-    cvMean: Number(r.val_metric),
-    cvStd: 0,
-    trainMean: Number(r.train_metric),
-    trainValGap: Number(r.train_metric) - Number(r.val_metric),
+    cvMean,
+    cvStd: computeCvStd(r.fold_scores),
+    trainMean,
+    trainValGap: trainMean - cvMean,
     hyperparameters: safeParseJson(r.hyperparameters as string),
     featureImportancesTop10: null,
     trainTimeSeconds: null,
@@ -1293,7 +1325,7 @@ function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
     hypothesis: (r.hypothesis as string | null) ?? null,
     learned: (r.learned as string | null) ?? null,
     metrics: {
-      primary: { name: (r.metric_name as string) || "cv_mean", value: Number(r.val_metric) },
+      primary: { name: (r.metric_name as string) || "cv_mean", value: cvMean },
       classification: problemType === "classification" ? {
         f1: r.f1_score != null ? Number(r.f1_score) : undefined,
         precision: r.precision != null ? Number(r.precision) : undefined,
@@ -2711,7 +2743,9 @@ function handleArenaRounds(
         experimentId: e.experiment_id,
         agentName: e.agent_name,
         modelType: e.model_type,
-        metric: e.measured_metric ?? e.val_metric,
+        // No val_metric fallback: for crashed runs val_metric is 0-filled, and a
+        // fabricated 0.0000 in the rounds view reads as a real score.
+        metric: e.measured_metric,
         decision: e.decision,
         confidenceScore: e.confidence_score,
         confidenceBand: e.confidence_band,

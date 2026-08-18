@@ -63,7 +63,8 @@ export interface LeaderboardEntry {
   problemType: "classification" | "regression" | "multilabel" | "unknown";
   status: string;
   cvMean: number;
-  cvStd: number;
+  /** Std of per-fold CV scores; null when folds aren't persisted yet (render "—"). */
+  cvStd: number | null;
   trainMean: number;
   trainValGap: number;
   hyperparameters: Record<string, unknown> | null;
