@@ -76,8 +76,12 @@ interface SummaryCardsGridProps {
 }
 
 export function SummaryCardsGrid({ children }: SummaryCardsGridProps) {
+  // Container query, NOT viewport breakpoints: these cards render inside the
+  // 480px model-detail drawer, where `lg:grid-cols-4` (viewport ≥1024px) forced
+  // 4 columns of ~101px and truncated every value. 2 columns by default; scales
+  // to 4 only when the *container* itself reaches 560px (never in the drawer).
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div className="@container grid grid-cols-2 @min-[560px]:grid-cols-4 gap-3">
       {children}
     </div>
   );
