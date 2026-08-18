@@ -566,4 +566,80 @@ describe("ML Dashboard API", () => {
       fs.rmSync(root2, { recursive: true, force: true });
     }
   });
+
+  // ── /api/pipeline/flow arena counters ──────────────────────────
+
+  it("GET /api/pipeline/flow populates arena-modeler counters from unprefixed experiments", async () => {
+    // The flow registry keys arena nodes as "arena-modeler-*", but the arena
+    // loop persists experiments with the bare id ("modeler-classic"). The
+    // counters query must match both forms (regression for #126).
+    const root3 = fs.mkdtempSync(path.join(os.tmpdir(), "formiga-ml-api-arena-flow-"));
+    const homeDir3 = path.join(root3, "home");
+    const dbPath3 = path.join(homeDir3, ".formiga", "formiga.db");
+    fs.mkdirSync(path.dirname(dbPath3), { recursive: true });
+
+    const prevHome = process.env.HOME;
+    const prevDb = process.env.FORMIGA_DB_PATH;
+    process.env.HOME = homeDir3;
+    process.env.FORMIGA_DB_PATH = dbPath3;
+
+    try {
+      const db3 = new DatabaseSync(dbPath3);
+      db3.exec(`
+        CREATE TABLE IF NOT EXISTS runs (
+          id TEXT PRIMARY KEY,
+          run_number INTEGER,
+          workflow_id TEXT NOT NULL,
+          task TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'running',
+          context TEXT NOT NULL DEFAULT '{}',
+          tokens_spent INTEGER NOT NULL DEFAULT 0,
+          notify_url TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+      initLeaderboardSchema(db3);
+      db3.prepare(`
+        INSERT INTO runs (id, run_number, workflow_id, task, status, context, tokens_spent, created_at, updated_at)
+        VALUES ('run-arena-flow', 1, 'ml-autoresearch', 'Arena Flow', 'running', '{}', 0, '2026-08-18T10:00:00.000Z', '2026-08-18T10:00:00.000Z')
+      `).run();
+      const insertExp = db3.prepare(`
+        INSERT INTO experiments (run_id, round_number, agent_name, model_type, hyperparameters,
+          train_metric, val_metric, metric_name, artifact_path, status, decision)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'f1', ?, ?, ?)
+      `);
+      // Classic: 2 kept (AUDITED), 1 rejected (OVERFITTED/checks_failed), 1 crashed (FAILED/crash).
+      const seeds: Array<[number, string, string, string]> = [
+        [1, "modeler-classic", "AUDITED", "keep"],
+        [1, "modeler-classic", "AUDITED", "keep"],
+        [2, "modeler-classic", "OVERFITTED", "checks_failed"],
+        [2, "modeler-classic", "FAILED", "crash"],
+        // Advanced: 1 kept, nothing else — counters must not bleed across agents.
+        [1, "modeler-advanced", "AUDITED", "keep"],
+      ];
+      for (const [round, agent, status, decision] of seeds) {
+        insertExp.run("run-arena-flow", round, agent, "XGBoost", "{}", 0.8, 0.82, `/tmp/${agent}.pkl`, status, decision);
+      }
+      db3.close();
+
+      const { server: svr, baseUrl: url } = await startDashboard();
+      try {
+        const data = await fetchJSON(`${url}/api/pipeline/flow`) as { nodes?: Array<Record<string, unknown>> };
+        const nodes = (data.nodes ?? []) as Array<Record<string, unknown>>;
+        const classic = nodes.find((n) => n.agentId === "arena-modeler-classic");
+        const advanced = nodes.find((n) => n.agentId === "arena-modeler-advanced");
+        assert.ok(classic, "arena-modeler-classic node present");
+        assert.ok(advanced, "arena-modeler-advanced node present");
+        assert.deepEqual(classic.experiments, { kept: 2, rejected: 1, crashed: 1, total: 4 });
+        assert.deepEqual(advanced.experiments, { kept: 1, rejected: 0, crashed: 0, total: 1 });
+      } finally {
+        await stopDashboard(svr);
+      }
+    } finally {
+      process.env.HOME = prevHome;
+      process.env.FORMIGA_DB_PATH = prevDb;
+      fs.rmSync(root3, { recursive: true, force: true });
+    }
+  });
 });
