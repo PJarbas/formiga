@@ -23,8 +23,12 @@ interface EDAReport {
     shape?: [number, number];
     dtypes?: Record<string, number>;
     target_type?: string;
+    target_column?: string;
+    base_rate?: number;
+    class_counts?: Record<string, number>;
     memory_mb?: number;
-    class_balance?: Record<string, number>;
+    id_column?: string;
+    notes?: string;
   };
   data_quality?: {
     missing_pct?: Record<string, number>;
@@ -34,9 +38,11 @@ interface EDAReport {
     sentinel_values?: Record<string, number[]>;
   };
   target_analysis?: {
-    distribution?: string;
-    outliers_pct?: number;
-    suggested_transform?: string;
+    base_rate?: number;
+    imbalance_ratio?: string;
+    temporal_signal?: string;
+    transform_suggestion?: string;
+    rate_by_dt?: Record<string, number>;
   };
   bivariate_vs_target?: {
     top_20_features?: Array<[string, number]>;
@@ -121,6 +127,25 @@ export function DataAnalystInsights({
       Math.max(Object.keys(quality.missing_pct).length, 1)
     : 0;
 
+  // dataset_overview.class_counts — e.g. {"0": 24373, "1": 3152} for binary.
+  const classCounts = overview?.class_counts;
+  const totalCounts = classCounts ? Object.values(classCounts).reduce((a, b) => a + b, 0) : 0;
+  let classSummary: string | undefined;
+  if (classCounts && totalCounts > 0) {
+    if (classCounts["1"] != null) {
+      classSummary = `positive: ${classCounts["1"].toLocaleString()} (${((classCounts["1"] / totalCounts) * 100).toFixed(1)}%)`;
+    } else {
+      const [label, count] = Object.entries(classCounts).sort((a, b) => b[1] - a[1])[0];
+      classSummary = `${label}: ${count.toLocaleString()} (${((count / totalCounts) * 100).toFixed(1)}%)`;
+    }
+  }
+
+  const hasTargetInsights =
+    typeof target?.base_rate === "number" ||
+    !!target?.imbalance_ratio ||
+    !!target?.temporal_signal ||
+    !!target?.transform_suggestion;
+
   return (
     <div className="space-y-5">
       {/* Key Findings Summary */}
@@ -153,15 +178,56 @@ export function DataAnalystInsights({
                   <span className="text-xs text-[var(--text-primary)]">
                     Target: <strong>{overview.target_type}</strong>
                   </span>
-                  {target?.distribution && typeof target.distribution === "string" && (
+                  {overview.target_column && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] font-mono text-[var(--text-secondary)]">
+                      {overview.target_column}
+                    </span>
+                  )}
+                  {classSummary && (
                     <span className="text-[10px] text-[var(--text-muted)]">
-                      ({target.distribution})
+                      ({classSummary})
                     </span>
                   )}
                 </div>
               </InfoBox>
             </div>
           )}
+        </Section>
+      )}
+
+      {/* Target Analysis */}
+      {hasTargetInsights && (
+        <Section title="Target Analysis" icon="🎯">
+          <div className="space-y-2">
+            {(typeof target?.base_rate === "number" || target?.imbalance_ratio) && (
+              <KeyValueList
+                items={[
+                  ...(typeof target?.base_rate === "number"
+                    ? [{ key: "Base rate", value: `${(target.base_rate * 100).toFixed(2)}%` }]
+                    : []),
+                  ...(target?.imbalance_ratio
+                    ? [{ key: "Imbalance", value: target.imbalance_ratio }]
+                    : []),
+                ]}
+              />
+            )}
+
+            {target?.temporal_signal && (
+              <InfoBox variant="warning">
+                <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
+                  {target.temporal_signal}
+                </p>
+              </InfoBox>
+            )}
+
+            {target?.transform_suggestion && (
+              <InfoBox>
+                <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed">
+                  {target.transform_suggestion}
+                </p>
+              </InfoBox>
+            )}
+          </div>
         </Section>
       )}
 
