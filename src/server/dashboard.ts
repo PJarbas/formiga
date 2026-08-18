@@ -662,6 +662,16 @@ function handlePipelineStatus(_req: http.IncomingMessage, res: http.ServerRespon
   })().catch((err) => errorResponse(res, `Failed to get pipeline status: ${(err as Error).message}`));
 }
 
+/**
+ * Normalize an arena agent id ("arena-modeler-classic") to the bare name the
+ * arena persists in experiments ("modeler-classic"). The flow registry keys
+ * nodes with the `arena-` prefix; the arena loop writes experiments using the
+ * unprefixed ARENA_AGENTS id. Mirrors bareAgentName in pipeline-status.ts.
+ */
+function stripArenaPrefix(agentName: string): string {
+  return agentName.replace(/^arena-/, "");
+}
+
 /** GET /api/pipeline/flow — DAG view: nodes with status/harness/artifacts, edges with labels */
 function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse): void {
   (async () => {
@@ -707,18 +717,23 @@ function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse
         };
     const relevantAgents = Object.entries(agentRegistry).filter(([, info]) => info !== undefined);
 
-    // Fetch experiment counters for arena modeler agents
+    // Fetch experiment counters for arena modeler agents. The flow registry
+    // keys nodes as "arena-modeler-*", but the arena persists experiments with
+    // the bare id ("modeler-classic"), so query both forms and match either.
     const arenaAgentIds = relevantAgents
       .map(([name]) => name)
       .filter((name) => name.includes("modeler"));
+    const arenaAgentNames = [...new Set(arenaAgentIds.flatMap((name) => [name, stripArenaPrefix(name)]))];
     let experimentCounters: Record<string, { kept: number; rejected: number; crashed: number; total: number; bestModel?: string; bestMetric?: number }> = {};
-    if (runId && arenaAgentIds.length > 0) {
+    if (runId && arenaAgentNames.length > 0) {
       const arenaExperiments = await getPrisma().experiment.findMany({
-        where: { run_id: runId, agent_name: { in: arenaAgentIds } },
+        where: { run_id: runId, agent_name: { in: arenaAgentNames } },
         orderBy: { created_at: "asc" },
       });
       for (const agentId of arenaAgentIds) {
-        const agentExps = arenaExperiments.filter((e) => e.agent_name === agentId);
+        const agentExps = arenaExperiments.filter(
+          (e) => e.agent_name === agentId || e.agent_name === stripArenaPrefix(agentId),
+        );
         // Kept: passed all gates and was statistically significant (AUDITED + keep/baseline).
         const kept = agentExps.filter((e) => e.status === "AUDITED" && (e.decision === "keep" || e.decision === "baseline")).length;
         // Rejected: any gate rejection (OVERFITTED + checks_failed).
