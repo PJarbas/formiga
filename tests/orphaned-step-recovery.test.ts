@@ -1190,7 +1190,7 @@ describe("US-004: Worker-lifecycle recovery regression tests", () => {
     // trailing prose — the exact shape that wedged run 24cb9c10.
     const assistantOutput = [
       "STATUS: done",
-      "REPO: /home/igorhvr/idm/formiga",
+      "REPO: /home/PJarbas/idm/formiga",
       "BRANCH: feature/test-wedge",
       'STORIES_JSON: [{"id":"US-001","title":"Test","description":"Test story","acceptanceCriteria":["Tests pass","Typecheck passes"]}]',
       "",
