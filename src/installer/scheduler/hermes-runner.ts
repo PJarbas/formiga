@@ -20,52 +20,6 @@ import { buildStreamLogMetadata, safeKillPgid } from "./shared.js";
 import type { RunPiOptions } from "./pi-runner.js";
 import { extractHermesSessionId, getMostRecentHermesSessionId, importHermesSession } from "./hermes-activity-importer.js";
 
-/** Internal helper: stream stdout to a file while keeping a bounded tail in memory. */
-async function streamHermesStdout(
-  stdout: NodeJS.ReadableStream,
-  outputFile: string,
-  maxMemoryBytes = 64 * 1024,
-): Promise<{ memoryTail: string; totalBytes: number; lines: number }> {
-  await fs.promises.mkdir(path.dirname(outputFile), { recursive: true });
-  const writeStream = fs.createWriteStream(outputFile);
-
-  let totalBytes = 0;
-  let lines = 0;
-  const memoryBuffer: string[] = [];
-  let memoryBytes = 0;
-
-  for await (const chunk of stdout) {
-    const str = (chunk as Buffer).toString("utf-8");
-    const chunkBytes = Buffer.byteLength(str, "utf-8");
-    totalBytes += chunkBytes;
-
-    if (!writeStream.write(str)) {
-      await new Promise<void>((resolve) => writeStream.once("drain", resolve));
-    }
-
-    const chunkLines = str.split(/\r?\n/);
-    for (const line of chunkLines) {
-      memoryBuffer.push(line);
-      lines++;
-      const lineBytes = Buffer.byteLength(line, "utf-8") + 1;
-      memoryBytes += lineBytes;
-
-      while (memoryBytes > maxMemoryBytes && memoryBuffer.length > 1) {
-        const dropped = memoryBuffer.shift()!;
-        memoryBytes -= Buffer.byteLength(dropped, "utf-8") + 1;
-      }
-    }
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    writeStream.on("finish", resolve);
-    writeStream.on("error", reject);
-    writeStream.end();
-  });
-
-  return { memoryTail: memoryBuffer.join("\n"), totalBytes, lines };
-}
-
 /** Internal helper: read the tail of a file. */
 async function readTail(filePath: string, maxBytes = 512 * 1024): Promise<string> {
   try {
@@ -165,36 +119,41 @@ export async function runHermes(
   let totalStdoutBytes = 0;
   let usedDiskStreaming = false;
 
+  let writeStream: fs.WriteStream | null = null;
   if (options.outputFile) {
-    const maxMemoryKb = parseInt(process.env.FORMIGA_PI_OUTPUT_MAX_MEMORY_KB ?? "64", 10);
-    const maxMemoryBytes = Math.max(4 * 1024, maxMemoryKb * 1024);
-    const result = await streamHermesStdout(child.stdout!, options.outputFile, maxMemoryBytes);
-    totalStdoutBytes = result.totalBytes;
-    rawStdout = result.memoryTail;
     usedDiskStreaming = true;
-  } else {
-    // Legacy: collect stdout fully in memory (10MB cap)
-    let stdoutPieces: string[] = [];
-    let stdoutBytes = 0;
-    const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
-    child.stdout?.on("data", (chunk: Buffer) => {
-      const str = chunk.toString("utf-8");
-      if (stdoutBytes + Buffer.byteLength(str, "utf-8") <= MAX_STDOUT_BYTES) {
-        stdoutPieces.push(str);
-        stdoutBytes += Buffer.byteLength(str, "utf-8");
-      }
-    });
-
-    // Wait for data collection and child exit simultaneously
-    await new Promise<void>((resolve) => {
-      child.stdout?.on("end", resolve);
-      child.stdout?.on("close", resolve);
-    });
-    rawStdout = stdoutPieces.join("");
-    totalStdoutBytes = stdoutBytes;
+    await fs.promises.mkdir(path.dirname(options.outputFile), { recursive: true });
+    writeStream = fs.createWriteStream(options.outputFile);
   }
 
-  // Wait for child exit, with timeout guard.
+  // Collect stdout in the background. Node's 'close' event fires only after
+  // all stdio streams have flushed, so the buffers are complete once the exit
+  // gate below resolves — no separate unbounded wait is needed. (The old
+  // unbounded wait on stdout 'end'/'close' let a child that never emitted
+  // stdout skip the timeout guard entirely and hang forever.)
+  let stdoutPieces: string[] = [];
+  let stdoutBytes = 0;
+  const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
+  child.stdout?.on("data", (chunk: Buffer) => {
+    const str = chunk.toString("utf-8");
+    const bytes = Buffer.byteLength(str, "utf-8");
+    totalStdoutBytes += bytes;
+    if (writeStream) {
+      // Backpressure: pause the child's stdout while the file write drains.
+      const ok = writeStream.write(str);
+      if (!ok) {
+        child.stdout?.pause();
+        writeStream.once("drain", () => child.stdout?.resume());
+      }
+    } else if (stdoutBytes + bytes <= MAX_STDOUT_BYTES) {
+      stdoutPieces.push(str);
+      stdoutBytes += bytes;
+    }
+  });
+
+  // Wait for child exit, with timeout guard. The single gate governs the
+  // whole invocation — including stdout collection — so a silent child
+  // (no stdout, slow to exit) is still bounded by `timeoutMs`.
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
@@ -206,6 +165,7 @@ export async function runHermes(
       } else {
         try { child.kill("SIGKILL"); } catch { /* best effort */ }
       }
+      writeStream?.destroy();
       reject(new Error(`hermes timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
@@ -213,6 +173,7 @@ export async function runHermes(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      writeStream?.destroy();
       reject(err);
     });
     child.on("close", (code, signal) => {
@@ -241,6 +202,16 @@ export async function runHermes(
       }
     });
   });
+
+  // Flush buffered writes to the output file before reading it back.
+  if (writeStream) {
+    await new Promise<void>((resolve, reject) => {
+      writeStream.once("finish", resolve);
+      writeStream.once("error", reject);
+      writeStream.end();
+    });
+  }
+  rawStdout = stdoutPieces.join("");
 
   const durationMs = Date.now() - startedAt;
   const stderrOut = stderrPieces.join("");
