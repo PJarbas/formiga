@@ -1,9 +1,10 @@
 // ══════════════════════════════════════════════════════════════════════
-// binary-discovery.ts — Locate pi / hermes binaries on disk
+// binary-discovery.ts — Locate pi / hermes / opencode binaries on disk
 // ══════════════════════════════════════════════════════════════════════
 //
 // Resolution order for each binary:
-//   1. Explicit env override (FORMIGA_PI_BINARY / FORMIGA_HERMES_BINARY)
+//   1. Explicit env override (FORMIGA_PI_BINARY / FORMIGA_HERMES_BINARY /
+//      FORMIGA_OPENCODE_BINARY)
 //   2. Each directory on PATH
 // Throws if neither yields an executable.
 // ══════════════════════════════════════════════════════════════════════
@@ -72,6 +73,39 @@ export function findHermesBinary(): string {
 
   throw new Error(
     "hermes binary not found in PATH. Install hermes or set FORMIGA_HERMES_BINARY."
+  );
+}
+
+// ── opencode binary discovery ──────────────────────────────────────────
+
+export async function findOpencodeBinary(): Promise<string> {
+  // Prefer explicit env override
+  const envOpencode = process.env.FORMIGA_OPENCODE_BINARY?.trim();
+  if (envOpencode) {
+    try {
+      fs.accessSync(envOpencode, fs.constants.X_OK);
+      return envOpencode;
+    } catch {
+      throw new Error(
+        `FORMIGA_OPENCODE_BINARY set but not executable: ${envOpencode}`
+      );
+    }
+  }
+
+  // Search PATH
+  const pathDirs = (process.env.PATH ?? "").split(path.delimiter);
+  for (const dir of pathDirs) {
+    const candidate = path.join(dir, "opencode");
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // not found in this dir, keep looking
+    }
+  }
+
+  throw new Error(
+    "opencode binary not found in PATH. Install opencode or set FORMIGA_OPENCODE_BINARY."
   );
 }
 

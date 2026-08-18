@@ -195,8 +195,8 @@ export interface AgentInfo {
   phase: PipelinePhase;
   /** Step ID in the `steps` table */
   stepId: string;
-  /** Harness type: pi (direct) or hermes (workflow-driven) */
-  harness: "pi" | "hermes" | "unknown";
+  /** Harness type: pi (direct), hermes or opencode (workflow-driven) */
+  harness: "pi" | "hermes" | "opencode" | "unknown";
   /** Output artifacts produced by this agent */
   artifactsOut: string[];
   /** Pending inter-agent messages count */
@@ -297,7 +297,7 @@ export interface PipelineFlowNode {
   agentId: string;
   label: string;
   status: DashboardAgentStatus;
-  harness: "pi" | "hermes" | "unknown";
+  harness: "pi" | "hermes" | "opencode" | "unknown";
   phase: PipelinePhase;
   artifactsOut: string[];
   messagesCount: number;

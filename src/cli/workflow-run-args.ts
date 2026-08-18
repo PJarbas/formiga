@@ -5,7 +5,31 @@ export interface WorkflowRunArgs {
   worktreeOriginRef?: string;
   noHurrySaveTokensMode?: boolean;
   noRelaunchUponRugpull?: boolean;
-  harnessAs?: "pi" | "hermes";
+  harnessAs?: "pi" | "hermes" | "opencode";
+}
+
+/**
+ * Map a `--*-as-harness` flag onto its harness type, enforcing mutual
+ * exclusion. Returns the harness type when `token` is a harness flag,
+ * undefined otherwise. Throws when a second harness flag is seen.
+ */
+function parseHarnessFlag(
+  token: string,
+  current: "pi" | "hermes" | "opencode" | undefined,
+): "pi" | "hermes" | "opencode" | undefined {
+  const flagMap: Record<string, "pi" | "hermes" | "opencode"> = {
+    "--pi-as-harness": "pi",
+    "--hermes-as-harness": "hermes",
+    "--opencode-as-harness": "opencode",
+  };
+  const harness = flagMap[token];
+  if (!harness) return undefined;
+  if (current !== undefined) {
+    throw new Error(
+      "Cannot specify more than one of --pi-as-harness, --hermes-as-harness, --opencode-as-harness. Choose one harness.",
+    );
+  }
+  return harness;
 }
 
 export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
@@ -15,7 +39,7 @@ export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
   let worktreeOriginRef: string | undefined;
   let noHurrySaveTokensMode: boolean | undefined;
   let noRelaunchUponRugpull: boolean | undefined;
-  let harnessAs: "pi" | "hermes" | undefined;
+  let harnessAs: "pi" | "hermes" | "opencode" | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
@@ -30,23 +54,9 @@ export function parseWorkflowRunArgs(args: string[]): WorkflowRunArgs {
       continue;
     }
 
-    if (token === "--pi-as-harness") {
-      if (harnessAs !== undefined) {
-        throw new Error(
-          "Cannot specify both --pi-as-harness and --hermes-as-harness. Choose one harness.",
-        );
-      }
-      harnessAs = "pi";
-      continue;
-    }
-
-    if (token === "--hermes-as-harness") {
-      if (harnessAs !== undefined) {
-        throw new Error(
-          "Cannot specify both --pi-as-harness and --hermes-as-harness. Choose one harness.",
-        );
-      }
-      harnessAs = "hermes";
+    const harnessFlag = parseHarnessFlag(token, harnessAs);
+    if (harnessFlag) {
+      harnessAs = harnessFlag;
       continue;
     }
 

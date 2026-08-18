@@ -100,6 +100,8 @@ export async function createAgentCronJob(
       const ctx = JSON.parse(runRow.context) as Record<string, unknown>;
       if (ctx.harness_type === "hermes") {
         harnessType = "hermes";
+      } else if (ctx.harness_type === "opencode") {
+        harnessType = "opencode";
       }
     }
   } catch {

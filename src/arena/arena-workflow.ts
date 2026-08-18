@@ -3,7 +3,8 @@
 //    When the workflow pipeline reaches the "arena" step, this module:
 //      1. Reads runtime context (benchmark config, workspace path, run settings)
 //      2. Builds an ArenaConfig
-//      3. Invokes runArena() with a Pi-based runAgentsParallel harness
+//      3. Invokes runArena() with a runAgentsParallel harness chosen from the
+//         run's harness_type context (pi default, opencode/hermes opt-in)
 //      4. On completion, calls completeStep() so the pipeline advances normally.
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -13,6 +14,7 @@ import { getPrisma } from "../database/prisma.js";
 import { logger } from "../lib/logger.js";
 import { createHarnessRunner } from "../installer/scheduler/harness-runner.js";
 import type { HarnessRunner } from "../installer/scheduler/harness-runner.js";
+import type { HarnessType } from "../installer/types.js";
 import { resolveFormigaAgentToolsExtension } from "../installer/paths.js";
 import { completeStep } from "../installer/steps/complete.js";
 import { emitEvent } from "../installer/events.js";
@@ -357,6 +359,33 @@ function createRunAgentsParallel(runner: HarnessRunner) {
   };
 }
 
+// ── Harness resolution ─────────────────────────────────────────
+
+/**
+ * Read the harness_type from the run's context JSON, mirroring the scheduler
+ * path (cron-manager.ts). Defaults to "pi" when absent or unreadable.
+ */
+async function resolveRunHarnessType(runId: string): Promise<HarnessType> {
+  try {
+    const prisma = getPrisma();
+    const run = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { context: true },
+    });
+    if (run?.context) {
+      const ctx = JSON.parse(run.context) as Record<string, unknown>;
+      if (ctx.harness_type === "hermes") return "hermes";
+      if (ctx.harness_type === "opencode") return "opencode";
+    }
+  } catch (err) {
+    logger.warn("Arena resolveRunHarnessType: failed to read run context, using pi", {
+      runId,
+      error: String(err),
+    });
+  }
+  return "pi";
+}
+
 // ── Config builder ─────────────────────────────────────────────
 
 async function buildArenaConfig(runId: string): Promise<ArenaConfig | null> {
@@ -504,9 +533,12 @@ async function launchArenaFromStepInner(
     const repo = new ArenaRepositoryImpl();
     const leaderboardRepo = new LeaderboardRepositoryImpl();
 
-    // Resolve PI extension path for agent tools.
-    const extensionPath = resolveFormigaAgentToolsExtension();
-    const runner = createHarnessRunner("pi", {
+    // Resolve harness from run context (default "pi"). Only pi uses the
+    // formiga-agent-tools extension; opencode/hermes run without it.
+    const harnessType = await resolveRunHarnessType(runId);
+    const extensionPath =
+      harnessType === "pi" ? resolveFormigaAgentToolsExtension() : null;
+    const runner = createHarnessRunner(harnessType, {
       ...(extensionPath ? { harnessSpecific: { extensionPath } } : {}),
     });
 
