@@ -358,7 +358,7 @@ export const ML_PIPELINE_AGENTS: Record<string, AgentInfo> = {
     phase: "feature_engineering",
     stepId: "features",
     harness: "pi",
-    artifactsOut: ["features_metadata", "split_config", "baseline_submission", "preprocessing_config"],
+    artifactsOut: ["features_metadata", "split_config", "baseline_submission", "features_report", "preprocessing_config"],
     messagesCount: 0,
   },
   "modeler-classic": {
@@ -422,7 +422,7 @@ export const ML_AUTORESEARCH_AGENTS: Record<string, AgentInfo> = {
     phase: "feature_engineering",
     stepId: "features",
     harness: "pi",
-    artifactsOut: ["features_metadata", "split_config", "baseline_submission", "benchmark_config", "preprocessing_config"],
+    artifactsOut: ["features_metadata", "split_config", "baseline_submission", "benchmark_config", "features_report", "preprocessing_config"],
     messagesCount: 0,
   },
   "arena-modeler-classic": {

@@ -289,6 +289,7 @@ function InsightsContent({ agentId, artifacts, reasoning, keyDecisions, figures,
         splitConfig={getArtifact("split_config") as Parameters<typeof FeatureEngineerInsights>[0]["splitConfig"]}
         baselineSubmission={getArtifact("baseline_submission") as Parameters<typeof FeatureEngineerInsights>[0]["baselineSubmission"]}
         benchmarkConfig={getArtifact("benchmark_config") as Parameters<typeof FeatureEngineerInsights>[0]["benchmarkConfig"]}
+        featuresReport={getArtifact("features_report") as Parameters<typeof FeatureEngineerInsights>[0]["featuresReport"]}
         hypothesis={reasoning?.hypothesis ?? null}
         figures={figures}
         decisions={decisions}
