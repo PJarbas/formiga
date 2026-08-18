@@ -143,12 +143,14 @@ describe("ArenaService", () => {
       expect(rounds[1].experiments[0].metric).toBe(0.812);
     });
 
-    it("falls back to val_metric when measured_metric is null", async () => {
+    it("keeps metric null when measured_metric is null (no fabricated val_metric)", async () => {
+      // val_metric is 0-filled for crashed arena runs (NOT NULL schema); the
+      // rounds view must not surface that as a real score.
       (leaderboardRepo.getArenaResults as ReturnType<typeof vi.fn>).mockResolvedValue([
-        makeRow({ measured_metric: null, val_metric: 0.70 }),
+        makeRow({ measured_metric: null, val_metric: 0.70, status: "FAILED", decision: "crash" }),
       ]);
       const rounds = await service.getRounds("run-1");
-      expect(rounds[0].experiments[0].metric).toBe(0.70);
+      expect(rounds[0].experiments[0].metric).toBeNull();
     });
   });
 

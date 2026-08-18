@@ -131,11 +131,11 @@ describe("ML Dashboard API", () => {
     const insertArenaExp = db.prepare(`
       INSERT INTO experiments (
         run_id, round_number, agent_name, model_type, hyperparameters,
-        train_metric, val_metric, metric_name, artifact_path, status,
+        train_metric, val_metric, measured_metric, metric_name, artifact_path, status,
         problem_type, metrics_json, fold_scores,
         hypothesis, learned, next_focus,
         error_message, benchmark_exit_code, artifact_script
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     function seedArena(rec: Record<string, unknown>): number {
       const r = insertArenaExp.run(
@@ -146,6 +146,7 @@ describe("ML Dashboard API", () => {
         JSON.stringify(rec.hyperparameters ?? { lr: 0.01 }),
         rec.train_metric ?? 0,
         rec.val_metric ?? 0,
+        rec.measured_metric ?? null,
         rec.metric_name ?? "f1",
         rec.artifact_path ?? `/tmp/arena_${rec.agent_name}.pkl`,
         rec.status ?? "SUCCESS",
@@ -207,6 +208,12 @@ describe("ML Dashboard API", () => {
     arenaIds.failedRuntimeCrash = seedArena({
       round_number: 2, agent_name: "modeler-advanced", status: "FAILED",
       benchmark_exit_code: 1,
+    });
+    // measured_metric ≠ val_metric → leaderboard cvMean must prefer the honest
+    // measured value over the (schema-mandated, possibly 0-filled) val_metric.
+    arenaIds.measuredPref = seedArena({
+      round_number: 1, agent_name: "modeler-advanced",
+      train_metric: 0.9, val_metric: 0.8, measured_metric: 0.87,
     });
 
     // Start server
@@ -309,6 +316,39 @@ describe("ML Dashboard API", () => {
     const data = await fetchJSON(`${baseUrl}/api/leaderboard?sortBy=trainMean&sortDir=asc`) as Record<string, unknown>;
     const entries = data.entries as Array<Record<string, unknown>>;
     assert.ok(entries.length > 0);
+  });
+
+  it("GET /api/leaderboard?status=SUCCESS,AUDITED hides crashed arena runs", async () => {
+    // run-arena-int seeds 3 FAILED rows; the comma-separated filter must keep
+    // them out so the ranking no longer shows 0.0000 metrics.
+    const all = await fetchJSON(`${baseUrl}/api/leaderboard?runId=run-arena-int`) as Record<string, unknown>;
+    const allEntries = all.entries as Array<Record<string, unknown>>;
+    assert.ok(allEntries.some((e) => e.status === "FAILED"), "seed should include FAILED arena rows");
+
+    const data = await fetchJSON(`${baseUrl}/api/leaderboard?runId=run-arena-int&status=SUCCESS,AUDITED`) as Record<string, unknown>;
+    const entries = data.entries as Array<Record<string, unknown>>;
+    assert.ok(entries.length > 0, "validated rows must still be returned");
+    for (const entry of entries) {
+      assert.ok(entry.status === "SUCCESS" || entry.status === "AUDITED", `unexpected status ${entry.status}`);
+    }
+  });
+
+  it("GET /api/leaderboard:cvMean prefers measured_metric over val_metric", async () => {
+    const data = await fetchJSON(`${baseUrl}/api/leaderboard/${arenaIds.measuredPref}`) as Record<string, unknown>;
+    // measured_metric 0.87 wins over the 0.8 val_metric; trainValGap reflects it.
+    // (approx: REAL columns round-trip through SQLite float storage.)
+    assert.ok(Math.abs((data.cvMean as number) - 0.87) < 1e-9, `cvMean ${data.cvMean} ≈ 0.87`);
+    assert.ok(Math.abs((data.trainValGap as number) - 0.03) < 1e-9, `trainValGap ${data.trainValGap} ≈ 0.03`);
+  });
+
+  it("GET /api/leaderboard:cvStd is computed from fold_scores (null when absent)", async () => {
+    // fold_scores [0.8, 0.82, 0.84] → mean 0.82, sample std 0.02.
+    const withFolds = await fetchJSON(`${baseUrl}/api/leaderboard/${arenaIds.script}`) as Record<string, unknown>;
+    assert.ok(Math.abs((withFolds.cvMean as number) - 0.82) < 1e-9, `cvMean ${withFolds.cvMean} ≈ 0.82`);
+    assert.ok(Math.abs((withFolds.cvStd as number) - 0.02) < 1e-9, `cvStd ${withFolds.cvStd} ≈ 0.02`);
+
+    const withoutFolds = await fetchJSON(`${baseUrl}/api/leaderboard/${arenaIds.scriptFallback}`) as Record<string, unknown>;
+    assert.equal(withoutFolds.cvStd, null);
   });
 
   // ── /api/leaderboard/:id ────────────────────────────────────────
