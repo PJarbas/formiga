@@ -203,6 +203,90 @@ describe("runArena — script_missing (empty script)", () => {
   });
 });
 
+// ── Disk-script fallback: the file is the source of truth ───────────────
+// pi --mode json streams an agent's script through bash toolCalls, so the
+// response text the extractor rebuilds rarely contains it — the on-disk file
+// the prompt tells the agent to write (artifacts/models/{id}_round{r}.py) is
+// the reliable fallback. Without it every such round dies as [script_missing]
+// / [agent_no_response] (issue #131).
+
+describe("runArena — disk-script fallback", () => {
+  function prewriteResults(ws: string): void {
+    const dir = modelsDir(ws);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "modeler-classic_round1_results.json"), JSON.stringify({
+      fold_scores: [0.80, 0.82, 0.81],
+      train_score: 0.85,
+      roc_auc: 0.82,
+      f1_score: 0.80,
+      precision: 0.78,
+      recall: 0.77,
+      log_loss: 0.45,
+    }));
+  }
+
+  it("uses the agent's on-disk script when the parsed response has none", async () => {
+    const ws = makeWorkspace();
+    // The agent wrote its script to the canonical path (as the prompt mandates)
+    const dir = modelsDir(ws);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "modeler-classic_round1.py"), 'print("f1: 0.82")');
+    prewriteResults(ws);
+
+    const h = makeHarness();
+    // The response text carries no script — pi streamed it via bash toolCalls.
+    const runAgentsParallel = async () => ({
+      "modeler-classic": { script: "", hypothesis: "h", learned: "", nextFocus: "" },
+    });
+
+    const result = await runArena(makeConfig(ws), h.repo, h.leaderboard, runAgentsParallel);
+
+    assert.equal(result.totalCrash, 0, "the on-disk script must be executed, not failed");
+    const entry = h.leaderboard.registrations[0];
+    assert.notEqual(entry.status, "FAILED");
+    assert.equal(entry.measured_metric, 0.82);
+    assert.ok(!entry.error_message);
+  });
+
+  it("rescues a timed-out agent whose script reached disk before the kill", async () => {
+    const ws = makeWorkspace();
+    const dir = modelsDir(ws);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "modeler-classic_round1.py"), 'print("f1: 0.78")');
+    prewriteResults(ws);
+
+    const h = makeHarness();
+    // output === null — the runner threw (pi timeout) — but the agent finished
+    // writing its script before being killed. The round must proceed, not fail.
+    const runAgentsParallel = async () => ({ "modeler-classic": null });
+
+    const result = await runArena(makeConfig(ws), h.repo, h.leaderboard, runAgentsParallel);
+
+    assert.equal(result.totalCrash, 0, "a rescued on-disk script must not be discarded");
+    const entry = h.leaderboard.registrations[0];
+    assert.notEqual(entry.status, "FAILED");
+    assert.equal(entry.measured_metric, 0.78);
+    assert.ok(!entry.error_message, "a rescued round must not be blamed as [agent_no_response]");
+  });
+
+  it("does not treat a whitespace-only disk file as a runnable script", async () => {
+    const ws = makeWorkspace();
+    const dir = modelsDir(ws);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "modeler-classic_round1.py"), "   \n  \n");
+    const h = makeHarness();
+    const runAgentsParallel = async () => ({
+      "modeler-classic": { script: "", hypothesis: "h", learned: "", nextFocus: "" },
+    });
+
+    await runArena(makeConfig(ws), h.repo, h.leaderboard, runAgentsParallel);
+
+    const entry = h.leaderboard.registrations[0];
+    assert.equal(entry.status, "FAILED");
+    assert.match(entry.error_message!, /\[script_missing\]/);
+  });
+});
+
 // ── Fail-fast: only on a successful benchmark ───────────────────────────
 
 describe("runArena — strict-metrics fail-fast (A4)", () => {
