@@ -5,11 +5,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import App from "./App";
 import Runs from "./screens/Runs";
 import PipelineFlowScreen from "./screens/PipelineFlowScreen";
 import Leaderboard from "./screens/Leaderboard";
+import { KanbanRedirect } from "./components/KanbanRedirect";
 import { ToastContainer } from "./components/Toast";
 import "./index.css";
 
@@ -31,8 +32,8 @@ const router = createBrowserRouter([
       { index: true, element: <Runs /> },
       { path: "pipeline", element: <PipelineFlowScreen /> },
       { path: "leaderboard", element: <Leaderboard /> },
-      { path: "kanban", element: <Navigate to="/pipeline" replace /> },
-      { path: "runs/:id/kanban", element: <Navigate to="/pipeline" replace /> },
+      { path: "kanban", element: <KanbanRedirect /> },
+      { path: "runs/:id/kanban", element: <KanbanRedirect /> },
       { path: "*", element: <Runs /> },
     ],
   },

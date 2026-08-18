@@ -673,9 +673,14 @@ function stripArenaPrefix(agentName: string): string {
 }
 
 /** GET /api/pipeline/flow — DAG view: nodes with status/harness/artifacts, edges with labels */
-function handlePipelineFlow(_req: http.IncomingMessage, res: http.ServerResponse): void {
+function handlePipelineFlow(req: http.IncomingMessage, res: http.ServerResponse): void {
   (async () => {
-    const runId = await findActivePipelineRunId();
+    // #128: follow the ?run= the frontend forwards (e.g. /kanban?run=<id>),
+    // falling back to the active run so the DAG still works when opened
+    // directly with no selection.
+    const url = new URL(req.url ?? "/", "http://localhost");
+    const requestedRunId = url.searchParams.get("run")?.trim();
+    const runId = requestedRunId || (await findActivePipelineRunId());
     let run: any = null;
     const currentRound = runId
       ? (await getPrisma().experiment.aggregate({ where: { run_id: runId }, _max: { round_number: true } }))._max.round_number ?? 0
