@@ -44,9 +44,9 @@ The installer clones the repository into `~/.formiga/repo`, builds it, links the
 ### 2. Prerequisites
 
 * **Node.js 22+** (check with `node -v`)
-* **Coding-Agent Harness:** Formiga leverages an agent harness to run code. Install one of the supported harnesses:
-  * **pi-coding-agent** (Highly Recommended) — Follow the installation steps on [pi](https://github.com/mariozechner/pi-coding-agent)
-  * **hermes** — Excellent alternative for computer-use integrations: [hermes](https://github.com/nousresearch/hermes-agent)
+* **Coding-Agent Harness:** Formiga leverages an agent harness to run code. **pi-coding-agent** is the default and highly recommended — follow the installation steps on [pi](https://github.com/mariozechner/pi-coding-agent). Alternatives are opt-in per run via CLI flag:
+  * **hermes** — Excellent for computer-use integrations: [hermes](https://github.com/nousresearch/hermes-agent) (`--hermes-as-harness`)
+  * **opencode** — Fast open-source agent with native streaming output: [opencode](https://github.com/sst/opencode) (`--opencode-as-harness`)
 
 ### 3. Manual Install (from source)
 
@@ -171,6 +171,12 @@ Once the Arena converges or reaches the round limit, the winning model is crowne
 formiga autoresearch "dataset_path=... target_column=..."
 formiga workflow run ml-pipeline "..."
 
+# Harness selection (default: pi-coding-agent)
+formiga autoresearch "dataset_path=... target_column=..." --opencode-as-harness
+formiga autoresearch "dataset_path=... target_column=..." --hermes-as-harness
+# Optional: point opencode at a specific binary instead of the PATH lookup
+FORMIGA_OPENCODE_BINARY=/path/to/opencode formiga autoresearch "..." --opencode-as-harness
+
 # Run Management
 formiga workflow runs              # List all runs and statuses
 formiga workflow status <id>       # View live status of a run
@@ -250,7 +256,7 @@ CLI (Commands) ──┐
                  ├─ Dashboard Daemon (API :3334 + Control Plane :3339 + Reconciler + Cron)
                  │     │
                  │     ▼
-                 │   Agent Harness (pi or hermes)
+                 │   Agent Harness (pi default | hermes | opencode)
                  │     │
                  │     ▼
                  │   AI Agents (Data Analyst, Feature Engineer, Arena Modelers, Reporter)
