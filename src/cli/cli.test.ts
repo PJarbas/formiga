@@ -287,6 +287,21 @@ describe("parseWorkflowRunArgs", () => {
     assert.equal(result.noRelaunchUponRugpull, true);
     assert.equal(result.workingDirectoryForHarness, "/work");
   });
+
+  // Regression: `formiga autoresearch "<key=value ...>" --opencode-as-harness`
+  // must strip the flag from the task string. Before the fix, autoresearch
+  // joined every token into the task verbatim, so "--opencode-as-harness"
+  // leaked into the task and the run defaulted to harness_type "pi".
+  it("strips --opencode-as-harness from an autoresearch-style task string", () => {
+    const result = parseWorkflowRunArgs([
+      "dataset_path=data/classification.csv",
+      "target_column=species",
+      "--opencode-as-harness",
+    ]);
+    assert.equal(result.taskTitle, "dataset_path=data/classification.csv target_column=species");
+    assert.equal(result.taskTitle.includes("--opencode-as-harness"), false);
+    assert.equal(result.harnessAs, "opencode");
+  });
 });
 
 describe("CLI entrypoint regression: no ExperimentalWarning", () => {

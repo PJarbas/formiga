@@ -47,14 +47,21 @@ interface SplitConfig {
   n_folds?: number;
 }
 
-/** baseline_submission — lowercase keys, numeric metrics. */
+/** baseline_submission — lowercase keys, numeric metrics.
+ * Two variants exist across runs: the #127 fixture (metric/train_auc_mean/
+ * validation_strategy) and the real agent output (metric_name/train_cv_accuracy
+ * or train_final_accuracy, split described in features_report.cv_strategy).
+ * Both are optional here so the renderer falls back gracefully. */
 interface BaselineSubmission {
   model_type?: string;
   metric?: string;
+  metric_name?: string;
   cv_mean?: number;
   cv_std?: number;
   cv_folds?: number[];
   train_auc_mean?: number;
+  train_cv_accuracy?: number;
+  train_final_accuracy?: number;
   brier_mean?: number;
   hyperparameters?: Record<string, unknown>;
   validation_strategy?: string;
@@ -75,6 +82,8 @@ interface FeaturesReport {
   quality_gate?: { passed?: number; failed?: number; warnings?: number; verdict?: string };
   baseline?: { model_type?: string; cv_mean?: number; cv_std?: number; train_mean?: number; brier?: number };
   baseline_is_competitive?: boolean;
+  /** Human-readable split description, e.g. "StratifiedKFold(n_splits=5, shuffle=True, random_state=42)". */
+  cv_strategy?: string;
 }
 
 interface BenchmarkConfig {
@@ -156,6 +165,14 @@ export function FeatureEngineerInsights({
   const createdFeatures = featuresReport?.created_features ?? [];
   const droppedColumns = featuresReport?.dropped_columns ?? [];
 
+  // Split configuration may come from the structured split_config artifact OR —
+  // when split_config is a binary placeholder (auto-registered from split.pkl as
+  // {path, size}) — from benchmark_config.validation.
+  const splitStrategy = splitConfig?.strategy ?? benchmarkConfig?.validation?.strategy;
+  const splitFolds = splitConfig?.n_folds ?? benchmarkConfig?.validation?.nSplits;
+  const splitRandom = splitConfig?.random_state ?? benchmarkConfig?.validation?.randomState;
+  const hasSplit = !!splitStrategy || splitFolds != null || splitRandom != null;
+
   return (
     <div className="space-y-5">
       {/* Quality Gates */}
@@ -232,7 +249,7 @@ export function FeatureEngineerInsights({
               <div>
                 <span className="text-[var(--text-muted)]">Metric:</span>
                 <span className="ml-1 font-mono text-[var(--accent-blue)]">
-                  {baselineSubmission.metric ?? "—"}
+                  {baselineSubmission.metric ?? baselineSubmission.metric_name ?? "—"}
                 </span>
               </div>
               <div>
@@ -250,7 +267,9 @@ export function FeatureEngineerInsights({
               <div>
                 <span className="text-[var(--text-muted)]">Train Mean:</span>
                 <span className="ml-1 font-mono text-[var(--text-secondary)]">
-                  {baselineSubmission.train_auc_mean?.toFixed(4) ?? "—"}
+                  {(baselineSubmission.train_auc_mean ??
+                    baselineSubmission.train_cv_accuracy ??
+                    baselineSubmission.train_final_accuracy)?.toFixed(4) ?? "—"}
                 </span>
               </div>
             </div>
@@ -270,10 +289,16 @@ export function FeatureEngineerInsights({
                 items={[
                   {
                     key: "Validation",
-                    value: baselineSubmission.validation_strategy ?? "—",
+                    value: baselineSubmission.validation_strategy ?? featuresReport?.cv_strategy ?? "—",
                   },
-                  { key: "Samples", value: baselineSubmission.n_samples?.toLocaleString() ?? "—" },
-                  { key: "Features", value: baselineSubmission.n_features ?? "—" },
+                  {
+                    key: "Samples",
+                    value: (baselineSubmission.n_samples ?? featuresReport?.n_rows_cv)?.toLocaleString() ?? "—",
+                  },
+                  {
+                    key: "Features",
+                    value: baselineSubmission.n_features ?? featuresReport?.feature_count_final ?? "—",
+                  },
                   { key: "Base rate", value: baselineSubmission.base_rate?.toFixed(4) ?? "—" },
                 ]}
               />
@@ -384,13 +409,13 @@ export function FeatureEngineerInsights({
       )}
 
       {/* Split Configuration */}
-      {splitConfig && (
+      {hasSplit && (
         <Section title="Split Configuration" icon="✂️">
           <KeyValueList
             items={[
-              { key: "Strategy", value: splitConfig.strategy ?? "—" },
-              { key: "K-Folds", value: splitConfig.n_folds ?? "—" },
-              { key: "Random State", value: splitConfig.random_state ?? "—" },
+              { key: "Strategy", value: splitStrategy ?? "—" },
+              { key: "K-Folds", value: splitFolds ?? "—" },
+              { key: "Random State", value: splitRandom ?? "—" },
             ]}
           />
         </Section>
