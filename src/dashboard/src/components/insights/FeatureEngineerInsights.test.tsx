@@ -114,4 +114,59 @@ describe("FeatureEngineerInsights", () => {
     renderWithDefaults({ featuresMetadata: null, baselineSubmission: null, featuresReport: null, benchmarkConfig: null });
     expect(screen.getByText(/not complete yet/i)).toBeTruthy();
   });
+
+  // Regression for the real agent schema (run a2038926): baseline_submission uses
+  // metric_name/train_cv_accuracy (not metric/train_auc_mean), split_config is a
+  // binary placeholder ({path,size} from split.pkl), and the split strategy lives
+  // in benchmark_config.validation. Both must render via the fallbacks.
+  it("renders the real agent schema (metric_name/train_cv_accuracy) with split from benchmark_config", () => {
+    const realBaselineSubmission = {
+      model_type: "logistic_regression",
+      metric_name: "accuracy",
+      cv_mean: 0.9567251461988302,
+      cv_std: 0.041285058701105964,
+      train_cv_accuracy: 0.9574468085106383,
+      hyperparameters: { C: 1, solver: "lbfgs", multi_class: "multinomial" },
+      n_features: 7,
+    };
+    const binarySplitConfig = { path: ".../split.pkl", size: 1726 };
+    const realBenchmarkConfig = {
+      type: "multiclass_classification",
+      metric: { name: "accuracy", direction: "higher" },
+      validation: { strategy: "stratified_kfold", nSplits: 5, randomState: 42, shuffle: true },
+      target_column: "species",
+    };
+    const realFeaturesReport = {
+      summary: "Matriz de 7 features com dedup por residualizacao.",
+      feature_count_final: 7,
+      created_features: ["petal_width_resid", "sepal_length_resid"],
+      cv_strategy: "StratifiedKFold(n_splits=5, shuffle=True, random_state=42)",
+    };
+
+    render(
+      <FeatureEngineerInsights
+        featuresMetadata={REAL_FEATURES_METADATA}
+        splitConfig={binarySplitConfig}
+        baselineSubmission={realBaselineSubmission}
+        benchmarkConfig={realBenchmarkConfig}
+        featuresReport={realFeaturesReport}
+        hypothesis={null}
+        figures={[]}
+        decisions={[]}
+        isLoading={false}
+      />,
+    );
+
+    // Baseline via fallback keys
+    expect(screen.getByText("logistic_regression")).toBeTruthy();
+    expect(screen.getByText("accuracy")).toBeTruthy(); // metric_name fallback
+    expect(screen.getByText("0.9567")).toBeTruthy(); // cv_mean toFixed(4)
+    expect(screen.getByText("0.9574")).toBeTruthy(); // train_cv_accuracy fallback
+    // Split configuration derived from benchmark_config.validation, not the
+    // binary split_config placeholder ("stratified_kfold" also shows in the
+    // Benchmark Config Validation row, hence getAllByText).
+    expect(screen.getByText("Split Configuration")).toBeTruthy();
+    expect(screen.getAllByText("stratified_kfold").length).toBeGreaterThan(0);
+    expect(screen.getByText("42")).toBeTruthy();
+  });
 });
