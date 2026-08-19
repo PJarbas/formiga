@@ -884,7 +884,7 @@ function getUsageText(): string {
   return [
     "Run formiga <command> --help for detailed command help.",
     "",
-    "formiga autoresearch \"<dataset_path=... target_column=...>\"",
+    "formiga autoresearch \"<dataset_path=... target_column=...>\" [--opencode-as-harness]",
     "                                      Start ML AutoResearch (alias for workflow run ml-autoresearch)",
     "formiga get-ready                    Install bundled workflows and start dashboard/control plane",
     "formiga uninstall [--force]          Full uninstall",
@@ -1400,14 +1400,32 @@ Examples:
   }
 
   if (group === "autoresearch") {
-    const task = args.slice(1).join(" ");
-    if (!task) {
-      process.stderr.write("Usage: formiga autoresearch \"dataset_path=... target_column=...\"\n");
-      process.stderr.write("Alias for: formiga workflow run ml-autoresearch \"...\"\n");
+    const workflowName = "ml-autoresearch";
+
+    // Parse harness/worktree/rugpull flags the same way `workflow run` does.
+    // Before this, autoresearch joined every token into the task string, so
+    // `--opencode-as-harness` leaked into the task and the run defaulted to
+    // harness_type "pi". Must mirror parseWorkflowRunArgs to strip flags.
+    let runArgs: ReturnType<typeof parseWorkflowRunArgs>;
+    try {
+      runArgs = parseWorkflowRunArgs(args.slice(1));
+    } catch (err) {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
       process.exit(1);
     }
 
-    const workflowName = "ml-autoresearch";
+    if (!runArgs.taskTitle) {
+      process.stderr.write("Usage: formiga autoresearch \"dataset_path=... target_column=...\" [options]\n");
+      process.stderr.write("Alias for: formiga workflow run ml-autoresearch \"...\" [options]\n");
+      process.stderr.write("Options: --pi-as-harness | --hermes-as-harness | --opencode-as-harness\n");
+      process.exit(1);
+    }
+
+    let harnessType: HarnessType | undefined;
+    if (runArgs.harnessAs !== undefined) {
+      harnessType = runArgs.harnessAs as HarnessType;
+    }
+
     if (!existsSync(resolveWorkflowDir(workflowName))) {
       const bundled = await listBundledWorkflows();
       if (bundled.includes(workflowName)) {
@@ -1423,7 +1441,13 @@ Examples:
 
     const result = await runWorkflow({
       workflowId: workflowName,
-      taskTitle: task,
+      taskTitle: runArgs.taskTitle,
+      workingDirectoryForHarness: runArgs.workingDirectoryForHarness,
+      worktreeOriginRepository: runArgs.worktreeOriginRepository,
+      worktreeOriginRef: runArgs.worktreeOriginRef,
+      noHurrySaveTokensMode: runArgs.noHurrySaveTokensMode,
+      noRelaunchUponRugpull: runArgs.noRelaunchUponRugpull,
+      harnessType,
     });
     console.log(`Run: ${result.runId.slice(0, 8)}\nWorkflow: ${result.workflowId}\nTask: ${result.taskTitle}\nStatus: ${result.status}`);
     return;
