@@ -130,4 +130,71 @@ describe("runArena — session heartbeat during agent generation", () => {
       `expected a sustained cadence while agents were generating (window ${genStart}..${genEnd}, beats: ${beats.join(",")})`,
     );
   });
+
+  it("keeps heartbeating while results are being measured (saveCheckpoint window)", async () => {
+    // Change 3: the heartbeat timer is now run-wide (created before the round
+    // loop, cleared after it) instead of wrapping only the generation fan-out.
+    // The previous withHeartbeat wrapper cleared the timer the moment
+    // runAgentsParallel resolved, so a long sequential measurement phase —
+    // which on a real run is where the round's wall-clock time goes — was
+    // unguarded: a daemon reconciler would see the stale session and kill the
+    // arena mid-measurement. Here generation settles instantly and the round
+    // spends 400ms inside saveCheckpoint; with a 20ms interval that yields
+    // ~20 beats strictly inside the measurement window. The old code produces
+    // zero, so this test is decisive.
+    const ws = makeWorkspace();
+    const session = makeSession();
+    const beats: number[] = [];
+    let cpStart = 0;
+    let cpEnd = 0;
+    const repo: ArenaRepository = {
+      getByRunId: async () => session,
+      getById: async () => session,
+      createFromConfig: async () => session,
+      update: async () => {},
+      updateRound: async () => { beats.push(Date.now()); },
+      saveCheckpoint: async () => {
+        cpStart = Date.now();
+        await sleep(400);
+        cpEnd = Date.now();
+      },
+      updateStats: async () => {},
+      finalize: async () => { session.status = "converged"; },
+      setBaseline: async () => {},
+      setNoiseFloor: async () => {},
+    };
+    const leaderboard: {
+      registrations: ArenaExperiment[];
+      registerArena: (entry: ArenaExperiment) => Promise<number>;
+      getBestByDatasetSignature: () => Promise<Array<{ model_type: string; hyperparameters: Record<string, unknown>; val_metric: number }>>;
+    } = {
+      registrations: [],
+      registerArena: async () => 1,
+      getBestByDatasetSignature: async () => [],
+    };
+
+    // No LLM wait at all — generation resolves immediately (null → crash).
+    const runAgentsParallel = async () => ({ "modeler-classic": null as const });
+
+    const config: ArenaConfig = {
+      runId: "run-heartbeat-test",
+      workspacePath: ws,
+      metricName: "f1",
+      metricDirection: "higher",
+      maxRounds: 1,
+      maxNoImprove: 5,
+      commitOnKeep: false,
+      revertOnDiscard: false,
+      agents: [{ id: "modeler-classic", agentPersona: "modeler_classic", timeout: 300_000, strategyHint: "teste", modelType: "lightgbm" }],
+      heartbeatIntervalMs: 20,
+    };
+
+    await runArena(config, repo, leaderboard, runAgentsParallel);
+
+    const inMeasurement = beats.filter((b) => b > cpStart && b < cpEnd);
+    assert.ok(
+      inMeasurement.length >= 3,
+      `expected heartbeats strictly inside the measurement window (${cpStart}..${cpEnd}), got ${inMeasurement.length}; beats: ${beats.join(",")}`,
+    );
+  });
 });

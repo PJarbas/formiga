@@ -26,6 +26,7 @@ import crypto from "node:crypto";
 import { logger } from "../lib/logger.js";
 import { getPrisma } from "../database/prisma.js";
 import { emitEvent } from "../installer/events.js";
+import { handleStuckArenaSteps } from "./arena-recovery.js";
 
 export const DEFAULT_CONTROL_PORT = 3339;
 const DEFAULT_MAX_ACTIVE_TIMERS = 50;
@@ -979,86 +980,14 @@ export function startReconciler(): { stop: () => void } {
       await admitQueuedRuns();
 
       // ── Arena Step Stuck Detection & Re-admission ──────────────────
-      // Arena steps don't use claim_pid (they run in-process via launchArenaFromStep).
-      // If an arena step is "running" but has no claim_pid and hasn't updated in
-      // ARENA_STUCK_THRESHOLD_MINUTES, it's likely stuck — most commonly because
-      // the daemon died mid-run (the step and session survive in the DB).
-      // IMPORTANT: We must also check arena_sessions.updated_at since the arena
-      // engine updates the session on every round, not the step itself.
-      //
-      // Re-admission (AL-4): a session still "running" with a persisted
-      // checkpoint is resumable — re-launch the engine so runArena restores the
-      // checkpoint and continues from the last completed round, instead of
-      // killing the run. Only sessions with NO checkpoint fall through to the
-      // mark-failed path below.
-      try {
-        const ARENA_STUCK_THRESHOLD_MINUTES = parseInt(process.env.FORMIGA_ARENA_STUCK_THRESHOLD_MINUTES ?? "10", 10) || 10;
-        const ARENA_STUCK_THRESHOLD_MS = ARENA_STUCK_THRESHOLD_MINUTES * 60 * 1000;
-        const arenaCutoff = new Date(Date.now() - ARENA_STUCK_THRESHOLD_MS);
-        const stuckArenaSteps = await prisma.step.findMany({
-          where: {
-            status: "running",
-            step_id: "arena",
-            claim_pid: null,
-            updated_at: { lt: arenaCutoff },
-            run: { status: "running" },
-          },
-          select: { id: true, step_id: true, run_id: true, updated_at: true },
-        });
-
-        for (const step of stuckArenaSteps) {
-          // Check if there's an active arena session with recent activity
-          const arenaSession = await prisma.arenaSession.findUnique({
-            where: { run_id: step.run_id },
-            select: { updated_at: true, status: true, state_json: true },
-          });
-
-          // Skip if arena session exists and was updated recently (arena is still active)
-          if (arenaSession && arenaSession.status === "running" && arenaSession.updated_at > arenaCutoff) {
-            logger.info(
-              `control-server: arena step ${step.id} (run ${step.run_id.slice(0, 8)}) has active session (last update: ${arenaSession.updated_at.toISOString()}) — skipping stuck detection`,
-            );
-            continue;
-          }
-
-          // AL-4 re-admission: a session still "running" with a persisted
-          // checkpoint means the daemon restarted mid-run. The engine is gone
-          // (updated_at is stale) but the run is resumable — re-launch
-          // launchArenaFromStep, whose runArena restores the checkpoint and
-          // continues from the last completed round. Fire-and-forget: the
-          // launch can run for hours and must not block the reconciler tick.
-          // launchArenaFromStep's activeArenaRuns guard makes concurrent
-          // re-admission of the same run a no-op.
-          if (arenaSession && arenaSession.status === "running" && arenaSession.state_json) {
-            logger.warn(
-              `control-server: arena step ${step.id} (run ${step.run_id.slice(0, 8)}) has a resumable checkpoint — re-admitting via launchArenaFromStep`,
-            );
-            const { launchArenaFromStep } = await import("../arena/arena-workflow.js");
-            launchArenaFromStep(step.run_id, step.id).catch((err) => {
-              logger.warn(
-                `control-server: arena re-admission for run ${step.run_id.slice(0, 8)} failed`,
-                { error: String(err) },
-              );
-            });
-            continue;
-          }
-
-          logger.warn(
-            `control-server: arena step ${step.id} (run ${step.run_id.slice(0, 8)}) stuck in 'running' with no claim_pid since ${step.updated_at.toISOString()} — marking failed`,
-          );
-          const now = new Date();
-          await prisma.step.update({
-            where: { id: step.id },
-            data: { status: "failed", output: `Arena step stuck: no claim_pid and no update for ${ARENA_STUCK_THRESHOLD_MINUTES} minutes. Reconciler auto-recovery.`, updated_at: now },
-          });
-          await prisma.run.update({
-            where: { id: step.run_id },
-            data: { status: "failed", updated_at: now },
-          });
-        }
-      } catch (err) {
-        logger.warn("control-server: arena stuck-step check failed", { error: String(err) });
-      }
+      // Extracted to src/server/arena-recovery.ts so the decision tree
+      // (active-session skip / re-admission / fail) is unit-testable. The
+      // threshold (FORMIGA_ARENA_STUCK_THRESHOLD_MINUTES, default 30) is a
+      // LIVENESS detector, not a runtime cap: while the engine is alive its
+      // session heartbeat keeps arena_sessions.updated_at fresh, so a slow
+      // but healthy multi-round run is never touched — the detector only
+      // fires once the session is genuinely silent.
+      await handleStuckArenaSteps(prisma);
 
       // ── Stale Pending Step Recovery ──────────────────────────────────
       // Re-nudge runs that have steps stuck in "pending" without any claim.

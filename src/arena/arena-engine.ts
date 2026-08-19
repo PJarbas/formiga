@@ -338,29 +338,6 @@ function parseArenaCheckpoint(raw: string | null | undefined): ArenaCheckpoint |
 }
 
 /**
- * Race a task against a periodic heartbeat that runs until the task settles.
- * Used to keep arena_sessions.updated_at fresh while agent generation (a long,
- * LLM-bound wait) is in flight. Without it, the control-server reconciler's
- * stuck detection (session stale for ARENA_STUCK_THRESHOLD_MINUTES) would kill
- * a healthy run whose modelers are simply slow to generate — observed on run
- * 9e8fa741, where the arena was killed before its first experiment was even
- * evaluated. The timer is unref'd so it never holds the process open on its own.
- */
-async function withHeartbeat<T>(
-  task: () => Promise<T>,
-  beat: () => Promise<void>,
-  intervalMs: number,
-): Promise<T> {
-  const timer = setInterval(() => { void beat(); }, intervalMs);
-  timer.unref?.();
-  try {
-    return await task();
-  } finally {
-    clearInterval(timer);
-  }
-}
-
-/**
  * Run the full arena loop.
  */
 export async function runArena(
@@ -586,41 +563,49 @@ export async function runArena(
 
   // 3. Round loop — resumes from the last completed round on a restarted run
   const startRound = session.currentRound + 1;
+
+  // ── Session heartbeat (reconciler stuck-detection guard) ─────────────
+  // One unref'd timer for the WHOLE run, cleared when the loop settles. It
+  // keeps arena_sessions.updated_at fresh across both long waits — agent
+  // generation (a pure LLM round-trip) and sequential measurement (a single
+  // experiment can exceed the threshold on its own; updateStats only runs
+  // after each experiment finishes). Without it, the control-server
+  // reconciler's stuck detection (session stale for
+  // ARENA_STUCK_THRESHOLD_MINUTES) would kill a healthy run that is simply
+  // slow — observed on run 9e8fa741, where the arena was killed before its
+  // first experiment was even evaluated. updateRound at round end keeps the
+  // session fresh between rounds. Idempotent: updateRound rewrites the
+  // in-memory round state unchanged; best effort — a failed heartbeat must
+  // never kill the arena.
+  const touchSession = async (): Promise<void> => {
+    try {
+      await repo.updateRound(
+        session.id,
+        session.currentRound,
+        session.bestMetric,
+        session.bestAgent,
+        session.bestExperimentId,
+        session.consecutiveNoImprove,
+      );
+    } catch {
+      // Best effort — a failed heartbeat must never kill the arena.
+    }
+  };
+  await touchSession();
+  const heartbeatTimer = setInterval(
+    () => { void touchSession(); },
+    config.heartbeatIntervalMs ?? 3 * 60 * 1000,
+  );
+  heartbeatTimer.unref?.();
+
   for (let round = startRound; round <= config.maxRounds; round++) {
     session.currentRound = round;
 
     // Build prompts with dataset context for complexity-aware generation
     const prompts = buildPromptsForRound(config, session, allResults, datasetCtx, warmStartHints, activeAgents, agentPersonas);
 
-    // ── Session heartbeat (reconciler stuck-detection guard) ─────────────
-    // The session normally bumps on experiment evaluation (updateStats) and at
-    // round end, but the agent generation wait below is a pure LLM round-trip
-    // that can take well over 10 minutes. Touch the session at round start and
-    // every few minutes while agents generate, so the reconciler only marks the
-    // step stuck when the engine is genuinely dead. Idempotent: updateRound
-    // rewrites the in-memory round state unchanged.
-    const touchSession = async (): Promise<void> => {
-      try {
-        await repo.updateRound(
-          session.id,
-          session.currentRound,
-          session.bestMetric,
-          session.bestAgent,
-          session.bestExperimentId,
-          session.consecutiveNoImprove,
-        );
-      } catch {
-        // Best effort — a failed heartbeat must never kill the arena.
-      }
-    };
-    await touchSession();
-
     // Fan-out: run all agents in parallel
-    const agentOutputs = await withHeartbeat(
-      () => runAgentsParallel(prompts, config),
-      touchSession,
-      config.heartbeatIntervalMs ?? 3 * 60 * 1000,
-    );
+    const agentOutputs = await runAgentsParallel(prompts, config);
 
     // Measure sequentially (resource contention)
     const roundResults: AgentRoundResult[] = [];
@@ -965,6 +950,11 @@ export async function runArena(
       break;
     }
   }
+
+  // Stop the run-wide heartbeat — the loop has settled (converged, target
+  // reached, or max_rounds). If the loop threw, the unref'd timer leaks but
+  // that is harmless: the host process is exiting anyway.
+  clearInterval(heartbeatTimer);
 
   if (stopReason === "max_rounds") {
     await repo.finalize(session.id, "max_rounds");
