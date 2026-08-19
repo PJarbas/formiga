@@ -48,10 +48,10 @@ interface SplitConfig {
 }
 
 /** baseline_submission — lowercase keys, numeric metrics.
- * Two variants exist across runs: the #127 fixture (metric/train_auc_mean/
- * validation_strategy) and the real agent output (metric_name/train_cv_accuracy
- * or train_final_accuracy, split described in features_report.cv_strategy).
- * Both are optional here so the renderer falls back gracefully. */
+ * Variants seen across runs: the #127 fixture (metric/train_auc_mean/
+ * validation_strategy), the real agent output (metric_name/train_cv_accuracy),
+ * and a third variant (metric/train_accuracy, split in features_report
+ * .cv_strategy). All are optional here so the renderer falls back gracefully. */
 interface BaselineSubmission {
   model_type?: string;
   metric?: string;
@@ -62,6 +62,7 @@ interface BaselineSubmission {
   train_auc_mean?: number;
   train_cv_accuracy?: number;
   train_final_accuracy?: number;
+  train_accuracy?: number;
   brier_mean?: number;
   hyperparameters?: Record<string, unknown>;
   validation_strategy?: string;
@@ -269,7 +270,9 @@ export function FeatureEngineerInsights({
                 <span className="ml-1 font-mono text-[var(--text-secondary)]">
                   {(baselineSubmission.train_auc_mean ??
                     baselineSubmission.train_cv_accuracy ??
-                    baselineSubmission.train_final_accuracy)?.toFixed(4) ?? "—"}
+                    baselineSubmission.train_final_accuracy ??
+                    baselineSubmission.train_accuracy ??
+                    featuresReport?.baseline?.train_mean)?.toFixed(4) ?? "—"}
                 </span>
               </div>
             </div>
