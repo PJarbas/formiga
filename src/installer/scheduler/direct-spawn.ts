@@ -10,6 +10,8 @@
 // agent pickup (previously up to 5–15 min cron interval).
 // ══════════════════════════════════════════════════════════════════════
 
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { getPrisma } from "../../db.js";
 import { logger } from "../../lib/logger.js";
 import { resolveWorkflowDir } from "../paths.js";
@@ -47,16 +49,17 @@ export async function spawnAgentsForPendingSteps(runId: string): Promise<void> {
   // Handle arena steps inline, before launching any PI cron jobs.
   for (const step of pendingSteps) {
     if (step.step_id === "arena") {
-      try {
-        const { launchArenaFromStep } = await import("../../arena/arena-workflow.js");
-        await launchArenaFromStep(runId, step.id);
-      } catch (err) {
-        logger.error("direct-spawn: arena launch failed", {
-          runId,
-          stepId: step.id,
-          error: String(err),
-        });
-      }
+      // Mark the step running HERE, in the parent, before spawning the
+      // detached arena host. The arena step is owned by the feature-engineer
+      // agent_id and is claim-eligible while "pending" (see claim.ts), so a
+      // lingering feature-engineer cron could otherwise claim it in the
+      // window before the detached process marks it running. launchArenaFromStep
+      // re-marks it running in the child (idempotent).
+      await prisma.step.update({
+        where: { id: step.id },
+        data: { status: "running", updated_at: new Date() },
+      });
+      spawnArenaProcess(runId, step.id);
       return; // Arena step fully owns this pipeline segment; nothing else to spawn.
     }
   }
@@ -167,6 +170,79 @@ export async function spawnAgentsForPendingSteps(runId: string): Promise<void> {
       }
     }
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Detached arena host process
+// ══════════════════════════════════════════════════════════════════════
+
+export interface SpawnArenaProcessOptions {
+  /** Node binary used to run the arena host. Defaults to process.execPath. */
+  nodePath?: string;
+  /**
+   * Path to the compiled arena-process entry. Defaults to
+   * dist/arena/arena-process.js (resolved relative to this module), falling
+   * back to FORMIGA_ARENA_PROCESS_SCRIPT (a test seam so branch-level tests
+   * can substitute a fake arena host without touching the arena branch's
+   * call site).
+   */
+  scriptPath?: string;
+}
+
+/**
+ * Launch the arena engine in a detached child process so the caller returns
+ * immediately instead of running the arena in-process.
+ *
+ * Previously direct-spawn awaited launchArenaFromStep inline, so the arena
+ * ran inside the `formiga step complete` CLI subprocess — a descendant of
+ * the agent's harness spawned via its Bash tool. The arena's multi-round
+ * modeler runs kept that subprocess's event loop alive for many minutes, so
+ * the harness's bash call never resolved and (with the main process never
+ * exiting) the harness run itself never resolved (run 77cb1ea6). Hosting
+ * the arena in its own detached process fixes that, and gives the arena a
+ * healthy event loop so the heartbeat and per-agent timeouts fire — the
+ * frozen heartbeat that let the reconciler kill a working arena was a
+ * symptom of running inside the wedged CLI process.
+ *
+ * The child is spawned detached with stdio ignored and unref'd, so this
+ * process is never kept alive by the arena, and the arena is never blocked
+ * on this process's stdio pipes.
+ */
+export function spawnArenaProcess(
+  runId: string,
+  stepId: string,
+  opts: SpawnArenaProcessOptions = {},
+): { pid: number | undefined } {
+  const nodePath = opts.nodePath ?? process.execPath;
+  const scriptPath =
+    opts.scriptPath ??
+    process.env.FORMIGA_ARENA_PROCESS_SCRIPT ??
+    fileURLToPath(new URL("../../arena/arena-process.js", import.meta.url));
+
+  const child = spawn(nodePath, [scriptPath, runId, stepId], {
+    detached: true,
+    stdio: "ignore",
+  });
+
+  child.on("error", (err) => {
+    logger.error("direct-spawn: failed to spawn detached arena process", {
+      runId,
+      stepId,
+      scriptPath,
+      error: String(err),
+    });
+  });
+
+  child.unref();
+
+  logger.info("direct-spawn: arena launched in detached process", {
+    runId,
+    stepId,
+    arenaProcessPid: child.pid ?? null,
+    scriptPath,
+  });
+
+  return { pid: child.pid };
 }
 
 /**
