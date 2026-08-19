@@ -27,6 +27,14 @@ export interface ArenaConfig {
   datasetSignature?: string;
   /** Formiga API base URL for artifact access (e.g., http://localhost:3334) */
   formigaApi?: string;
+  /**
+   * Session heartbeat cadence while agents generate (reconciler stuck-detection
+   * guard). The engine touches arena_sessions.updated_at at round start and on
+   * every tick during the agent-generation wait, so a healthy LLM-bound round is
+   * never marked "stuck" by the control server. Defaults to 3 minutes. Tunable
+   * by operators; tests use a short interval to exercise the path cheaply.
+   */
+  heartbeatIntervalMs?: number;
 }
 
 export interface ArenaAgentConfig {

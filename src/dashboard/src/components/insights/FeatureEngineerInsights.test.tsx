@@ -169,4 +169,85 @@ describe("FeatureEngineerInsights", () => {
     expect(screen.getAllByText("stratified_kfold").length).toBeGreaterThan(0);
     expect(screen.getByText("42")).toBeTruthy();
   });
+
+  // Regression for the third variant (run 9e8fa741): baseline_submission uses
+  // metric/train_accuracy (train mean NOT in the train_cv_accuracy family),
+  // features_report carries baseline.train_mean as the fallback, and the split
+  // strategy is "kfold". Train Mean must still render instead of "—".
+  it("renders train_accuracy with features_report.baseline.train_mean fallback and kfold split", () => {
+    const thirdVariantBaselineSubmission = {
+      model_type: "baseline-logistic_regression",
+      metric: "accuracy",
+      cv_mean: 0.9704761904761906,
+      cv_std: 0.024121762175074193,
+      train_accuracy: 0.9803921568627451,
+      hyperparameters: { solver: "lbfgs", max_iter: 2000, random_state: 42 },
+    };
+    const binarySplitConfig = { path: ".../split.pkl", size: 1654 };
+    const thirdVariantBenchmarkConfig = {
+      type: "multiclass_classification",
+      metric: { name: "accuracy", direction: "higher" },
+      validation: { strategy: "kfold", nSplits: 5, randomState: 42 },
+      target_column: "species",
+    };
+    const thirdVariantFeaturesReport = {
+      summary: "Matriz canonica de 2 features a partir de 150 linhas.",
+      feature_count_final: 2,
+      created_features: ["petal_ratio=petal_length/petal_width"],
+      cv_strategy: "StratifiedKFold(n_splits=5, shuffle=True, random_state=42) sobre train+val (102); holdout 30 e test 18 isolados",
+      baseline: { model_type: "logistic_regression", cv_mean: 0.9704761904761906, cv_std: 0.0241, train_mean: 0.9803921568627452 },
+    };
+
+    render(
+      <FeatureEngineerInsights
+        featuresMetadata={REAL_FEATURES_METADATA}
+        splitConfig={binarySplitConfig}
+        baselineSubmission={thirdVariantBaselineSubmission}
+        benchmarkConfig={thirdVariantBenchmarkConfig}
+        featuresReport={thirdVariantFeaturesReport}
+        hypothesis={null}
+        figures={[]}
+        decisions={[]}
+        isLoading={false}
+      />,
+    );
+
+    // train_accuracy renders directly
+    expect(screen.getByText("baseline-logistic_regression")).toBeTruthy();
+    expect(screen.getByText("0.9804")).toBeTruthy();
+    expect(screen.getByText("0.9705")).toBeTruthy(); // cv_mean toFixed(4)
+    // Split Configuration derived from benchmark_config.validation "kfold"
+    expect(screen.getByText("Split Configuration")).toBeTruthy();
+    expect(screen.getAllByText("kfold").length).toBeGreaterThan(0);
+  });
+
+  it("falls back to features_report.baseline.train_mean when train_accuracy is absent", () => {
+    const noTrainKeyBaseline = {
+      model_type: "logistic_regression",
+      metric_name: "accuracy",
+      cv_mean: 0.9704,
+      // no train_auc_mean / train_cv_accuracy / train_final_accuracy / train_accuracy
+    };
+    const reportWithTrainMean = {
+      summary: "summary",
+      feature_count_final: 2,
+      baseline: { model_type: "logistic_regression", train_mean: 0.9804 },
+    };
+
+    render(
+      <FeatureEngineerInsights
+        featuresMetadata={REAL_FEATURES_METADATA}
+        splitConfig={null}
+        baselineSubmission={noTrainKeyBaseline}
+        benchmarkConfig={null}
+        featuresReport={reportWithTrainMean}
+        hypothesis={null}
+        figures={[]}
+        decisions={[]}
+        isLoading={false}
+      />,
+    );
+
+    expect(screen.getByText("0.9804")).toBeTruthy(); // features_report.baseline.train_mean fallback
+  });
 });
