@@ -70,37 +70,41 @@ async function streamStdoutWithExtractor(
   await fs.promises.mkdir(path.dirname(outputFile), { recursive: true });
   const writeStream = fs.createWriteStream(outputFile);
 
-  for await (const chunk of stdout) {
-    const str = (chunk as Buffer).toString("utf-8");
+  try {
+    for await (const chunk of stdout) {
+      const str = (chunk as Buffer).toString("utf-8");
 
-    // Write to disk immediately (streaming)
-    if (!writeStream.write(str)) {
-      // Back-pressure: wait for drain
-      await new Promise<void>((resolve) => writeStream.once("drain", resolve));
-    }
+      // Write to disk immediately (streaming)
+      if (!writeStream.write(str)) {
+        // Back-pressure: wait for drain
+        await new Promise<void>((resolve) => writeStream.once("drain", resolve));
+      }
 
-    // Feed each line to the streaming metadata extractor
-    const lines = str.split(/\r?\n/);
-    for (const line of lines) {
-      if (line.length > 0) {
-        extractor.processLine(line);
+      // Feed each line to the streaming metadata extractor
+      const lines = str.split(/\r?\n/);
+      for (const line of lines) {
+        if (line.length > 0) {
+          extractor.processLine(line);
 
-        // Record activity to database (fire-and-forget)
-        if (activityContext) {
-          processActivityLine(line, activityContext).catch(() => {
-            // Ignore errors - activity recording is best-effort
-          });
+          // Record activity to database (fire-and-forget)
+          if (activityContext) {
+            processActivityLine(line, activityContext).catch(() => {
+              // Ignore errors - activity recording is best-effort
+            });
+          }
         }
       }
     }
+  } finally {
+    // Always flush whatever was consumed to disk, even when the pipe is torn
+    // down because the child exited while a grandchild (pi tool/session
+    // process) still held the stdout fd open.
+    await new Promise<void>((resolve, reject) => {
+      writeStream.on("finish", resolve);
+      writeStream.on("error", reject);
+      writeStream.end();
+    });
   }
-
-  // Close write stream
-  await new Promise<void>((resolve, reject) => {
-    writeStream.on("finish", resolve);
-    writeStream.on("error", reject);
-    writeStream.end();
-  });
 
   // M-4: drain the activity-recording batch queue at stream end so nothing
   // buffered during this run is lost when the stream closes.
@@ -229,14 +233,19 @@ export async function runPi(
     rejectTimeout(new Error(`pi timed out after ${timeoutMs}ms`));
   }, timeoutMs);
 
-  // Track exit BEFORE streaming. A child that dies while the stream is
-  // being consumed (timeout kill, crash) can emit 'close' before we'd
-  // otherwise attach the listener — attaching here closes that race.
+  // Track exit BEFORE streaming. Listen for 'exit', NOT 'close': 'close' only
+  // fires after the stdio streams have closed, which never happens while a
+  // grandchild (pi tool/session process) holds the stdout fd open — the
+  // chronic arena hang. 'exit' fires the moment the main process is gone, so
+  // the race below can resolve and tear the pipe down. A child that dies
+  // while the stream is being consumed (timeout kill, crash) can emit 'exit'
+  // before we'd otherwise attach the listener — attaching here closes that
+  // race.
   let settleExit: (code: number | null, signal: NodeJS.Signals | null) => void;
   const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     settleExit = (code, signal) => resolve({ code, signal });
   });
-  child.once("close", (code, signal) => settleExit(code, signal));
+  child.once("exit", (code, signal) => settleExit(code, signal));
 
   // Stream stdout while waiting for exit, racing the timeout guard so a
   // wedged stream still dies on time (CR-4). On any stream rejection kill
@@ -252,6 +261,23 @@ export async function runPi(
           throw spawnError ?? err;
         }
         return await exitPromise;
+      })(),
+      // Resolve the moment the main process exits, even if the stdout pipe is
+      // still held open by a grandchild (pi tool/session processes that
+      // inherit the fd). `for await (const chunk of stdout)` only resolves when
+      // the pipe closes, so without this exit-driven branch runPi would wedge
+      // forever after pi exits — the chronic arena hang. Teardown both pipes
+      // so the drain loop and the bounded stderr collector can end; a
+      // grandchild holding the fds open would otherwise keep this process
+      // alive forever. The loop has already consumed everything the child
+      // wrote before exiting, so the transcript on disk is complete.
+      (async () => {
+        const exit = await exitPromise;
+        setImmediate(() => {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        });
+        return exit;
       })(),
       timeoutGuard,
     ]);
