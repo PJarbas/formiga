@@ -23,9 +23,14 @@ import { findOpencodeBinary, formatPiCommandPreview } from "./binary-discovery.j
 import { buildStreamLogMetadata, safeKillPgid } from "./shared.js";
 import { StreamingMetadataExtractor, type ExtractedMetadata } from "./streaming-metadata-extractor.js";
 import { processActivityLine, type ActivityContext } from "./activity-recorder.js";
+import { createActivityTimeout } from "./activity-timeout.js";
 
 export interface RunOpencodeOptions {
-  timeout?: number; // seconds, default 60
+  timeout?: number; // seconds, default 60; ignored when hardTimeoutMs is set
+  /** Absolute wall-clock cap in ms — never re-armed regardless of activity. */
+  hardTimeoutMs?: number;
+  /** Idle threshold in ms — re-arms the expiry timer on every stdout chunk. */
+  staleTimeoutMs?: number;
   workdir?: string;
   env?: Record<string, string>;
   /** Activity context for recording tool calls to the database (best-effort). */
@@ -58,12 +63,14 @@ async function streamStdoutWithExtractor(
   outputFile: string,
   extractor: StreamingMetadataExtractor,
   activityContext?: ActivityContext,
+  onActivity?: () => void,
 ): Promise<void> {
   await fs.promises.mkdir(path.dirname(outputFile), { recursive: true });
   const writeStream = fs.createWriteStream(outputFile);
 
   try {
     for await (const chunk of stdout) {
+      onActivity?.();
       const str = (chunk as Buffer).toString("utf-8");
 
       // Write to disk immediately (streaming)
@@ -195,6 +202,10 @@ export async function runOpencode(
 
   // CR-4: the timeout guard is installed immediately after spawn and covers
   // the WHOLE invocation (streaming + exit wait), racing the work below.
+  //
+  // Dynamic guard (arena): an absolute hard cap PLUS a stale threshold
+  // re-armed on every stdout chunk. Without hardTimeoutMs the legacy single
+  // timeout applies unchanged.
   let timedOut = false;
   let rejectTimeout!: (err: Error) => void;
   const timeoutGuard = new Promise<never>((_resolve, reject) => {
@@ -209,12 +220,26 @@ export async function runOpencode(
       try { child.kill("SIGKILL"); } catch { /* best effort */ }
     }
   };
-  const timer = setTimeout(() => {
-    timedOut = true;
-    logger.warn("opencode timed out — killed process group", { pid: childPid ?? null, pgid, timeoutMs });
-    killProcessGroup();
-    rejectTimeout(new Error(`opencode timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
+  const effectiveHardMs = options.hardTimeoutMs ?? timeoutMs;
+  const activityTimeout = createActivityTimeout(
+    { hardMs: effectiveHardMs, staleMs: options.staleTimeoutMs },
+    () => {
+      timedOut = true;
+      logger.warn("opencode timed out — killed process group", {
+        pid: childPid ?? null,
+        pgid,
+        hardMs: effectiveHardMs,
+        staleMs: options.staleTimeoutMs ?? null,
+      });
+      killProcessGroup();
+      rejectTimeout(
+        new Error(
+          `opencode timed out after ${effectiveHardMs}ms` +
+          (options.staleTimeoutMs ? ` (no output for ${options.staleTimeoutMs}ms)` : ""),
+        ),
+      );
+    },
+  );
 
   // Track exit BEFORE streaming. Listen for 'exit', NOT 'close': 'close' only
   // fires after the stdio streams have closed, which never happens while a
@@ -237,7 +262,13 @@ export async function runOpencode(
     const exitSignal = await Promise.race([
       (async () => {
         try {
-          await streamStdoutWithExtractor(child.stdout!, outputFile, extractor, options.activityContext);
+          await streamStdoutWithExtractor(
+            child.stdout!,
+            outputFile,
+            extractor,
+            options.activityContext,
+            () => activityTimeout.notifyActivity(),
+          );
         } catch (err) {
           if (!timedOut) killProcessGroup();
           throw spawnError ?? err;
@@ -282,7 +313,7 @@ export async function runOpencode(
       throw new Error(`opencode failed: exited with code ${code}${signal ? ` (signal ${signal})` : ""}${stderrSuffix}`);
     }
   } finally {
-    clearTimeout(timer);
+    activityTimeout.clear();
   }
 
   const durationMs = Date.now() - startedAt;

@@ -27,8 +27,20 @@ import type { ExtractedMetadata } from "./streaming-metadata-extractor.js";
 
 /** Options passed to every HarnessRunner.run() call. */
 export interface HarnessOptions {
-  /** Timeout in seconds (default 60). */
+  /** Timeout in seconds (default 60). Ignored when hardTimeoutMs is set. */
   timeout?: number;
+  /**
+   * Absolute wall-clock cap in ms — never re-armed, regardless of activity.
+   * Overrides `timeout` semantics (which becomes the stale/idle threshold
+   * paired with staleTimeoutMs). Used for dynamic arena agent timeouts.
+   */
+  hardTimeoutMs?: number;
+  /**
+   * Idle threshold in ms: re-arms the expiry timer on every stdout chunk.
+   * Only meaningful together with hardTimeoutMs. When omitted, the child is
+   * killed solely by the hard cap (legacy behavior).
+   */
+  staleTimeoutMs?: number;
   /** Working directory for the harness process. */
   workdir?: string;
   /** Environment variables injected into the harness process. */

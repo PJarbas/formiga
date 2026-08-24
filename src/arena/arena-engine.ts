@@ -348,7 +348,16 @@ export async function runArena(
   runAgentsParallel: (
     prompts: Record<string, string>,
     config: ArenaConfig,
-  ) => Promise<Record<string, { script: string; hypothesis: string; learned?: string; nextFocus?: string } | null>>
+  ) => Promise<Record<string, {
+    script: string;
+    hypothesis: string;
+    learned?: string;
+    nextFocus?: string;
+    /** Runner failure message (LLM timeout / process crash). Present ⇒ no response. */
+    error?: string;
+    /** Wall-clock the agent ran before failing — recorded on crash results. */
+    durationMs?: number;
+  } | null>>
 ): Promise<ArenaResult> {
   ensureScriptDir(config.workspacePath);
 
@@ -451,10 +460,12 @@ export async function runArena(
   }
   // Read dataset context once for the entire arena run
   const datasetCtx = readDatasetContext(config.workspacePath);
-  // Derive the enforceable compute budget from the tier (RF-#90). Passed to
-  // trainScript/benchmarkOne so runaway scripts (e.g. a 6480-combo grid on
-  // a 150-row dataset) are killed by timeout + RLIMIT_CPU, not just advised.
-  const budget = deriveComputeBudget(datasetCtx.complexityTier);
+  // Derive the enforceable compute budget (RF-#90). A compute_budget declared
+  // by the feature-engineer in benchmark_config.json is authoritative; the
+  // tier-derived budget is the fallback. Passed to trainScript/benchmarkOne
+  // so runaway scripts (e.g. a 6480-combo grid on a 150-row dataset) are
+  // killed by timeout + RLIMIT_CPU, not just advised.
+  const budget = datasetCtx.computeBudget ?? deriveComputeBudget(datasetCtx.complexityTier);
 
   // Fallback: run benchmark with baseline .pkl if no config baseline (fresh runs only)
   if (!isResume && baselineMetric === null) {
@@ -638,12 +649,15 @@ export async function runArena(
       // on disk. Distinguish a runner failure (never responded) from a
       // contract break (responded without a script). Registered as FAILED
       // with benchmark_exit_code = -2 so the leaderboard distinguishes a dead
-      // agent from a real runtime crash.
+      // agent from a real runtime crash. The runner surfaces WHY it failed
+      // (hard-cap vs stale timeout) plus the real wall-clock it ran — recorded
+      // instead of the legacy durationMs=0.
       if (!script) {
-        const reason = output
+        const reason = output?.error ?? (output
           ? "[script_missing] agente não retornou script executável no JSON de resposta"
-          : "[agent_no_response] agente não respondeu dentro do timeout";
+          : "[agent_no_response] agente não respondeu dentro do timeout");
         const r = createCrashResult(agent.id, reason, SCRIPT_MISSING_EXIT_CODE);
+        r.durationMs = output?.durationMs ?? 0;
         r.benchmarkStderr = reason;
         await registerFailedArena({
           agent,
@@ -1182,6 +1196,7 @@ function buildPromptsForRound(
       prompt += `- Finalize sua resposta com UM ÚNICO bloco de código JSON (fence \`\`\`json) — SEM os marcadores legados HIPOTESE/SCRIPT_PATH/APRENDIZADO/PROXIMO_FOCO/STATUS. O script Python vai INLINE na chave "script" (cada quebra de linha do código vira um \\n dentro da string JSON), NUNCA como caminho de arquivo.\n`;
       prompt += `- O script DEVE: ler benchmark_config.json, treinar com CV na mesma configuração, imprimir EXATAMENTE ${config.metricName}: <valor_numerico> no stdout ANTES de encerrar, salvar o .pkl em artifacts/models/${agent.id}_round${session.currentRound}.pkl, e gravar o _results.json conforme a estrutura acima.\n`;
       prompt += `- **Disciplina de orçamento**: o script deve respeitar a variável de ambiente FORMIGA_MAX_FIT_SECONDS (limite por fit) e evitar combinações que estourem o tempo de execução — grids gigantes em datasets pequenos são descartados por overfitting.\n`;
+      prompt += `- **Grave o script cedo no caminho canônico**: assim que tiver um script funcional, salve-o em artifacts/models/${agent.id}_round${session.currentRound}.py ANTES de rodar explorações/treinos longos. Se a rodada for encerrada por tempo (hard cap), o script que estiver em disco será o executado — não perca trabalho já feito.\n`;
       prompt += `- **Escreva o _results.json CEDO**: grave o JSON imediatamente APÓS computar fold_scores e train_score, e ANTES do retrain completo + inferência prod. Assim, mesmo se o script for morto por timeout no tail, o ledger já existe em disco.\n`;
       prompt += `- O JSON final deve ter EXATAMENTE esta forma:\n`;
       prompt += `\`\`\`json\n`;

@@ -40,7 +40,12 @@ export interface ArenaConfig {
 export interface ArenaAgentConfig {
   id: string;
   agentPersona: string;
-  timeout: number;
+  /**
+   * Per-agent generation timeout (seconds) — DEPRECATED. The arena now uses
+   * dynamic, tier+budget-aware timeouts (agent-timeout.ts) re-armed on agent
+   * output; this field is kept optional for legacy configs only.
+   */
+  timeout?: number;
   strategyHint: string;
   /** Model type label for leaderboard (e.g. "xgboost", "lightgbm"). Falls back to agent id. */
   modelType?: string;
