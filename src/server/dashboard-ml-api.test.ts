@@ -10,6 +10,7 @@ import path from "node:path";
 import { once } from "node:events";
 import http from "node:http";
 import { DatabaseSync } from "node:sqlite";
+import * as yauzl from "yauzl";
 import { createDashboardServer } from "../../dist/server/dashboard.js";
 import { initLeaderboardSchema } from "../../dist/leaderboard/schema.js";
 import { daemonAuthHeaders } from "../../dist/server/test-auth.js";
@@ -31,6 +32,28 @@ function stopDashboard(server: http.Server): Promise<void> {
 async function fetchJSON(url: string): Promise<unknown> {
   const resp = await fetch(url);
   return resp.json();
+}
+
+/** Read a single named entry from a zip buffer (decompressed). */
+async function readZipEntry(buf: Buffer, name: string): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(buf, { lazyEntries: true }, (err, zip) => {
+      if (err) return reject(err);
+      zip.on("entry", (entry: yauzl.Entry) => {
+        if (entry.fileName !== name) return zip.readEntry();
+        zip.openReadStream(entry, (rerr, rs) => {
+          if (rerr) return reject(rerr);
+          const chunks: Buffer[] = [];
+          rs.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+          rs.on("end", () => resolve(Buffer.concat(chunks)));
+          rs.on("error", reject);
+        });
+      });
+      zip.on("end", () => resolve(null));
+      zip.on("error", reject);
+      zip.readEntry();
+    });
+  });
 }
 
 describe("ML Dashboard API", () => {
@@ -120,6 +143,17 @@ describe("ML Dashboard API", () => {
     const arenaRealScriptPath = path.join(arenaWs, "artifacts", "models", "modeler-classic_round1.py");
     fs.writeFileSync(arenaRealScriptPath, ARENA_REAL_SCRIPT);
 
+    // Trained artifact + rich results for the repro-zip fixture — mirrors what
+    // the arena leaves in artifacts/models/ after a successful run.
+    fs.writeFileSync(
+      path.join(arenaWs, "artifacts", "models", "modeler-classic_round1.pkl"),
+      Buffer.from([0x80, 0x7f, 0x03, 0x04]),
+    );
+    fs.writeFileSync(
+      path.join(arenaWs, "artifacts", "models", "modeler-classic_round1_results.json"),
+      JSON.stringify({ f1_score: 0.82, fold_scores: [0.8, 0.82, 0.84] }),
+    );
+
     // Not `running` and created BEFORE run-ml-001, so findActivePipelineRunId
     // keeps treating run-ml-001 as the active pipeline — the arena fixtures
     // below are always addressed by explicit `runId=run-arena-int`.
@@ -174,6 +208,12 @@ describe("ML Dashboard API", () => {
     arenaIds.scriptFallback = seedArena({
       round_number: 2, agent_name: "modeler-classic",
       train_metric: 0.84, val_metric: 0.81,
+    });
+    // repro-zip: real .pkl + results.json on disk → zip includes all entries.
+    arenaIds.zipEntry = seedArena({
+      round_number: 1, agent_name: "modeler-classic",
+      train_metric: 0.85, val_metric: 0.82,
+      artifact_path: "artifacts/models/modeler-classic_round1.pkl",
     });
     // arena agent NOT in AGENT_REPORT_MAP + no report file → builder 200.
     arenaIds.reportBuilder = seedArena({
@@ -394,6 +434,49 @@ describe("ML Dashboard API", () => {
     assert.ok(script.includes("pd.read_parquet(FEATURES_PATH)"), "template must be emitted when no real script exists");
     assert.ok(!script.includes("print(\"f1: 0.82\")"), "must not reference the other experiment's script");
     assert.equal(data.filename, `reproduce_lightgbm_${arenaIds.scriptFallback}.py`);
+  });
+
+  // ── /api/leaderboard/:id/zip (repro zip: pkl + script + results) ──
+
+  it("GET /api/leaderboard/:id/zip streams model + script + results + README", async () => {
+    const resp = await fetch(`${baseUrl}/api/leaderboard/${arenaIds.zipEntry}/zip`);
+    assert.equal(resp.status, 200);
+    assert.equal(resp.headers.get("content-type"), "application/zip");
+    assert.equal(
+      resp.headers.get("content-disposition"),
+      `attachment; filename="reproduce_modeler_classic_${arenaIds.zipEntry}.zip"`,
+    );
+    const buf = Buffer.from(await resp.arrayBuffer());
+    assert.ok(buf.subarray(0, 2).toString() === "PK", "zip magic bytes must be present");
+    const ascii = buf.toString("latin1");
+    const base = `repro-modeler_classic-${arenaIds.zipEntry}`;
+    assert.ok(ascii.includes(`${base}/model.pkl`), "trained pkl must be bundled");
+    assert.ok(ascii.includes(`${base}/reproduce_lightgbm_${arenaIds.zipEntry}.py`), "script must be bundled");
+    assert.ok(ascii.includes(`${base}/results.json`), "results.json must be bundled");
+    assert.ok(ascii.includes(`${base}/README.md`), "README manifest must be bundled");
+    // the pkl bytes must round-trip untouched (decompressed from the zip)
+    const pkl = await readZipEntry(buf, `${base}/model.pkl`);
+    assert.deepEqual(pkl, Buffer.from([0x80, 0x7f, 0x03, 0x04]));
+    // README manifest must reference the bundled script
+    const readme = await readZipEntry(buf, `${base}/README.md`);
+    assert.ok(readme!.toString("utf-8").includes("reproduce_lightgbm"));
+  });
+
+  it("GET /api/leaderboard/:id/zip still streams without a model artifact (train-from-scratch path)", async () => {
+    const resp = await fetch(`${baseUrl}/api/leaderboard/${arenaIds.scriptFallback}/zip`);
+    assert.equal(resp.status, 200);
+    assert.equal(resp.headers.get("content-type"), "application/zip");
+    const buf = Buffer.from(await resp.arrayBuffer());
+    assert.ok(buf.subarray(0, 2).toString() === "PK");
+    const ascii = buf.toString("latin1");
+    const base = `repro-modeler_classic-${arenaIds.scriptFallback}`;
+    assert.ok(ascii.includes(`${base}/reproduce_lightgbm_${arenaIds.scriptFallback}.py`));
+    assert.ok(!ascii.includes(`${base}/model.pkl`), "missing artifact must be excluded, not fatal");
+  });
+
+  it("GET /api/leaderboard/:id/zip 404s for an unknown experiment", async () => {
+    const resp = await fetch(`${baseUrl}/api/leaderboard/999999/zip`);
+    assert.equal(resp.status, 404);
   });
 
   // ── /api/leaderboard/:id/report (C2: builder fallback, no 404) ──
