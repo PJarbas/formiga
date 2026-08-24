@@ -29,11 +29,8 @@ import { ArenaRepositoryImpl } from "./arena-repository.js";
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { runBenchmark, extractMetric } from "./arena-benchmark.js";
 import { parseBenchmarkConfig } from "./benchmark-config.js";
-
-const AGENT_TIMEOUT_SECONDS = parseInt(
-  process.env.FORMIGA_ARENA_AGENT_TIMEOUT ?? "1800",
-  10,
-);
+import { deriveComputeBudget, type ComputeBudget } from "./dataset-context.js";
+import { resolveAgentTimeout } from "./agent-timeout.js";
 
 // ── Agent definitions (mirrors ml-autoresearch workflow.yml) ───────────────────
 
@@ -41,7 +38,6 @@ const ARENA_AGENTS: ArenaAgentConfig[] = [
   {
     id: "modeler-classic",
     agentPersona: "arena-modeler-classic",
-    timeout: AGENT_TIMEOUT_SECONDS,
     strategyHint:
       "You are a classic ML practitioner. Prefer gradient boosting, regularized linear models, " +
       "ensemble trees, and careful feature engineering. Avoid NN/AutoML — stay interpretable " +
@@ -52,7 +48,6 @@ const ARENA_AGENTS: ArenaAgentConfig[] = [
   {
     id: "modeler-advanced",
     agentPersona: "arena-modeler-advanced",
-    timeout: AGENT_TIMEOUT_SECONDS,
     strategyHint:
       "You are an advanced ML researcher. Your approach MUST match the dataset complexity tier " +
       "shown in the Dataset Context section above. On TINY/SMALL datasets, prefer TabPFN, KAN, " +
@@ -64,7 +59,6 @@ const ARENA_AGENTS: ArenaAgentConfig[] = [
   {
     id: "modeler-creative",
     agentPersona: "arena-modeler-creative",
-    timeout: AGENT_TIMEOUT_SECONDS,
     strategyHint:
       "You are the creative team. Your explicit goal is DIVERSITY: produce decorrelated models " +
       "that the other two teams would not, so the final ensemble dominates. Target Spearman OOF " +
@@ -268,54 +262,76 @@ function parseJsonEnvelope(
   };
 }
 
-// ── Tier-based agent timeouts ──────────────────────────────────────────────
-// Replaces the single AGENT_TIMEOUT_SECONDS (30 min) with per-tier limits so
-// a stuck agent on TINY datasets doesn't block the arena for 30 minutes.
+// ── Agent generation timeout ──────────────────────────────────────────────
+// Resolved dynamically from the complexity tier + compute budget by
+// resolveAgentTimeout (agent-timeout.ts): an absolute hard cap scaled to the
+// dataset, plus a stale threshold re-armed on agent output. A fixed 30-min
+// wall-clock killed actively-training modelers on LARGE datasets (run
+// e5cccd51) — a working agent must never be killed by a wall clock, only a
+// stuck one (silent for staleMs) or a runaway one (past the hard cap).
 
-const AGENT_TIMEOUT_BY_TIER: Record<string, number> = {
-  TINY:  120,   // 2 min
-  SMALL: 180,   // 3 min
-  MEDIUM: 300,  // 5 min
-  LARGE: 600,   // 10 min
-};
+interface ArenaAgentOutput {
+  script: string;
+  hypothesis: string;
+  learned?: string;
+  nextFocus?: string;
+  /** Runner failure message (LLM timeout / process crash). Present ⇒ no response. */
+  error?: string;
+  /** Wall-clock the agent actually ran before failing (0 on success). */
+  durationMs?: number;
+}
+
+interface SettledAgentResult {
+  agentId: string;
+  ok: boolean;
+  data: ArenaAgentOutput | null;
+  error?: string;
+  durationMs?: number;
+}
 
 // ── runAgentsParallel factory (backed by HarnessRunner) ──────────────────
 
 /**
  * Create a runAgentsParallel function that delegates to a HarnessRunner
- * for each arena agent prompt. Individual timeouts are derived from the
- * complexity tier so slow agents don't block fast ones.
- *
- * Tier detection: reads dataset_context.json from workspace. Falls back
- * to AGENT_TIMEOUT_BY_TIER default (5 min) when unavailable.
+ * for each arena agent prompt. Timeouts are dynamic (see agent-timeout.ts):
+ * derived from the dataset_context.json snapshot persisted by
+ * readDatasetContext (tier + compute budget).
  */
 function createRunAgentsParallel(runner: HarnessRunner) {
   return async function runAgentsParallel(
     prompts: Record<string, string>,
     config: ArenaConfig,
-  ): Promise<
-    Record<
-      string,
-      { script: string; hypothesis: string; learned?: string; nextFocus?: string } | null
-    >
-  > {
-    // Derive tier for timeout selection (best-effort; defaults to MEDIUM).
+  ): Promise<Record<string, ArenaAgentOutput | null>> {
+    // Derive tier + budget for timeout selection from the persisted snapshot
+    // (single source of truth, written by readDatasetContext). Falls back to
+    // MEDIUM / no budget when the snapshot is missing.
     let tier = "MEDIUM";
+    let computeBudget: ComputeBudget | null = null;
     try {
       const dsPath = path.join(config.workspacePath, "artifacts", "dataset_context.json");
       if (fs.existsSync(dsPath)) {
-        const ds = JSON.parse(fs.readFileSync(dsPath, "utf-8")) as { complexityTier?: string };
+        const ds = JSON.parse(fs.readFileSync(dsPath, "utf-8")) as {
+          complexityTier?: string;
+          computeBudget?: ComputeBudget;
+        };
         if (ds.complexityTier) tier = ds.complexityTier;
+        computeBudget = ds.computeBudget ?? null;
       }
-    } catch { /* keep default */ }
+    } catch { /* keep defaults */ }
+
+    const budget = computeBudget ?? deriveComputeBudget(tier as Parameters<typeof deriveComputeBudget>[0]);
+    const { hardTimeoutMs, staleTimeoutMs } = resolveAgentTimeout(tier, budget);
 
     const entries = Object.entries(prompts);
     const pending = entries.map(([agentId, prompt]) => {
-      const agentDef = ARENA_AGENTS.find((a) => a.id === agentId);
-      const timeout = agentDef?.timeout ?? AGENT_TIMEOUT_BY_TIER[tier] ?? AGENT_TIMEOUT_BY_TIER.MEDIUM;
-
+      const startedAt = Date.now();
       return runner
-        .run(prompt, { timeout, workdir: config.workspacePath })
+        .run(prompt, {
+          timeout: Math.ceil(hardTimeoutMs / 1000),
+          hardTimeoutMs,
+          staleTimeoutMs,
+          workdir: config.workspacePath,
+        })
         .then((result) => {
           // Emit progress event
           emitEvent({
@@ -327,9 +343,9 @@ function createRunAgentsParallel(runner: HarnessRunner) {
           });
           return parseArenaAgentOutput(result.assistantText, config.workspacePath);
         })
-        .then((parsed) => ({
+        .then((parsed): SettledAgentResult => ({
           agentId,
-          ok: true as const,
+          ok: true,
           data: {
             script: parsed.script,
             hypothesis: parsed.hypothesis,
@@ -337,23 +353,26 @@ function createRunAgentsParallel(runner: HarnessRunner) {
             nextFocus: parsed.nextFocus || undefined,
           },
         }))
-        .catch((err) => {
-          logger.error("Arena agent runner failure", { agentId, error: String(err) });
+        .catch((err): SettledAgentResult => {
+          const durationMs = Date.now() - startedAt;
+          logger.error("Arena agent runner failure", { agentId, error: String(err), durationMs });
           return {
             agentId,
-            ok: false as const,
+            ok: false,
             data: null,
+            error: String(err),
+            durationMs,
           };
         });
     });
 
     const settled = await Promise.all(pending);
-    const out: Record<
-      string,
-      { script: string; hypothesis: string; learned?: string; nextFocus?: string } | null
-    > = {};
+    const out: Record<string, ArenaAgentOutput | null> = {};
     for (const s of settled) {
-      out[s.agentId] = s.ok ? s.data : null;
+      // Keep `null` for contract-broken output (backward compatible with the
+      // engine's guards) — but surface the failure error/duration on a
+      // non-null object so the engine can record real duration_ms.
+      out[s.agentId] = s.ok ? s.data : { script: "", hypothesis: "", error: s.error, durationMs: s.durationMs };
     }
     return out;
   };

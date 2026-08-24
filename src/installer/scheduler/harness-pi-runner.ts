@@ -53,6 +53,8 @@ export class PiRunner implements HarnessRunner {
 
     const result = await runPi(piArgs, {
       timeout: options.timeout,
+      hardTimeoutMs: options.hardTimeoutMs,
+      staleTimeoutMs: options.staleTimeoutMs,
       workdir: options.workdir,
       env: mergedEnv,
       activityContext: options.activityContext,

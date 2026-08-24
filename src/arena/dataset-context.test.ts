@@ -61,6 +61,32 @@ describe("parseShapeFromText — fallback rows", () => {
   });
 });
 
+describe("parseShapeFromText — pt-BR thousands separators", () => {
+  it("parses '3.608.050 linhas × 48 colunas' (run e5cccd51 format)", () => {
+    const result = parseShapeFromText("Dataset com 3.608.050 linhas × 48 colunas");
+    assert.equal(result.rows, 3_608_050);
+    assert.equal(result.cols, 48);
+  });
+
+  it("parses 'linhas' keyword with pt-BR separator and no cols", () => {
+    const result = parseShapeFromText("Total de registros: 1.234.567 linhas");
+    assert.equal(result.rows, 1_234_567);
+    assert.equal(result.cols, null);
+  });
+
+  it("parses 'colunas' keyword for column count", () => {
+    const result = parseShapeFromText("Dados com 500 linhas e 12 colunas");
+    assert.equal(result.rows, 500);
+    assert.equal(result.cols, 12);
+  });
+
+  it("parses en-US comma thousands separators", () => {
+    const result = parseShapeFromText("1,000 rows and 20 columns");
+    assert.equal(result.rows, 1000);
+    assert.equal(result.cols, 20);
+  });
+});
+
 describe("parseShapeFromText — edge cases", () => {
   it("returns null rows/cols when no shape info present", () => {
     const result = parseShapeFromText("No shape information here");

@@ -20,6 +20,14 @@ export interface DatasetContext {
   edaSummary: string | null;
   featuresSummary: string | null;
   complexityTier: "tiny" | "small" | "medium" | "large";
+  /**
+   * Enforceable compute budget declared by the feature-engineer in
+   * benchmark_config.json (compute_budget). When present it is the
+   * authoritative budget (RF-#90), overriding the tier-derived one — the
+   * feature-engineer knows the dataset best. Set to null when the config
+   * carries no usable compute_budget.
+   */
+  computeBudget: ComputeBudget | null;
 }
 
 export function computeComplexityTier(rows: number | null): DatasetContext["complexityTier"] {
@@ -112,18 +120,30 @@ function readDatasetShape(workspace: string): { rows: number | null; cols: numbe
   return { rows: null, cols: null };
 }
 
+/** Parse a count that may carry thousands separators ("3.608.050" → 3608050, "1,000" → 1000). */
+function parseCountPt(raw: string): number {
+  const trimmed = raw.trim();
+  const hasComma = trimmed.includes(",");
+  const hasDot = trimmed.includes(".");
+  const normalized = hasComma && !hasDot
+    ? trimmed.replace(/,/g, "")      // en-US "1,000" → 1000
+    : trimmed.replace(/\./g, "").replace(/,.*$/, ""); // pt-BR "3.608.050" → 3608050
+  const n = parseInt(normalized, 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
 /** Parse shape (rows, cols) from a text blob such as an EDA report. */
 export function parseShapeFromText(content: string): { rows: number | null; cols: number | null } {
-  const shapeMatch = content.match(/\*{0,2}shape\*{0,2}[:\s]*\(?(\d+)[,x\s]+(\d+)\)?/i);
+  const shapeMatch = content.match(/\*{0,2}shape\*{0,2}[:\s]*\(?([\d.,]+)[,x×\s]+([\d.,]+)\)?/i);
   if (shapeMatch) {
-    return { rows: parseInt(shapeMatch[1], 10), cols: parseInt(shapeMatch[2], 10) };
+    return { rows: parseCountPt(shapeMatch[1]), cols: parseCountPt(shapeMatch[2]) };
   }
-  const rowsMatch = content.match(/(\d{2,})\s*(?:rows|samples|observations|amostras)/i);
-  const colsMatch = content.match(/(\d+)\s*(?:columns|features|variables)/i);
+  const rowsMatch = content.match(/([\d.,]{2,})\s*(?:rows|samples|observations|amostras|linhas|registros)/i);
+  const colsMatch = content.match(/([\d.,]+)\s*(?:columns|features|variables|colunas)/i);
   if (rowsMatch) {
     return {
-      rows: parseInt(rowsMatch[1], 10),
-      cols: colsMatch ? parseInt(colsMatch[1], 10) : null,
+      rows: parseCountPt(rowsMatch[1]),
+      cols: colsMatch ? parseCountPt(colsMatch[1]) : null,
     };
   }
   return { rows: null, cols: null };
@@ -143,11 +163,51 @@ function readFeatureTypes(workspace: string): { categorical: number | null; nume
   return { categorical: null, numeric: null };
 }
 
+function isComplexityTier(value: unknown): value is DatasetContext["complexityTier"] {
+  return value === "tiny" || value === "small" || value === "medium" || value === "large";
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isModelComplexity(value: unknown): value is ComputeBudget["maxModelComplexity"] {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+/**
+ * Parse the `compute_budget` block of benchmark_config.json into an
+ * enforceable ComputeBudget. `tier` is required and must be a known tier;
+ * missing numeric fields fall back to the tier defaults. Returns null when
+ * the config declares no usable compute_budget (the tier-derived budget is
+ * used instead).
+ */
+export function parseComputeBudget(raw: unknown): ComputeBudget | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const cb = raw as Record<string, unknown>;
+  if (!isComplexityTier(cb.tier)) return null;
+  const tier = cb.tier;
+  const fallback = deriveComputeBudget(tier);
+  const rawComplexity = cb.max_model_complexity ?? cb.maxModelComplexity;
+  const maxModelComplexity: ComputeBudget["maxModelComplexity"] = isModelComplexity(rawComplexity)
+    ? rawComplexity
+    : fallback.maxModelComplexity;
+  return {
+    tier,
+    maxFitSeconds: toFiniteNumber(cb.max_fit_seconds ?? cb.maxFitSeconds) ?? fallback.maxFitSeconds,
+    maxTrials: toFiniteNumber(cb.max_trials ?? cb.maxTrials) ?? fallback.maxTrials,
+    maxCombinations: toFiniteNumber(cb.max_combinations ?? cb.maxCombinations) ?? fallback.maxCombinations,
+    maxModelComplexity,
+  };
+}
+
 function readBenchmarkMeta(workspace: string): {
   problemType: string | null;
   metricName: string | null;
   metricDirection: "lower" | "higher" | null;
   targetColumn: string | null;
+  computeBudget: ComputeBudget | null;
 } {
   const candidates = [
     path.join(workspace, "benchmark_config.json"),
@@ -162,7 +222,7 @@ function readBenchmarkMeta(workspace: string): {
       const parsed = parseBenchmarkConfig(raw);
       if (!parsed.ok) {
         logger.warn(`[benchmark_config_invalid] ${parsed.error}`, { workspace });
-        return { problemType: null, metricName: null, metricDirection: null, targetColumn: null };
+        return { problemType: null, metricName: null, metricDirection: null, targetColumn: null, computeBudget: null };
       }
       const targetColumn = raw.data?.targetColumn ?? raw.target_column ?? null;
       return {
@@ -170,21 +230,53 @@ function readBenchmarkMeta(workspace: string): {
         metricName: parsed.value.metricName,
         metricDirection: parsed.value.metricDirection,
         targetColumn,
+        computeBudget: parseComputeBudget(raw.compute_budget ?? raw.computeBudget),
       };
     } catch { /* continue */ }
   }
-  return { problemType: null, metricName: null, metricDirection: null, targetColumn: null };
+  return { problemType: null, metricName: null, metricDirection: null, targetColumn: null, computeBudget: null };
+}
+
+/**
+ * Persist a snapshot of the computed dataset context to the workspace
+ * (artifacts/dataset_context.json) so consumers that run later — the parallel
+ * agent harness, the reconciler, dashboard — all see one consistent tier and
+ * compute budget instead of re-deriving them independently. Best-effort: a
+ * failed write is logged, never fatal.
+ */
+function persistDatasetContext(workspace: string, ctx: DatasetContext): void {
+  try {
+    const dir = path.join(workspace, "artifacts");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "dataset_context.json"),
+      JSON.stringify({
+        rows: ctx.rows,
+        cols: ctx.cols,
+        complexityTier: ctx.complexityTier,
+        computeBudget: ctx.computeBudget ?? undefined,
+      }, null, 2),
+    );
+  } catch (err) {
+    logger.warn("dataset-context: failed to persist snapshot", { workspace, error: String(err) });
+  }
 }
 
 export function readDatasetContext(workspace: string): DatasetContext {
   const { rows, cols } = readDatasetShape(workspace);
   const { categorical, numeric } = readFeatureTypes(workspace);
-  const { problemType, metricName, metricDirection, targetColumn } = readBenchmarkMeta(workspace);
+  const { problemType, metricName, metricDirection, targetColumn, computeBudget } = readBenchmarkMeta(workspace);
 
   const edaSummary = extractReportSummary(path.join(workspace, "reports", "01_eda.md"), 15);
   const featuresSummary = extractReportSummary(path.join(workspace, "reports", "02_features.md"), 15);
 
-  return {
+  // A compute_budget declared by the feature-engineer is authoritative for
+  // BOTH the tier and the enforceability limits — the config knows the
+  // dataset better than the rows heuristic (which can fail when the EDA
+  // report uses pt-BR thousands separators, run c682204f / e5cccd51).
+  const complexityTier = computeBudget ? computeBudget.tier : computeComplexityTier(rows);
+
+  const ctx: DatasetContext = {
     rows,
     cols,
     problemType,
@@ -195,8 +287,11 @@ export function readDatasetContext(workspace: string): DatasetContext {
     numericCount: numeric,
     edaSummary,
     featuresSummary,
-    complexityTier: computeComplexityTier(rows),
+    complexityTier,
+    computeBudget,
   };
+  persistDatasetContext(workspace, ctx);
+  return ctx;
 }
 
 export function formatDatasetContextForPrompt(ctx: DatasetContext, agentId: string): string {
@@ -225,7 +320,7 @@ export function formatDatasetContextForPrompt(ctx: DatasetContext, agentId: stri
   // (which a modeler can ignore), these limits are imposed physically by
   // the arena engine (timeout + RLIMIT_CPU). Stated as a constraint with
   // consequence so the modeler calibrates its grid/trials accordingly.
-  const budget = deriveComputeBudget(ctx.complexityTier);
+  const budget = ctx.computeBudget ?? deriveComputeBudget(ctx.complexityTier);
   section += `\n### Compute Budget (ENFORCEABLE — não ignorável)\n`;
   section += `- **Tempo máx por script**: ${budget.maxFitSeconds}s (exceder = script morto = budget_exceeded)\n`;
   section += `- **Trials/Optuna máx**: ${budget.maxTrials}\n`;

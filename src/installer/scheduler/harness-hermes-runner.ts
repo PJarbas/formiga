@@ -70,6 +70,8 @@ export class HermesRunner implements HarnessRunner {
 
     const rawText = await runHermes(prompt, {
       timeout: options.timeout,
+      hardTimeoutMs: options.hardTimeoutMs,
+      staleTimeoutMs: options.staleTimeoutMs,
       workdir: options.workdir,
       env: mergedEnv,
       onSpawn: options.onSpawn,

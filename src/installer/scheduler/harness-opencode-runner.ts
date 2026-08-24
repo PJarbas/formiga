@@ -61,6 +61,8 @@ export class OpencodeRunner implements HarnessRunner {
 
     const result = await runOpencode(opencodeArgs, {
       timeout: options.timeout,
+      hardTimeoutMs: options.hardTimeoutMs,
+      staleTimeoutMs: options.staleTimeoutMs,
       workdir: options.workdir,
       env: mergedEnv,
       activityContext: options.activityContext,

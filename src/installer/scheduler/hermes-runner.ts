@@ -19,6 +19,7 @@ import { findHermesBinary } from "./binary-discovery.js";
 import { buildStreamLogMetadata, safeKillPgid } from "./shared.js";
 import type { RunPiOptions } from "./pi-runner.js";
 import { extractHermesSessionId, getMostRecentHermesSessionId, importHermesSession } from "./hermes-activity-importer.js";
+import { createActivityTimeout } from "./activity-timeout.js";
 
 /** Internal helper: read the tail of a file. */
 async function readTail(filePath: string, maxBytes = 512 * 1024): Promise<string> {
@@ -135,6 +136,7 @@ export async function runHermes(
   let stdoutBytes = 0;
   const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
   child.stdout?.on("data", (chunk: Buffer) => {
+    activityTimeout.notifyActivity();
     const str = chunk.toString("utf-8");
     const bytes = Buffer.byteLength(str, "utf-8");
     totalStdoutBytes += bytes;
@@ -151,14 +153,14 @@ export async function runHermes(
     }
   });
 
-  // Wait for child exit, with timeout guard. The single gate governs the
-  // whole invocation — including stdout collection — so a silent child
-  // (no stdout, slow to exit) is still bounded by `timeoutMs`.
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
+  // Dynamic guard (arena): an absolute hard cap PLUS a stale threshold
+  // re-armed on every stdout chunk. Without hardTimeoutMs the legacy single
+  // timeout applies unchanged.
+  const effectiveHardMs = options.hardTimeoutMs ?? timeoutMs;
+  let rejectTimeout!: (err: Error) => void;
+  const activityTimeout = createActivityTimeout(
+    { hardMs: effectiveHardMs, staleMs: options.staleTimeoutMs },
+    () => {
       if (pgid) {
         safeKillPgid(pgid, "SIGTERM");
         setTimeout(() => safeKillPgid(pgid, "SIGKILL"), 5000).unref();
@@ -166,18 +168,30 @@ export async function runHermes(
         try { child.kill("SIGKILL"); } catch { /* best effort */ }
       }
       writeStream?.destroy();
-      reject(new Error(`hermes timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+      rejectTimeout(
+        new Error(
+          `hermes timed out after ${effectiveHardMs}ms` +
+          (options.staleTimeoutMs ? ` (no output for ${options.staleTimeoutMs}ms)` : ""),
+        ),
+      );
+    },
+  );
 
+  // Wait for child exit, with timeout guard. The single gate governs the
+  // whole invocation — including stdout collection — so a silent child
+  // (no stdout, slow to exit) is still bounded by the timeout.
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    rejectTimeout = reject;
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      activityTimeout.clear();
       writeStream?.destroy();
       reject(err);
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
+      activityTimeout.clear();
       if (settled) return;
       settled = true;
       if (code === 0 || code === null) {
