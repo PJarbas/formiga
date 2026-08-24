@@ -180,6 +180,31 @@ export function useReproductionScript(entryId: string | undefined) {
   });
 }
 
+/**
+ * Download the reproduction ZIP (trained model .pkl + script + results) for a
+ * leaderboard entry. The server streams `application/zip`; we turn the blob
+ * into an object URL and click a temporary anchor (same pattern as the
+ * "Baixar .py" button). Rejects with a message when the request fails.
+ */
+export async function downloadReproZip(entryId: string): Promise<void> {
+  const res = await fetch(`${BASE}/leaderboard/${encodeURIComponent(entryId)}/zip`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  a.href = url;
+  a.download = match?.[1] ?? `reproduce_${entryId}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ── Rounds ──────────────────────────────────────────────────────────
 
 export function useRounds(runId: string | undefined) {

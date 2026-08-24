@@ -50,6 +50,7 @@ import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
 import { getResultsContract } from "../arena/benchmark-config.js";
 import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse, LeaderboardEntry } from "../shared/dashboard-types.js";
 import { generateReproductionScript, buildReproductionPreamble } from "./script-templates.js";
+import { buildReproZip, buildReproManifest, type ReproZipFileEntry } from "./repro-zip.js";
 import { buildExperimentReportMarkdown } from "./report-builder.js";
 import {
   findActivePipelineRunId,
@@ -1603,75 +1604,227 @@ function handleLeaderboardScript(
       return;
     }
 
-    // B1: prefer the real arena script when the ledger points to a file that
-    // still exists inside the workspace. This is the actual code the agent
-    // produced — far more faithful than the generated template. Falls through
-    // to the template when the file is gone or the path is unsafe.
-    const artifactScript = experiment.artifact_script;
-    if (artifactScript && artifactScript.trim().length > 0) {
-      const resolvedArtifact = path.isAbsolute(artifactScript)
-        ? artifactScript
-        : path.join(workspace, artifactScript);
-      if (await isPathSafe(workspace, resolvedArtifact)) {
-        try {
-          const realScript = await fs.promises.readFile(resolvedArtifact, "utf-8");
-          if (realScript.trim().length > 0) {
-            let preambleHp: Record<string, unknown> = {};
-            try { preambleHp = JSON.parse(experiment.hyperparameters); } catch { /* empty */ }
-            const preamble = buildReproductionPreamble({
-              experimentId: String(experiment.experiment_id),
-              modelType: experiment.model_type,
-              hyperparameters: preambleHp,
-              cvMean: experiment.val_metric,
-              trainMean: experiment.train_metric,
-              artifactPath: experiment.artifact_path,
-              metricName: experiment.metric_name,
-              features: [],
-              workspacePath: workspace,
-              problemType: experiment.problem_type ?? null,
-            });
-            const agentSlug = (bareAgentName(experiment.agent_name) || "model").toLowerCase().replace(/[^a-z0-9]/g, "_");
-            const filename = `reproduce_${agentSlug}_${experiment.experiment_id}.py`;
-            jsonResponse(res, { script: preamble + "\n" + realScript, filename, language: "python" });
-            return;
-          }
-        } catch { /* fall through to generated template */ }
+    const repro = await resolveReproScript(experiment, workspace);
+    jsonResponse(res, { script: repro.script, filename: repro.filename, language: "python" });
+  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
+}
+
+/** Experiment fields needed to build a reproduction script/zip. */
+export interface ReproScriptExperiment {
+  experiment_id: number;
+  round_number: number;
+  agent_name: string;
+  model_type: string;
+  hyperparameters: string;
+  val_metric: number;
+  train_metric: number;
+  artifact_path: string;
+  metric_name: string;
+  problem_type: string | null;
+  artifact_script: string | null;
+}
+
+/**
+ * Resolve the reproduction script for a leaderboard entry (B1-first).
+ *
+ * B1: prefers the real arena script when the ledger points to a file that
+ * still exists inside the workspace — the actual code the agent produced,
+ * wrapped in the portable preamble. Falls through to the generated template
+ * when the file is gone or the path is unsafe.
+ *
+ * Shared by GET /api/leaderboard/:id/script and the repro ZIP builder so the
+ * downloadable .py and the zip always contain exactly the same code.
+ */
+async function resolveReproScript(
+  experiment: ReproScriptExperiment,
+  workspace: string,
+): Promise<{ script: string; filename: string }> {
+  const artifactScript = experiment.artifact_script;
+  if (artifactScript && artifactScript.trim().length > 0) {
+    const resolvedArtifact = path.isAbsolute(artifactScript)
+      ? artifactScript
+      : path.join(workspace, artifactScript);
+    if (await isPathSafe(workspace, resolvedArtifact)) {
+      try {
+        const realScript = await fs.promises.readFile(resolvedArtifact, "utf-8");
+        if (realScript.trim().length > 0) {
+          let preambleHp: Record<string, unknown> = {};
+          try { preambleHp = JSON.parse(experiment.hyperparameters); } catch { /* empty */ }
+          const preamble = buildReproductionPreamble({
+            experimentId: String(experiment.experiment_id),
+            modelType: experiment.model_type,
+            hyperparameters: preambleHp,
+            cvMean: experiment.val_metric,
+            trainMean: experiment.train_metric,
+            artifactPath: experiment.artifact_path,
+            metricName: experiment.metric_name,
+            features: [],
+            workspacePath: workspace,
+            problemType: experiment.problem_type ?? null,
+          });
+          const agentSlug = (bareAgentName(experiment.agent_name) || "model").toLowerCase().replace(/[^a-z0-9]/g, "_");
+          const filename = `reproduce_${agentSlug}_${experiment.experiment_id}.py`;
+          return { script: preamble + "\n" + realScript, filename };
+        }
+      } catch { /* fall through to generated template */ }
+    }
+  }
+
+  let features: string[] = [];
+  try {
+    const featuresParquet = path.join(workspace, "artifacts", "features.parquet");
+    if (fs.existsSync(featuresParquet)) {
+      const sidecarPath = path.join(workspace, "artifacts", "feature-engineer_submission.json");
+      if (fs.existsSync(sidecarPath)) {
+        const sidecar = JSON.parse(await fs.promises.readFile(sidecarPath, "utf-8"));
+        if (Array.isArray(sidecar.FEATURES)) features = sidecar.FEATURES;
       }
     }
+  } catch { /* best-effort feature extraction */ }
 
-    let features: string[] = [];
-    try {
-      const featuresParquet = path.join(workspace, "artifacts", "features.parquet");
-      if (fs.existsSync(featuresParquet)) {
-        const sidecarPath = path.join(workspace, "artifacts", "feature-engineer_submission.json");
-        if (fs.existsSync(sidecarPath)) {
-          const sidecar = JSON.parse(await fs.promises.readFile(sidecarPath, "utf-8"));
-          if (Array.isArray(sidecar.FEATURES)) features = sidecar.FEATURES;
-        }
-      }
-    } catch { /* best-effort feature extraction */ }
+  let hyperparameters: Record<string, unknown> = {};
+  try {
+    hyperparameters = JSON.parse(experiment.hyperparameters);
+  } catch { /* use empty */ }
 
-    let hyperparameters: Record<string, unknown> = {};
-    try {
-      hyperparameters = JSON.parse(experiment.hyperparameters);
-    } catch { /* use empty */ }
+  const script = generateReproductionScript({
+    experimentId: String(experiment.experiment_id),
+    modelType: experiment.model_type,
+    hyperparameters,
+    cvMean: experiment.val_metric,
+    trainMean: experiment.train_metric,
+    artifactPath: experiment.artifact_path,
+    metricName: experiment.metric_name,
+    features,
+    workspacePath: workspace,
+    problemType: experiment.problem_type ?? null,
+  });
 
-    const script = generateReproductionScript({
-      experimentId: String(experiment.experiment_id),
+  const filename = `reproduce_${experiment.model_type.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${experiment.experiment_id}.py`;
+  return { script, filename };
+}
+
+/** Cap for a single bundled artifact (larger pickles are skipped, not fatal). */
+const MAX_REPRO_ZIP_ARTIFACT_BYTES = 200 * 1024 * 1024;
+
+function slugifyLabel(label: string | null): string {
+  return (label ?? "model").toLowerCase().replace(/[^a-z0-9]/g, "_");
+}
+
+/**
+ * Resolve a bundlable file entry inside the workspace, or null when the file
+ * is missing, unsafe, or over the size cap. Never lets a path escape the
+ * workspace (isPathSafe) and never lets a runaway pickle blow the response.
+ */
+async function resolveReproFileEntry(
+  workspace: string,
+  relativePath: string,
+  zipPath: string,
+): Promise<ReproZipFileEntry | null> {
+  if (!relativePath || relativePath.trim().length === 0) return null;
+  const abs = path.isAbsolute(relativePath) ? relativePath : path.join(workspace, relativePath);
+  if (!(await isPathSafe(workspace, abs))) return null;
+  try {
+    const st = await fs.promises.stat(abs);
+    if (!st.isFile() || st.size > MAX_REPRO_ZIP_ARTIFACT_BYTES) return null;
+    return { zipPath, sourcePath: abs };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GET /api/leaderboard/:id/zip — stream a ZIP with the trained model artifact
+ * (.pkl), the reproduction script (same B1-first resolution as /script) and
+ * the agent's `_results.json`, plus a README manifest. Content is streamed so
+ * a multi-MB pickle is never buffered in full.
+ */
+function handleLeaderboardZip(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  id: string,
+): void {
+  (async () => {
+    const prisma = getPrisma();
+    const experimentId = Number(id);
+    if (!Number.isFinite(experimentId)) {
+      errorResponse(res, "Invalid experiment id", 400);
+      return;
+    }
+
+    const experiment = await prisma.experiment.findUnique({
+      where: { experiment_id: experimentId },
+    });
+    if (!experiment) {
+      errorResponse(res, "Experiment not found", 404);
+      return;
+    }
+
+    const run = await prisma.run.findUnique({
+      where: { id: experiment.run_id },
+      select: { context: true },
+    });
+    if (!run) {
+      errorResponse(res, "Run not found", 404);
+      return;
+    }
+
+    const workspace = resolveWorkspaceFromRun(run);
+    if (!workspace) {
+      errorResponse(res, "Cannot resolve workspace for this run", 500);
+      return;
+    }
+
+    const repro = await resolveReproScript(experiment, workspace);
+
+    const slug = slugifyLabel(bareAgentName(experiment.agent_name));
+    const baseDir = `repro-${slug}-${experiment.experiment_id}`;
+
+    const modelEntry = await resolveReproFileEntry(
+      workspace,
+      experiment.artifact_path ?? "",
+      `${baseDir}/model.pkl`,
+    );
+    const resultsEntry = await resolveReproFileEntry(
+      workspace,
+      `artifacts/models/${experiment.agent_name}_round${experiment.round_number}_results.json`,
+      `${baseDir}/results.json`,
+    );
+
+    const readme = buildReproManifest({
+      experimentId: experiment.experiment_id,
+      agentName: experiment.agent_name,
       modelType: experiment.model_type,
-      hyperparameters,
+      roundNumber: experiment.round_number,
+      metricName: experiment.metric_name,
       cvMean: experiment.val_metric,
       trainMean: experiment.train_metric,
       artifactPath: experiment.artifact_path,
-      metricName: experiment.metric_name,
-      features,
-      workspacePath: workspace,
-      problemType: experiment.problem_type ?? null,
+      modelIncluded: modelEntry !== null,
+      resultsIncluded: resultsEntry !== null,
+      scriptFilename: repro.filename,
     });
 
-    const filename = `reproduce_${experiment.model_type.toLowerCase().replace(/[^a-z0-9]/g, "_")}_${experiment.experiment_id}.py`;
-    jsonResponse(res, { script, filename, language: "python" });
-  })().catch((err) => errorResponse(res, `Failed: ${(err as Error).message}`));
+    const filename = `reproduce_${slug}_${experiment.experiment_id}.zip`;
+    res.writeHead(200, {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+    });
+
+    await buildReproZip(
+      {
+        baseDir,
+        model: modelEntry,
+        script: { zipPath: `${baseDir}/${repro.filename}`, content: repro.script },
+        results: resultsEntry,
+        readme: { zipPath: `${baseDir}/README.md`, content: readme },
+      },
+      res,
+    );
+  })().catch((err) => {
+    logger.error("Failed to build repro zip", { id, error: String(err) });
+    errorResponse(res, `Failed: ${(err as Error).message}`);
+  });
 }
 
 const ARTIFACT_ALLOWED_EXTENSIONS = new Set([".md", ".json", ".py", ".txt", ".csv", ".log"]);
@@ -3275,6 +3428,13 @@ function route(req: http.IncomingMessage, res: http.ServerResponse, expectedSecr
   const leaderboardScriptMatch = pathname.match(/^\/api\/leaderboard\/([0-9]+)\/script$/);
   if (method === "GET" && leaderboardScriptMatch) {
     handleLeaderboardScript(req, res, leaderboardScriptMatch[1]);
+    return;
+  }
+
+  // GET /api/leaderboard/:id/zip
+  const leaderboardZipMatch = pathname.match(/^\/api\/leaderboard\/([0-9]+)\/zip$/);
+  if (method === "GET" && leaderboardZipMatch) {
+    handleLeaderboardZip(req, res, leaderboardZipMatch[1]);
     return;
   }
 

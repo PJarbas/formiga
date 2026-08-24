@@ -4,7 +4,7 @@
 // ══════════════════════════════════════════════════════════════════════
 
 import { useEffect, useState } from "react";
-import { useModelReport, useReproductionScript } from "../api/api";
+import { useModelReport, useReproductionScript, downloadReproZip } from "../api/api";
 import type { LeaderboardEntry } from "@shared/dashboard-types";
 import { StructuredReportTab } from "./report";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -110,7 +110,7 @@ export function ModelDetailPanel({ entry, onClose }: Props) {
             <StructuredReportTab content={report?.content} loading={reportLoading} />
           )}
           {activeTab === "script" && (
-            <ScriptTab script={scriptData?.script} filename={scriptData?.filename} loading={scriptLoading} />
+            <ScriptTab script={scriptData?.script} filename={scriptData?.filename} loading={scriptLoading} entry={entry} />
           )}
         </div>
       </div>
@@ -270,8 +270,10 @@ function FeatureBars({ features }: { features: Array<[string, number]> }) {
   );
 }
 
-function ScriptTab({ script, filename, loading }: { script?: string; filename?: string; loading: boolean }) {
+function ScriptTab({ script, filename, loading, entry }: { script?: string; filename?: string; loading: boolean; entry: LeaderboardEntry }) {
   const [isCopied, setIsCopied] = useState(false);
+  const [isZipping, setIsZipping] = useState(false);
+  const [zipError, setZipError] = useState<string | null>(null);
 
   if (loading) return <LoadingIndicator text="Gerando script..." />;
   if (!script) return <EmptyState text="Não foi possível gerar o script de reprodução." />;
@@ -292,6 +294,18 @@ function ScriptTab({ script, filename, loading }: { script?: string; filename?: 
     URL.revokeObjectURL(url);
   }
 
+  async function handleDownloadZip() {
+    setZipError(null);
+    setIsZipping(true);
+    try {
+      await downloadReproZip(entry.id);
+    } catch (err) {
+      setZipError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsZipping(false);
+    }
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -301,10 +315,22 @@ function ScriptTab({ script, filename, loading }: { script?: string; filename?: 
         >
           Baixar .py
         </button>
+        <button
+          onClick={handleDownloadZip}
+          disabled={isZipping}
+          className="text-xs px-3 py-1.5 rounded-md border border-emerald-500/60 text-emerald-400 hover:bg-emerald-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isZipping ? "Gerando zip..." : "Baixar .zip (pkl + código)"}
+        </button>
         {filename && (
           <span className="text-[10px] text-[var(--text-muted)] font-mono">{filename}</span>
         )}
       </div>
+      {zipError && (
+        <p className="text-[11px] text-[var(--accent-red)]" data-testid="zip-error">
+          Falha ao gerar o zip: {zipError}
+        </p>
+      )}
       <div className="relative rounded-lg overflow-hidden" style={{ backgroundColor: "#282c34" }}>
         <button
           onClick={handleCopy}
