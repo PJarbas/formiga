@@ -45,7 +45,10 @@ interface EDAReport {
     rate_by_dt?: Record<string, number>;
   };
   bivariate_vs_target?: {
-    top_20_features?: Array<[string, number]>;
+    // The data-analyst persists either the documented `[name, number]` shape or
+    // the richer per-feature metric object (ml-autoresearch): [name, {composite,
+    // mutual_info, theils_u, cramers_v, pearson_vs_target_max_abs}].
+    top_20_features?: Array<[string, number | string | Record<string, unknown>]>;
   };
   leakage_alerts?: Array<{
     column: string;
@@ -59,6 +62,36 @@ interface EDAReport {
     scaling?: Record<string, string>;
     drop_columns?: string[];
   };
+}
+
+/**
+ * Coerce a top_20_features score into a single displayable number.
+ * Real artifacts may carry the documented `[name, number]` shape or the richer
+ * per-feature metric object — `{composite, mutual_info, theils_u, cramers_v,
+ * pearson_vs_target_max_abs}` — written by ml-autoresearch runs. Prefer
+ * `composite` (the agent's own aggregated ranking metric), then the max-abs
+ * correlation, then the first finite numeric field. Returns undefined when the
+ * score can't be reduced to a number so the UI can skip it instead of crashing
+ * on `score.toFixed`.
+ */
+function featureScoreToNumber(score: unknown): number | undefined {
+  if (typeof score === "number") return Number.isFinite(score) ? score : undefined;
+  if (typeof score === "string") {
+    const n = Number(score);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  if (score && typeof score === "object") {
+    const metrics = score as Record<string, unknown>;
+    for (const key of ["composite", "pearson_vs_target_max_abs", "mutual_info"]) {
+      const v = metrics[key];
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "string") {
+        const n = Number(v);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  }
+  return undefined;
 }
 
 interface EDAConfig {
@@ -113,7 +146,9 @@ export function DataAnalystInsights({
   const overview = edaReport?.dataset_overview;
   const quality = edaReport?.data_quality;
   const target = edaReport?.target_analysis;
-  const topFeatures = edaReport?.bivariate_vs_target?.top_20_features ?? [];
+  const topFeatures = (edaReport?.bivariate_vs_target?.top_20_features ?? []).map(
+    ([name, score]) => ({ name, score: featureScoreToNumber(score) }),
+  );
   const leakageAlerts = edaReport?.leakage_alerts ?? [];
   const hypotheses = edaReport?.feature_engineering_hypotheses ?? [];
   const recommendations = edaReport?.preprocessing_recommendations ?? edaConfig;
@@ -316,7 +351,7 @@ export function DataAnalystInsights({
       {topFeatures.length > 0 && (
         <Section title="Top Features vs Target" icon="📊" badge={topFeatures.length}>
           <FeatureList
-            features={topFeatures.map(([name, score]) => ({ name, score }))}
+            features={topFeatures}
             maxItems={10}
           />
         </Section>

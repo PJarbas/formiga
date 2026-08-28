@@ -106,6 +106,48 @@ describe("DataAnalystInsights", () => {
     expect(screen.getByText("status_mtd/account_status")).toBeTruthy(); // leakage column
   });
 
+  it("does not crash when top_20_features carries the richer metric object shape", () => {
+    // ml-autoresearch data-analyst persists [name, {composite, mutual_info,
+    // theils_u, cramers_v, pearson_vs_target_max_abs}] instead of [name, number].
+    // Regression for the dashboard crash `r.score.toFixed is not a function`.
+    const objectScoreEdaReport: Parameters<typeof DataAnalystInsights>[0]["edaReport"] = {
+      ...REAL_EDA_REPORT,
+      bivariate_vs_target: {
+        top_20_features: [
+          ["petal_length", {
+            pearson_vs_target_max_abs: 0.9228,
+            mutual_info: 0.9926,
+            theils_u: 0.7535,
+            cramers_v: 0.8498,
+            composite: 2.6689,
+          }],
+          ["petal_width", {
+            pearson_vs_target_max_abs: 0.8873,
+            mutual_info: 0.9856,
+            theils_u: 0.7581,
+            cramers_v: 0.8622,
+            composite: 2.631,
+          }],
+        ],
+      },
+    };
+    renderWithDefaults({ edaReport: objectScoreEdaReport });
+    expect(screen.getByText("petal_length")).toBeTruthy();
+    // composite is the agent's aggregated ranking metric — rendered as the score.
+    expect(screen.getByText("2.669")).toBeTruthy();
+    expect(screen.getByText("2.631")).toBeTruthy();
+  });
+
+  it("does not crash when top_20_features score is a string", () => {
+    const stringScoreEdaReport: Parameters<typeof DataAnalystInsights>[0]["edaReport"] = {
+      ...REAL_EDA_REPORT,
+      bivariate_vs_target: { top_20_features: [["opt_in_rate", "0.42"]] },
+    };
+    renderWithDefaults({ edaReport: stringScoreEdaReport });
+    expect(screen.getByText("opt_in_rate")).toBeTruthy();
+    expect(screen.getByText("0.420")).toBeTruthy();
+  });
+
   it("shows an empty insight when no artifacts are present", () => {
     renderWithDefaults({ edaReport: null, edaConfig: null });
     expect(screen.getByText(/not available yet/i)).toBeTruthy();
