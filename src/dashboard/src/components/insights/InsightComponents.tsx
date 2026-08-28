@@ -310,20 +310,26 @@ export function FeatureList({ features, maxItems = 10 }: FeatureListProps) {
 
   return (
     <div className="space-y-1">
-      {displayFeatures.map((f, i) => (
+      {displayFeatures.map((f, i) => {
+        // Defensive: only render a finite numeric score. Callers may hand us a
+        // string or object (raw artifact data) — never let .toFixed throw.
+        const score =
+          typeof f.score === "number" && Number.isFinite(f.score) ? f.score : null;
+        return (
         <div key={i} className="flex items-center gap-2 text-xs">
           <span className="text-[var(--text-muted)] w-4">{i + 1}.</span>
           <span className="text-[var(--text-primary)] flex-1 truncate font-mono">{f.name}</span>
-          {f.score !== undefined && (
-            <span className="text-[var(--accent-blue)] font-mono">{f.score.toFixed(3)}</span>
+          {score !== null && (
+            <span className="text-[var(--accent-blue)] font-mono">{score.toFixed(3)}</span>
           )}
           {f.type && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)]">
               {f.type}
             </span>
           )}
-        </div>
-      ))}
+          </div>
+        );
+      })}
       {features.length > maxItems && (
         <div className="text-[10px] text-[var(--text-muted)] text-center">
           +{features.length - maxItems} more features
