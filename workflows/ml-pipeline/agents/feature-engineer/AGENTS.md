@@ -92,6 +92,29 @@ save_artifact({
 })
 ```
 
+### 3.5 Métrica do Baseline por Tipo de Problema
+
+A métrica primária **depende do `target_type`** detectado na EDA:
+
+- **Classificação** (binary ou multiclass): use **`roc_auc`** com `"direction": "higher"`. **NÃO use `accuracy`** — accuracy é cega a desbalanceamento (prever a classe majoritária já dá ~85% num dataset 85/15) e depende de threshold. `roc_auc` mede separação de classes independente de threshold e é o padrão da arena para classificação. Em multiclass, use `roc_auc_ovr` se o scorer suportar, senão `roc_auc`.
+- **Regressão**: use **`rmse`** com `"direction": "lower"` (exemplo acima).
+
+Exemplo para **classificação**:
+```
+save_artifact({
+  "key": "baseline_submission",
+  "data": {
+    "MODEL_TYPE": "baseline-random-forest",
+    "CV_MEAN": 0.84,
+    "CV_STD": 0.011,
+    "TRAIN_MEAN": 0.91,
+    "HYPERPARAMETERS": {"n_estimators": 200},
+    "ARTIFACT_PATH": "artifacts/baseline.pkl",
+    "METRIC_NAME": "roc_auc"
+  }
+})
+```
+
 ### 4. Relatório de Seleção de Features
 
 ```

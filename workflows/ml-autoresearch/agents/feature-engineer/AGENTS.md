@@ -119,6 +119,49 @@ save_artifact({
 })
 ```
 
+## CRÍTICO — Métrica do Benchmark por Tipo de Problema
+
+A métrica primária do `benchmark_config.json` **depende do `target_type`** que o data-analyst detectou no `eda_report`:
+
+- **Classificação** (binary ou multiclass): use **`roc_auc`** com `"direction": "higher"`. **NÃO use `accuracy`** — accuracy é cega a desbalanceamento (prever a classe majoritária já dá ~85% num dataset 85/15) e depende de threshold. `roc_auc` mede separação de classes independente de threshold e é o padrão da arena para classificação. Em multiclass, use `roc_auc_ovr` se o scorer suportar, senão `roc_auc`.
+- **Regressão**: use **`rmse`** com `"direction": "lower"` (exemplo acima).
+
+Exemplo para **classificação**:
+```
+save_artifact({
+  "key": "baseline_submission",
+  "data": {
+    "MODEL_TYPE": "baseline-random-forest",
+    "CV_MEAN": 0.84,
+    "CV_STD": 0.011,
+    "TRAIN_MEAN": 0.91,
+    "HYPERPARAMETERS": {"n_estimators": 200},
+    "ARTIFACT_PATH": "artifacts/baseline.pkl",
+    "METRIC_NAME": "roc_auc"
+  }
+})
+```
+
+```
+save_artifact({
+  "key": "benchmark_config",
+  "data": {
+    "type": "multiclass_classification",
+    "metric": { "name": "roc_auc", "direction": "higher" },
+    "validation": { "strategy": "stratified_kfold", "nSplits": 5, "randomState": 42 },
+    "data_paths": {
+      "features": "artifacts/features.parquet",
+      "train": "{{dataset_path}}",
+      "split": "artifacts/split.pkl"
+    },
+    "target_column": "{{target_column}}",
+    "baseline": { "cv_roc_auc_mean": 0.84, "model_type": "random_forest" },
+    "compute_budget": {"tier": "tiny", "max_fit_seconds": 30, "max_trials": 15, "max_combinations": 50, "max_model_complexity": "low"},
+    "content_hash": "<MD5>"
+  }
+})
+```
+
 ## CRÍTICO — content_hash (Integridade do Dataset)
 
 Compute e salve `content_hash` no `benchmark_config.json` (e no artefato de banco `benchmark_config`). Ele é a âncora de integridade intra-run do auditor da arena (gate G2):

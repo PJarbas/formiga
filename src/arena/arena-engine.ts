@@ -1083,6 +1083,8 @@ function buildPromptsForRound(
     prompt += `**Artefatos disponíveis:** eda_config, eda_report, features_metadata, baseline_submission, split_config, benchmark_config\n\n`;
 
     prompt += `### Regras\n`;
+    prompt += `- NUNCA leia nem explore o código-fonte do Formiga (diretórios \`src/\`, \`dist/\`, \`scripts/\` fora do seu workspace). Trabalhe APENAS dentro de \`${config.workspacePath}\` — a pasta do dataset com \`artifacts/\`.\n`;
+    prompt += `- Sua hipótese e aprendizado devem ser textos curtos (máx ~300 caracteres), em português — NUNCA cole código, dumps de arquivos ou logs neles.\n`;
     prompt += `- Escreva um script Python AUTÔNOMO que treina um modelo e o avalia.\n`;
     prompt += `- O script deve ler benchmark_config.json da raiz do workspace.\n`;
     prompt += `- Use validação cruzada com a mesma configuração (mesmos splits, mesma métrica).\n`;

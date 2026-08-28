@@ -47,7 +47,8 @@ import { logger } from "../lib/logger.js";
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { getExperimentStats, getCurrentBestForRun, getFailedConfigsForAgent, getSucceededConfigsForAgent } from "../leaderboard/queries.js";
 import { AGENT_INFO_REGISTRY } from "../shared/dashboard-types.js";
-import { getResultsContract } from "../arena/benchmark-config.js";
+import { getResultsContract, normalizeProblemType } from "../arena/benchmark-config.js";
+import { humanizeModelAlgorithm } from "../leaderboard/humanize.js";
 import type { PipelineFlowNode, PipelineFlowEdge, PipelineFlowResponse, LeaderboardEntry } from "../shared/dashboard-types.js";
 import { generateReproductionScript, buildReproductionPreamble } from "./script-templates.js";
 import { buildReproZip, buildReproManifest, type ReproZipFileEntry } from "./repro-zip.js";
@@ -1309,7 +1310,16 @@ function computeCvStd(foldScoresRaw: unknown): number | null {
  * surface as `null` until ingestion captures them — the API contract is stable.
  */
 function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
-  const problemType = (r.problem_type as "classification" | "regression" | "multilabel" | "unknown" | null) ?? "unknown";
+  // The arena persists raw problem types ("multiclass_classification",
+  // "binary_classification"); collapse them so the UI shows "classification"
+  // instead of "unknown". Anything unexpected falls back to "unknown".
+  const normalizedProblem = normalizeProblemType(r.problem_type as string | null);
+  const problemType: LeaderboardEntry["problemType"] =
+    normalizedProblem === "classification" ||
+    normalizedProblem === "regression" ||
+    normalizedProblem === "multilabel"
+      ? normalizedProblem
+      : "unknown";
   // Prefer the arena's measured_metric over val_metric: val_metric is coerced
   // to 0 on crash/failure (NOT NULL schema), so it would surface a fabricated
   // 0.0000. measured_metric stays null on failure → honest "—" downstream.
@@ -1322,7 +1332,10 @@ function mapExperimentRow(r: Record<string, unknown>): LeaderboardEntry {
     agentName: r.agent_name as string,
     modelId: `model_${r.experiment_id}`,
     modelType: r.model_type as string,
-    modelAlgorithm: (r.model_algorithm as string | null) ?? null,
+    // Humanize the modeler's concatenated ensemble names ("SVCKNN_QDAGNB_DET"
+    // → "SVC KNN + QDA GNB + DET") at the API boundary so leaderboard, compare,
+    // and repro-zip all surface legible labels.
+    modelAlgorithm: humanizeModelAlgorithm(r.model_algorithm as string | null),
     problemType,
     status: r.status as string,
     cvMean,

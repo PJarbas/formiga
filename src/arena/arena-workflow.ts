@@ -28,7 +28,7 @@ import { runArena, type ArenaResult } from "./arena-engine.js";
 import { ArenaRepositoryImpl } from "./arena-repository.js";
 import { LeaderboardRepositoryImpl } from "../leaderboard/repository.js";
 import { runBenchmark, extractMetric } from "./arena-benchmark.js";
-import { parseBenchmarkConfig } from "./benchmark-config.js";
+import { normalizeProblemType, parseBenchmarkConfig } from "./benchmark-config.js";
 import { deriveComputeBudget, type ComputeBudget } from "./dataset-context.js";
 import { resolveAgentTimeout } from "./agent-timeout.js";
 
@@ -123,6 +123,19 @@ function inferMetricDirection(metricName: string): "lower" | "higher" {
   return METRIC_DIRECTION_DEFAULTS[key] ?? "higher";
 }
 
+/**
+ * Default primary metric when neither benchmark_config.json nor the run context
+ * specifies one. Classification defaults to ROC-AUC (threshold-free, robust to
+ * class imbalance), regression to RMSE — instead of the generic "cv_score" so
+ * the leaderboard shows a metric that's meaningful for the problem.
+ */
+function inferDefaultMetric(problemType: string | null | undefined): string {
+  const normalized = normalizeProblemType(problemType);
+  if (normalized === "classification") return "roc_auc";
+  if (normalized === "regression") return "rmse";
+  return "cv_score";
+}
+
 function readBenchmarkConfig(workspace: string): BenchmarkConfigJson | null {
   // Look in workspace root first, then artifacts/
   const candidates = [
@@ -180,6 +193,18 @@ function readBenchmarkConfig(workspace: string): BenchmarkConfigJson | null {
  * Missing JSON keys fall back to `""`. The JSON envelope is the new contract:
  * `script` is inline Python code (never a path).
  */
+/**
+ * Cap the free-text insight fields so a runaway agent that dumps source code /
+ * file contents into its response can't pollute the leaderboard's
+ * hypothesis/learned columns (observed: a modeler pasted ~43KB of
+ * arena-engine.ts into `hypothesis`). Legit insights are a sentence or two.
+ */
+const MAX_INSIGHT_CHARS = 2000;
+
+function capInsight(text: string): string {
+  return text.length > MAX_INSIGHT_CHARS ? text.slice(0, MAX_INSIGHT_CHARS) : text;
+}
+
 export function parseArenaAgentOutput(
   stdout: string,
   workspacePath: string,
@@ -231,9 +256,9 @@ export function parseArenaAgentOutput(
 
   return {
     script,
-    hypothesis: hypothesisMatch ? hypothesisMatch[1].trim() : "",
-    learned: learnedMatch ? learnedMatch[1].trim() : "",
-    nextFocus: nextFocusMatch ? nextFocusMatch[1].trim() : "",
+    hypothesis: capInsight(hypothesisMatch ? hypothesisMatch[1].trim() : ""),
+    learned: capInsight(learnedMatch ? learnedMatch[1].trim() : ""),
+    nextFocus: capInsight(nextFocusMatch ? nextFocusMatch[1].trim() : ""),
   };
 }
 
@@ -256,9 +281,9 @@ function parseJsonEnvelope(
   if (typeof o.script !== "string") return null;
   return {
     script: o.script,
-    hypothesis: typeof o.hypothesis === "string" ? o.hypothesis : "",
-    learned: typeof o.learned === "string" ? o.learned : "",
-    nextFocus: typeof o.nextFocus === "string" ? o.nextFocus : "",
+    hypothesis: capInsight(typeof o.hypothesis === "string" ? o.hypothesis : ""),
+    learned: capInsight(typeof o.learned === "string" ? o.learned : ""),
+    nextFocus: capInsight(typeof o.nextFocus === "string" ? o.nextFocus : ""),
   };
 }
 
@@ -433,7 +458,9 @@ async function buildArenaConfig(runId: string): Promise<ArenaConfig | null> {
   }
 
   const metricName =
-    benchmarkConfig?.metric?.name ?? ctx.metric_name ?? "cv_score";
+    benchmarkConfig?.metric?.name ??
+    ctx.metric_name ??
+    inferDefaultMetric(benchmarkConfig?.problemType);
   const metricDirection: "lower" | "higher" =
     benchmarkConfig?.metric?.direction ??
     (ctx.metric_direction as "lower" | "higher") ??
