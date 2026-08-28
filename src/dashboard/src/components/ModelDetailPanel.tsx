@@ -392,5 +392,12 @@ function cleanInsightText(text: string): string {
   if (jsonStart > 0) {
     cleaned = cleaned.substring(0, jsonStart).trim();
   }
+  // A runaway agent can dump source code into its insight fields (observed:
+  // ~43KB of arena-engine.ts stored as hypothesis). Cap the display so the
+  // side panel stays readable instead of rendering a code dump.
+  const MAX_DISPLAY = 800;
+  if (cleaned.length > MAX_DISPLAY) {
+    cleaned = cleaned.slice(0, MAX_DISPLAY).trimEnd() + "…";
+  }
   return cleaned;
 }

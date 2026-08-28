@@ -113,4 +113,24 @@ describe("ModelDetailPanel", () => {
     fireEvent.click(screen.getByText("Script de Reprodução"));
     expect(await screen.findByText("Baixar .py")).toBeTruthy();
   });
+
+  it("caps a runaway source-code dump in the insight fields", () => {
+    // Regression: a modeler pasted ~43KB of arena-engine.ts into `hypothesis`
+    // and the side panel rendered the whole dump verbatim.
+    const dump = "src/arena/arena-engine.ts export function runArena".repeat(2000);
+    renderDrawer(
+      makeEntry({
+        hypothesis: dump,
+        learned: "Smaller trees converge faster",
+      }),
+    );
+    expect(screen.getByText("Insights da Arena")).toBeTruthy();
+    expect(screen.getByText(/Hipótese/)).toBeTruthy();
+    // The dump must be truncated — the rendered insight is short, ellipsized.
+    const paragraph = screen.getByText(/src\/arena\/arena-engine\.ts/);
+    expect(paragraph.textContent!.length).toBeLessThanOrEqual(801);
+    expect(paragraph.textContent!.endsWith("…")).toBe(true);
+    // The legit learned text still renders in full.
+    expect(screen.getByText("Smaller trees converge faster")).toBeTruthy();
+  });
 });

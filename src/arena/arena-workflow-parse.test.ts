@@ -95,6 +95,29 @@ describe("parseArenaAgentOutput — JSON envelope", () => {
     assert.equal(parsed.script, "print(4)");
     assert.equal(parsed.hypothesis, "bare");
   });
+
+  it("caps insight fields that contain a runaway source-code dump", () => {
+    const ws = makeWorkspace();
+    // Regression: a modeler pasted ~43KB of arena-engine.ts into `hypothesis`.
+    const dump = "src/arena/arena-engine.ts".repeat(5000); // ~100KB
+    const stdout = [
+      "```json",
+      JSON.stringify({
+        script: "print(5)",
+        hypothesis: dump,
+        learned: dump,
+        nextFocus: dump,
+      }),
+      "```",
+    ].join("\n");
+    const parsed = parseArenaAgentOutput(stdout, ws);
+    assert.equal(parsed.script, "print(5)");
+    assert.ok(parsed.hypothesis.length <= 2000, `hypothesis capped (${parsed.hypothesis.length})`);
+    assert.ok(parsed.learned.length <= 2000, `learned capped (${parsed.learned.length})`);
+    assert.ok(parsed.nextFocus.length <= 2000, `nextFocus capped (${parsed.nextFocus.length})`);
+    // The cap keeps the head, not the tail — the beginning still identifies it.
+    assert.ok(parsed.hypothesis.startsWith("src/arena/arena-engine.ts"));
+  });
 });
 
 // ── Legacy fallback (precedence 3) ──────────────────────────────────────
